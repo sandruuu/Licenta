@@ -1,0 +1,21 @@
+$ORIGIN ztna.test.
+$TTL 60
+
+@   IN SOA  ns.ztna.test. admin.ztna.test. (
+    2026030901  ; serial
+    3600        ; refresh
+    600         ; retry
+    86400       ; expire
+    60          ; minimum TTL
+)
+
+        IN NS   ns.ztna.test.
+
+ns              IN A    172.30.0.53
+
+cloud           IN A    172.30.0.20
+gateway         IN A    172.30.0.10
+
+; External resource URLs resolve to gateway in DMZ/public edge.
+rdp-desktop     IN A    172.30.0.10
+web-app         IN A    172.30.0.10

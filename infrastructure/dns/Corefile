@@ -1,0 +1,5 @@
+lab.local:53 {
+    file /etc/coredns/db.lab.local
+    log
+    errors
+}

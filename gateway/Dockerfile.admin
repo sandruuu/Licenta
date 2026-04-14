@@ -1,0 +1,23 @@
+# Stage 1: Build Go binary (templates + static embedded via go:embed)
+FROM golang:1.25-alpine AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o admin ./cmd/admin
+
+# Stage 2: Minimal runtime image
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget
+RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
+WORKDIR /app
+RUN mkdir -p config certs data && chown -R appuser:appuser /app
+COPY --from=builder /build/admin .
+COPY docker-config.json /app/config/gateway-config.json
+USER appuser
+EXPOSE 8444
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- --no-check-certificate https://localhost:8444/api/health || exit 1
+VOLUME ["/app/config", "/app/certs", "/app/data"]
+ENTRYPOINT ["./admin"]
+CMD ["-addr", ":8444", "-config", "/app/config/gateway-config.json", "-store-url", "http://sessionstore:6380", "-syslog-addr", "syslog:5514", "-data", "/app/data"]

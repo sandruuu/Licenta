@@ -1,0 +1,72 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Certificates</h1>
+        <p>mTLS and SSL certificate management</p>
+    </div>
+    <button class="refresh-btn" onclick="loadCertificates()" title="Refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+    </button>
+</div>
+
+<div id="certs-msg"></div>
+
+<div class="section-card">
+    <div class="section-title">mTLS Status</div>
+    <div id="mtls-status"></div>
+</div>
+
+<div class="section-card">
+    <div class="section-title">Generate CSR</div>
+    <form id="csr-form">
+        <div class="form-row-3">
+            <div class="form-group">
+                <label>Common Name</label>
+                <input id="csr-cn" placeholder="gateway.company.com" required>
+            </div>
+            <div class="form-group">
+                <label>Organization</label>
+                <input id="csr-org" placeholder="Company Inc." required>
+            </div>
+            <div class="form-group">
+                <label>Country</label>
+                <input id="csr-country" placeholder="US" maxlength="2" required>
+            </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Generate CSR</button>
+    </form>
+    <div id="csr-result"></div>
+</div>
+
+<div class="section-card">
+    <div class="section-title">Install mTLS Certificate</div>
+    <form id="mtls-form">
+        <div class="form-group">
+            <label>Certificate PEM file</label>
+            <input type="file" name="cert" accept=".pem,.crt,.cer" required>
+        </div>
+        <button class="btn btn-primary" type="submit">Install Certificate</button>
+    </form>
+</div>
+
+<div class="section-card">
+    <div class="section-title">SSL / TLS Certificate</div>
+    <div id="ssl-status"></div>
+    <form id="ssl-form" style="margin-top: 16px;">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Certificate PEM</label>
+                <input type="file" name="cert" accept=".pem,.crt,.cer" required>
+            </div>
+            <div class="form-group">
+                <label>Key PEM</label>
+                <input type="file" name="key" accept=".pem,.key" required>
+            </div>
+        </div>
+        <button class="btn btn-primary" type="submit">Upload SSL Certificate</button>
+    </form>
+</div>
+{{end}}

@@ -1,0 +1,19 @@
+{
+  "listen_addr": ":9443",
+  "tls_cert": "/app/certs/gateway.crt",
+  "tls_key": "/app/certs/gateway.key",
+  "tls_ca": "/app/certs/ca.crt",
+  "client_ca": "/app/certs/ca.crt",
+  "cloud_ca": "/app/certs/ca.crt",
+  "require_client_cert": true,
+  "cloud_url": "https://cloud.ztna.local:8443",
+  "cgnat": {
+    "enabled": true,
+    "pool_start": "100.64.0.2",
+    "pool_end": "100.127.255.254",
+    "subnet_mask": "255.192.0.0"
+  },
+  "internal_dns": "10.10.0.53:53",
+  "resources": [],
+  "session_timeout": 28800
+}

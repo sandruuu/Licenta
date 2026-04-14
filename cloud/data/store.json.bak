@@ -1,0 +1,339 @@
+{
+  "users": {
+    "usr_52d2dc495b7e3d2ea71b47cf": {
+      "id": "usr_52d2dc495b7e3d2ea71b47cf",
+      "username": "testuser_8037",
+      "email": "testuser_8037@test.com",
+      "password_hash": "$2a$10$jm.eNzNAn1B5sJa.jBejWOwN85uMckYwCKp5IBHQ.fPRhGz9gcIMC",
+      "totp_secret": "PAGOKQA42Z7GICFZ5GWHAT3QJLUOR4BR",
+      "mfa_enabled": false,
+      "role": "user",
+      "disabled": false,
+      "created_at": "2026-02-26T11:53:39.4229461+02:00",
+      "updated_at": "2026-02-26T11:53:39.9146719+02:00",
+      "last_login_at": "2026-02-26T11:53:39.5554989+02:00"
+    },
+    "usr_ac96e03035c7479b57676132": {
+      "id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "email": "admin@ztna.local",
+      "password_hash": "$2a$10$00w4hTjiAEUXkH8S63mt..yKHn2trRix2tX6HxULO4B88FM/2kUuK",
+      "mfa_enabled": false,
+      "role": "admin",
+      "disabled": false,
+      "created_at": "2026-02-26T11:28:28.4978214+02:00",
+      "updated_at": "2026-02-26T11:28:28.4984882+02:00",
+      "last_login_at": "2026-02-26T15:01:51.1894164+02:00"
+    },
+    "usr_d9496ef2889c5ed31a474f31": {
+      "id": "usr_d9496ef2889c5ed31a474f31",
+      "username": "testuser_8441",
+      "email": "testuser_8441@test.com",
+      "password_hash": "$2a$10$90i0JTAA2k42KPejp0Dd6OHv3VRi1L1RSwKntiW/2fl5z9OY0kTja",
+      "mfa_enabled": false,
+      "role": "user",
+      "disabled": false,
+      "created_at": "2026-02-26T11:39:05.4995165+02:00",
+      "updated_at": "2026-02-26T11:39:05.4995165+02:00",
+      "last_login_at": "2026-02-26T11:39:05.6393658+02:00"
+    }
+  },
+  "policy_rules": {
+    "rule_allow_admin": {
+      "id": "rule_allow_admin",
+      "name": "Allow Admin Full Access",
+      "description": "Administrators have full access to all resources",
+      "priority": 5,
+      "enabled": true,
+      "conditions": {
+        "allowed_roles": [
+          "admin"
+        ]
+      },
+      "action": "allow",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    },
+    "rule_block_high_risk": {
+      "id": "rule_block_high_risk",
+      "name": "Block High Risk Access",
+      "description": "Deny access when risk score exceeds threshold",
+      "priority": 15,
+      "enabled": true,
+      "conditions": {
+        "max_risk_score": 75
+      },
+      "action": "deny",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    },
+    "rule_business_hours_web": {
+      "id": "rule_business_hours_web",
+      "name": "Allow Web During Business Hours",
+      "description": "Web access allowed during business hours for all users",
+      "priority": 30,
+      "enabled": true,
+      "conditions": {
+        "allowed_time_start": "08:00",
+        "allowed_time_end": "18:00",
+        "allowed_days": [
+          "Monday",
+          "Tuesday",
+          "Wednesday",
+          "Thursday",
+          "Friday"
+        ],
+        "target_ports": [
+          80,
+          443
+        ]
+      },
+      "action": "allow",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    },
+    "rule_default_deny_unhealthy": {
+      "id": "rule_default_deny_unhealthy",
+      "name": "Deny Unhealthy Devices",
+      "description": "Block access for devices with critical health issues",
+      "priority": 10,
+      "enabled": true,
+      "conditions": {
+        "min_health_score": 40
+      },
+      "action": "deny",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    },
+    "rule_mfa_rdp": {
+      "id": "rule_mfa_rdp",
+      "name": "Require MFA for RDP",
+      "description": "All RDP connections require multi-factor authentication",
+      "priority": 20,
+      "enabled": true,
+      "conditions": {
+        "target_ports": [
+          3389
+        ]
+      },
+      "action": "mfa_required",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    },
+    "rule_mfa_ssh": {
+      "id": "rule_mfa_ssh",
+      "name": "Require MFA for SSH",
+      "description": "All SSH connections require multi-factor authentication",
+      "priority": 25,
+      "enabled": true,
+      "conditions": {
+        "target_ports": [
+          22
+        ]
+      },
+      "action": "mfa_required",
+      "created_at": "2026-02-26T11:28:28.4460767+02:00",
+      "updated_at": "2026-02-26T11:28:28.4460767+02:00"
+    }
+  },
+  "sessions": {
+    "sess_0583ef656877b725507c4fa3": {
+      "id": "sess_0583ef656877b725507c4fa3",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "device_id": "device-001",
+      "source_ip": "[::1]:63582",
+      "resource": "192.168.1.100",
+      "protocol": "rdp",
+      "risk_score": 35,
+      "created_at": "2026-02-26T13:40:32.3321591+02:00",
+      "expires_at": "2026-02-26T21:40:32.3321591+02:00",
+      "last_activity": "2026-02-26T13:40:32.3321591+02:00",
+      "revoked": false
+    }
+  },
+  "audit_log": [
+    {
+      "id": "aud_4793bc7eb84d3718eff46cd8",
+      "timestamp": "2026-02-26T11:39:05.6393658+02:00",
+      "event_type": "login",
+      "user_id": "usr_d9496ef2889c5ed31a474f31",
+      "username": "testuser_8441",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_7049e425a8fe219e5c1f96df",
+      "timestamp": "2026-02-26T11:39:05.7361065+02:00",
+      "event_type": "login",
+      "username": "testuser_8441",
+      "details": "Invalid credentials",
+      "success": false
+    },
+    {
+      "id": "aud_b5e1d17942fcbecf21a6ee0f",
+      "timestamp": "2026-02-26T11:39:05.7400179+02:00",
+      "event_type": "login",
+      "username": "nonexistent_user_xyz",
+      "details": "Invalid credentials",
+      "success": false
+    },
+    {
+      "id": "aud_3e53e9f40e7654a6af970201",
+      "timestamp": "2026-02-26T11:39:05.8253995+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_27876fd7ed12d3ee3727c048",
+      "timestamp": "2026-02-26T11:48:43.6262793+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_d3a5a880951bfb027af0b872",
+      "timestamp": "2026-02-26T11:53:39.5554989+02:00",
+      "event_type": "login",
+      "user_id": "usr_52d2dc495b7e3d2ea71b47cf",
+      "username": "testuser_8037",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_56bbb20d9898ab56cd817732",
+      "timestamp": "2026-02-26T11:53:39.6617751+02:00",
+      "event_type": "login",
+      "username": "testuser_8037",
+      "details": "Invalid credentials",
+      "success": false
+    },
+    {
+      "id": "aud_2d5a6e71d6aa57f7ffc3918e",
+      "timestamp": "2026-02-26T11:53:39.6673442+02:00",
+      "event_type": "login",
+      "username": "nonexistent_user_xyz",
+      "details": "Invalid credentials",
+      "success": false
+    },
+    {
+      "id": "aud_a12ac47b9f8645e9d507b2bc",
+      "timestamp": "2026-02-26T11:53:39.7463334+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_afbf5d8caaef9add7b5dc2d1",
+      "timestamp": "2026-02-26T11:53:39.882952+02:00",
+      "event_type": "access_request",
+      "user_id": "usr_52d2dc495b7e3d2ea71b47cf",
+      "username": "testuser_8037",
+      "source_ip": "192.168.1.50",
+      "resource": "192.168.1.100",
+      "decision": "deny",
+      "details": "Matched policy: Deny Unhealthy Devices",
+      "success": false
+    },
+    {
+      "id": "aud_463c52dece1509069664d856",
+      "timestamp": "2026-02-26T13:05:59.4010144+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_437fb42c959ac911109ab8af",
+      "timestamp": "2026-02-26T13:38:30.6450163+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    },
+    {
+      "id": "aud_f8a04034d0d961f980531076",
+      "timestamp": "2026-02-26T13:40:32.3321591+02:00",
+      "event_type": "access_request",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "source_ip": "[::1]:63582",
+      "resource": "192.168.1.100",
+      "decision": "allow",
+      "details": "Matched policy: Allow Admin Full Access",
+      "success": true
+    },
+    {
+      "id": "aud_6339b0ecd17f3635bbbcc0cf",
+      "timestamp": "2026-02-26T15:00:37.0382383+02:00",
+      "event_type": "device_health_report",
+      "resource": "device-001",
+      "details": "Device health reported: score=87",
+      "success": true
+    },
+    {
+      "id": "aud_a60cfe1e04aca59e0ee05ae0",
+      "timestamp": "2026-02-26T15:01:51.1894164+02:00",
+      "event_type": "login",
+      "user_id": "usr_ac96e03035c7479b57676132",
+      "username": "admin",
+      "details": "Authenticated (no MFA)",
+      "success": true
+    }
+  ],
+  "device_health": {
+    "device-001": {
+      "device_id": "device-001",
+      "hostname": "DESKTOP-JF0BMF7",
+      "os": "windows/amd64",
+      "checks": [
+        {
+          "name": "Firewall",
+          "status": "good",
+          "description": "All firewall profiles enabled",
+          "details": {
+            "enabled_profiles": "3"
+          }
+        },
+        {
+          "name": "Antivirus",
+          "status": "good",
+          "description": "Windows Defender - active",
+          "details": {
+            "product": "Windows Defender"
+          }
+        },
+        {
+          "name": "Operating System",
+          "status": "good",
+          "description": "Windows amd64",
+          "details": {
+            "arch": "amd64",
+            "hostname": "DESKTOP-JF0BMF7",
+            "os": "windows",
+            "version": "Microsoft Windows [Version 10.0.26200.7840]"
+          }
+        },
+        {
+          "name": "Disk Encryption",
+          "status": "warning",
+          "description": "BitLocker not enabled on C:",
+          "details": {
+            "status": "disabled"
+          }
+        }
+      ],
+      "overall_score": 87,
+      "reported_at": "2026-02-26T15:00:31+02:00"
+    }
+  }
+}

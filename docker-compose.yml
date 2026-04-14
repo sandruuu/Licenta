@@ -1,0 +1,203 @@
+name: ztna-lab
+
+networks:
+  public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  dmz:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.22.0.0/24
+  private:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+
+services:
+  cloud:
+    build:
+      context: ./cloud
+      dockerfile: Dockerfile
+    container_name: ztna-cloud
+    ports:
+      - "8443:8443"
+    networks:
+      public:
+        ipv4_address: 172.30.0.20
+        aliases:
+          - cloud.ztna.local
+    volumes:
+      - ./cloud/certs:/app/certs:ro
+      - ./cloud/data:/app/data
+      - ./cloud/dashboard/dist:/app/dashboard/dist:ro
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  public-dns:
+    image: coredns/coredns:1.11.1
+    container_name: ztna-public-dns
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
+    networks:
+      public:
+        ipv4_address: 172.30.0.53
+    volumes:
+      - ./infrastructure/public-dns:/etc/coredns:ro
+    command: ["-conf", "/etc/coredns/Corefile"]
+    restart: unless-stopped
+
+  sessionstore:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.sessionstore
+    container_name: ztna-sessionstore
+    volumes:
+      - gateway-data:/app/data
+    networks:
+      dmz:
+        ipv4_address: 172.22.0.12
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:6380/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  syslog:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.syslog
+    container_name: ztna-syslog
+    networks:
+      dmz:
+        ipv4_address: 172.22.0.13
+    volumes:
+      - gateway-logs:/app/logs
+    restart: unless-stopped
+
+  gateway-admin:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.admin
+    container_name: ztna-gateway-admin
+    ports:
+      - "8444:8444"
+    networks:
+      dmz:
+        ipv4_address: 172.22.0.11
+    volumes:
+      - ./gateway/docker-config.json:/app/config/gateway-config.json
+      - ./gateway/certs:/app/certs
+      - gateway-data:/app/data
+    environment:
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:?GATEWAY_API_KEY must be set}
+      - ADMIN_AUTO_SETUP=${ADMIN_AUTO_SETUP:-false}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+    depends_on:
+      sessionstore:
+        condition: service_healthy
+      syslog:
+        condition: service_started
+      cloud:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway-portal:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.portal
+    container_name: ztna-gateway-portal
+    ports:
+      - "9443:9443"
+      - "9444:9444"
+
+    networks:
+      public:
+        ipv4_address: 172.30.0.10
+      dmz:
+        ipv4_address: 172.22.0.10
+      private:
+        ipv4_address: 10.10.0.5
+    volumes:
+      - ./gateway/docker-config.json:/app/config/gateway-config.json
+      - ./gateway/certs:/app/certs
+      - gateway-data:/app/data
+    environment:
+      - GATEWAY_API_KEY=${GATEWAY_API_KEY:?GATEWAY_API_KEY must be set}
+    depends_on:
+      cloud:
+        condition: service_healthy
+      sessionstore:
+        condition: service_healthy
+      syslog:
+        condition: service_started
+      gateway-admin:
+        condition: service_started
+      private-dns:
+        condition: service_started
+    restart: unless-stopped
+
+  private-dns:
+    image: coredns/coredns:1.11.1
+    container_name: ztna-private-dns
+    networks:
+      private:
+        ipv4_address: 10.10.0.53
+    volumes:
+      - ./infrastructure/private-dns:/etc/coredns:ro
+    command: ["-conf", "/etc/coredns/Corefile"]
+    restart: unless-stopped
+
+  rdp-desktop:
+    build:
+      context: ./infrastructure/rdp-desktop
+    container_name: ztna-rdp-desktop
+    networks:
+      private:
+        ipv4_address: 10.10.0.10
+    environment:
+      - RDP_USER=${RDP_USER:-admin}
+      - RDP_PASSWORD=${RDP_PASSWORD:?RDP_PASSWORD must be set}
+    restart: unless-stopped
+
+  ssh-server:
+    build:
+      context: ./infrastructure/ssh-server
+    container_name: ztna-ssh-server
+    networks:
+      private:
+        ipv4_address: 10.10.0.30
+    environment:
+      - SSH_USER=${SSH_USER:-admin}
+      - SSH_PASSWORD=${SSH_PASSWORD:?SSH_PASSWORD must be set}
+    restart: unless-stopped
+
+  web-app:
+    image: hashicorp/http-echo:1.0
+    container_name: ztna-web-app
+    command: ["-listen=:8080", "-text=ZTNA internal web app"]
+    networks:
+      private:
+        ipv4_address: 10.10.0.20
+    restart: unless-stopped
+
+volumes:
+  gateway-logs:
+    driver: local
+  gateway-data:
+    driver: local

@@ -1,0 +1,4 @@
+time=2026-03-09T18:20:11.700+02:00 level=INFO msg="Config loaded" file=connect-config.json
+time=2026-03-09T18:20:11.709+02:00 level=INFO msg="Failed to create private namespace: Access is denied. (Code 0x00000005)"
+time=2026-03-09T18:20:11.709+02:00 level=INFO msg="Failed to take device installation mutex: Access is denied. (Code 0x00000005)"
+time=2026-03-09T18:20:11.710+02:00 level=ERROR msg="TUN creation failed (need admin?)" error="Failed to create TUN adapter: Access is denied."

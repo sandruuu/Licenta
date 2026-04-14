@@ -1,0 +1,8 @@
+{
+  "cloud_url": "https://localhost:8443",
+  "report_interval_seconds": 300,
+  "local_api_addr": "127.0.0.1:12080",
+  "data_dir": "./data",
+  "server_ca_file": "./certs/ca.crt",
+  "server_name": "localhost"
+}

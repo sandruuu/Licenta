@@ -1,0 +1,18 @@
+$ORIGIN internal.lab.local.
+$TTL 60
+
+@   IN SOA  ns.internal.lab.local. admin.internal.lab.local. (
+    2026030901  ; serial
+    3600        ; refresh
+    600         ; retry
+    86400       ; expire
+    60          ; minimum TTL
+)
+
+        IN NS   ns.internal.lab.local.
+
+ns              IN A    10.10.0.53
+
+rdp             IN A    10.10.0.10
+web             IN A    10.10.0.20
+ssh             IN A    10.10.0.30

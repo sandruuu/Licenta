@@ -1,0 +1,72 @@
+{{define "layout"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrustGate — Gateway Admin</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-page="{{.Page}}">
+    <div class="app">
+        <!-- ── Navbar ────────────────────────────── -->
+        <header class="navbar">
+            <div class="navbar-inner">
+                <!-- Brand -->
+                <div class="navbar-brand">
+                    <svg class="brand-logo" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" class="shield-body" stroke-width="1"/>
+                        <circle cx="12" cy="14" r="2.5" class="shield-dot"/>
+                        <path d="M12 16.5V18.5" class="shield-line" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M8.5 8C9.5 7 10.5 6.5 12 6.5C13.5 6.5 14.5 7 15.5 8" class="shield-arc-1" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M7 6.5C8.5 5 10 4.5 12 4.5C14 4.5 15.5 5 17 6.5" class="shield-arc-2" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M10 9.5C10.5 9 11.25 8.7 12 8.7C12.75 8.7 13.5 9 14 9.5" class="shield-arc-3" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                    <h2 class="brand-title">TRUST<span class="accent">GATE</span></h2>
+                </div>
+
+                <!-- Navigation -->
+                <nav class="navbar-nav">
+                    <a href="/dashboard" class="nav-item{{if eq .Page "dashboard"}} active{{end}}">
+                        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></span>
+                        Dashboard
+                    </a>
+                    <a href="/authentication" class="nav-item{{if eq .Page "authentication"}} active{{end}}">
+                        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z"/></svg></span>
+                        Authentication
+                    </a>
+                    <a href="/applications" class="nav-item{{if eq .Page "applications"}} active{{end}}">
+                        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></span>
+                        Applications
+                    </a>
+                    <a href="/settings" class="nav-item{{if eq .Page "settings"}} active{{end}}">
+                        <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+                        Settings
+                    </a>
+                </nav>
+
+                <!-- Right: status + logout -->
+                <div class="navbar-right">
+                    <div class="navbar-status">
+                        <span class="status-dot online"></span>
+                        <span class="status-text">ONLINE</span>
+                    </div>
+                    <div class="admin-email" id="admin-email" style="display:none;">admin</div>
+                    <button class="navbar-logout-btn" onclick="logout()" title="Logout">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- ── Main content ─────────────────────── -->
+        <main class="main-content">
+            {{template "content" .}}
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+{{end}}

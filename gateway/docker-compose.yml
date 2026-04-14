@@ -1,0 +1,122 @@
+# ───────────────────────────────────────────────────────────────
+# Secure Alert Gateway — Docker Compose (Microservices Architecture)
+#
+# Services:
+#   sessionstore  — In-memory session store (Redis-like) on :6380
+#   syslog        — Centralized structured log aggregator on :5514
+#   admin         — Management plane (config UI + APIs) on :8444
+#   portal        — Data plane PEP (TLS/yamux proxy) on :9443
+#
+# Architecture follows the Duo Network Gateway model:
+#   Portal (data) + Admin (management) + Redis (sessions) + Syslog (logs)
+# ───────────────────────────────────────────────────────────────
+
+networks:
+  gateway-net:
+    driver: bridge
+
+volumes:
+  gateway-logs:
+  gateway-certs:
+  gateway-config:
+  gateway-data:
+
+services:
+  # ── Session Store (replaces Redis) ──────────────────────────
+  sessionstore:
+    build:
+      context: .
+      dockerfile: Dockerfile.sessionstore
+    container_name: gw-sessionstore
+    restart: unless-stopped
+    ports:
+      - "6380:6380"
+    volumes:
+      - gateway-data:/app/data
+      - gateway-certs:/app/certs
+    environment:
+      - SESSION_STORE_TOKEN=${SESSION_STORE_TOKEN:-}
+    networks:
+      - gateway-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:6380/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Syslog Aggregator ──────────────────────────────────────
+  syslog:
+    build:
+      context: .
+      dockerfile: Dockerfile.syslog
+    container_name: gw-syslog
+    restart: unless-stopped
+    ports:
+      - "5514:5514"
+    volumes:
+      - gateway-logs:/app/logs
+      - gateway-certs:/app/certs
+    environment:
+      - SYSLOG_AUTH_TOKEN=${SYSLOG_AUTH_TOKEN:-}
+    networks:
+      - gateway-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Admin Management Plane ─────────────────────────────────
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: gw-admin
+    restart: unless-stopped
+    ports:
+      - "8444:8444"
+    volumes:
+      - gateway-config:/app/config
+      - gateway-certs:/app/certs
+      - gateway-data:/app/data
+    environment:
+      - STORE_URL=http://sessionstore:6380
+      - SYSLOG_ADDR=syslog:5514
+      - SESSION_STORE_TOKEN=${SESSION_STORE_TOKEN:-}
+      - SYSLOG_AUTH_TOKEN=${SYSLOG_AUTH_TOKEN:-}
+    networks:
+      - gateway-net
+    depends_on:
+      sessionstore:
+        condition: service_healthy
+      syslog:
+        condition: service_healthy
+
+  # ── Portal Data Plane (PEP) ────────────────────────────────
+  portal:
+    build:
+      context: .
+      dockerfile: Dockerfile.portal
+    container_name: gw-portal
+    restart: unless-stopped
+    ports:
+      - "9443:9443"
+
+    volumes:
+      - gateway-config:/app/config
+      - gateway-certs:/app/certs
+      - gateway-data:/app/data
+    environment:
+      - STORE_URL=http://sessionstore:6380
+      - SYSLOG_ADDR=syslog:5514
+      - SESSION_STORE_TOKEN=${SESSION_STORE_TOKEN:-}
+      - SYSLOG_AUTH_TOKEN=${SYSLOG_AUTH_TOKEN:-}
+    networks:
+      - gateway-net
+    depends_on:
+      sessionstore:
+        condition: service_healthy
+      syslog:
+        condition: service_healthy
+      admin:
+        condition: service_started

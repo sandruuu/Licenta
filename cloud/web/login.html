@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZTNA - Secure Access Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #0f172a;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 420px;
+            padding: 20px;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 16px;
+            padding: 40px 32px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+            animation: cardFadeIn 0.35s ease-out;
+        }
+
+        @keyframes cardFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .logo .shield {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+
+        .logo h1 {
+            font-size: 20px;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: -0.3px;
+        }
+
+        .logo p {
+            font-size: 13px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #0f172a;
+            margin-bottom: 6px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 9px 12px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            color: #0f172a;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-group input:focus {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+        }
+
+        .form-group input::placeholder {
+            color: #94a3b8;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 9px 16px;
+            background: #0f172a;
+            border: none;
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+        }
+
+        .btn:hover { background: #334155; }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .error-msg {
+            background: rgba(239, 68, 68, 0.08);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 13px;
+            color: #dc2626;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .info-msg {
+            background: rgba(59, 130, 246, 0.08);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 13px;
+            color: #2563eb;
+            margin-bottom: 16px;
+            display: none;
+        }
+
+        .step { display: none; }
+        .step.active { display: block; }
+
+        /* MFA input styling */
+        .mfa-input {
+            text-align: center;
+            font-size: 28px;
+            letter-spacing: 12px;
+            font-weight: 700;
+            font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+        }
+
+        /* Device health section */
+        .health-section {
+            margin-top: 20px;
+            padding-top: 18px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .health-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .health-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 13px;
+        }
+
+        .health-item .name { color: #334155; }
+
+        .health-badge {
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .health-badge.good {
+            background: rgba(34, 197, 94, 0.08);
+            color: #16a34a;
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+
+        .health-badge.warning {
+            background: rgba(245, 158, 11, 0.08);
+            color: #d97706;
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .health-badge.critical {
+            background: rgba(239, 68, 68, 0.08);
+            color: #dc2626;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .score-bar {
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .score-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.6s ease;
+        }
+
+        .score-fill.high { background: linear-gradient(90deg, #22c55e, #4ade80); }
+        .score-fill.medium { background: linear-gradient(90deg, #eab308, #facc15); }
+        .score-fill.low { background: linear-gradient(90deg, #ef4444, #f87171); }
+
+        /* Success page */
+        .success-icon {
+            width: 72px;
+            height: 72px;
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            margin: 0 auto 20px;
+        }
+
+        .success-text {
+            text-align: center;
+        }
+
+        .success-text h2 {
+            font-size: 20px;
+            margin-bottom: 8px;
+            color: #0f172a;
+        }
+
+        .success-text p {
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        /* Loading spinner */
+        .spinner {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Transition */
+        .fade-in {
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .session-info {
+            text-align: center;
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 16px;
+        }
+
+        /* Health check gate */
+        .health-gate {
+            text-align: center;
+        }
+
+        .health-gate-icon {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            margin: 0 auto 20px;
+        }
+
+        .health-gate-icon.checking {
+            background: rgba(59, 130, 246, 0.08);
+            border: 2px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .health-gate-icon.missing {
+            background: rgba(239, 68, 68, 0.08);
+            border: 2px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .health-gate h2 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: #0f172a;
+        }
+
+        .health-gate p {
+            font-size: 13px;
+            color: #64748b;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        .health-gate .steps-list {
+            text-align: left;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px 18px;
+            margin: 16px 0;
+            font-size: 13px;
+            color: #334155;
+            line-height: 1.8;
+        }
+
+        .health-gate .steps-list li {
+            margin-left: 8px;
+        }
+
+        .btn-retry {
+            width: 100%;
+            padding: 9px 16px;
+            background: transparent;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            color: #64748b;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            margin-top: 6px;
+        }
+
+        .btn-retry:hover {
+            background: #f8fafc;
+            color: #0f172a;
+        }
+
+        .health-gate-spinner {
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            border: 3px solid rgba(59, 130, 246, 0.2);
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        .auto-retry-hint {
+            font-size: 11px;
+            color: #94a3b8;
+            margin-top: 12px;
+        }
+
+        /* MFA method selection */
+        .mfa-method-btn {
+            width: 100%;
+            padding: 14px 16px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+            transition: border-color 0.15s, box-shadow 0.15s;
+            font-family: inherit;
+        }
+
+        .mfa-method-btn:hover {
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.08);
+        }
+
+        .mfa-method-btn .method-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .mfa-method-btn .method-icon.totp { background: rgba(99, 102, 241, 0.1); }
+        .mfa-method-btn .method-icon.webauthn { background: rgba(34, 197, 94, 0.1); }
+        .mfa-method-btn .method-icon.push { background: rgba(245, 158, 11, 0.1); }
+
+        .mfa-method-btn .method-info { text-align: left; }
+        .mfa-method-btn .method-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #0f172a;
+        }
+        .mfa-method-btn .method-desc {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo">
+                <div class="shield">&#x1F6E1;</div>
+                <h1>Secure Access Portal</h1>
+                <p>Zero Trust Network Access</p>
+            </div>
+
+            <!-- Step 0: Device Health Agent Check (OIDC flow only) -->
+            <div id="step-health-check" class="step">
+                <div class="health-gate">
+                    <!-- Checking state -->
+                    <div id="hc-checking">
+                        <div class="health-gate-icon checking">
+                            <div class="health-gate-spinner"></div>
+                        </div>
+                        <h2>Device Health Check</h2>
+                        <p>Checking if Device Health App is running on your device...</p>
+                    </div>
+                    <!-- Missing state -->
+                    <div id="hc-missing" style="display:none;">
+                        <div class="health-gate-icon missing">&#x26A0;</div>
+                        <h2>Device Health App Not Running</h2>
+                        <p>To access company resources, Device Health App must be running on your device.</p>
+                        <ol class="steps-list">
+                            <li>Open <strong>Device Health App</strong></li>
+                            <li>Wait for the application to fully start</li>
+                            <li>Press <strong>Retry</strong> below</li>
+                        </ol>
+                        <button class="btn-retry" onclick="retryHealthCheck()">&#x1F504; Retry</button>
+                        <div class="auto-retry-hint">Auto-retrying every 5 seconds...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 1: Login -->
+            <div id="step-login" class="step active">
+                <div id="login-error" class="error-msg"></div>
+                <form id="login-form" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" name="username" placeholder="Enter your username" required autofocus>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                    </div>
+                    <button type="submit" class="btn" id="login-btn">Sign In</button>
+                </form>
+
+                <div id="health-display" class="health-section" style="display: none;">
+                    <div class="health-title">Device Health Status</div>
+                    <div id="health-checks"></div>
+                    <div class="score-bar">
+                        <div id="score-fill" class="score-fill" style="width: 0%"></div>
+                    </div>
+                    <div id="score-label" style="text-align: right; font-size: 11px; color: #64748b; margin-top: 4px;"></div>
+                </div>
+            </div>
+
+            <!-- Step 2: MFA Method Selection (shown during MFA step-up) -->
+            <div id="step-mfa-select" class="step">
+                <div id="mfa-select-info" class="info-msg" style="display: block;">
+                    Additional verification is required to access this resource. Choose your method:
+                </div>
+                <div id="mfa-methods-list"></div>
+            </div>
+
+            <!-- Step 3: MFA Verification (TOTP) -->
+            <div id="step-mfa" class="step">
+                <div id="mfa-info" class="info-msg" style="display: block;">
+                    Multi-factor authentication is required. Enter the 6-digit code from your authenticator app.
+                </div>
+                <div id="mfa-error" class="error-msg"></div>
+                <form id="mfa-form" onsubmit="handleMFA(event)">
+                    <div class="form-group">
+                        <label for="totp-code">Verification Code</label>
+                        <input type="text" id="totp-code" name="totp_code" class="mfa-input"
+                               placeholder="000000" maxlength="6" pattern="[0-9]{6}"
+                               inputmode="numeric" autocomplete="one-time-code" required>
+                    </div>
+                    <button type="submit" class="btn" id="mfa-btn">Verify</button>
+                </form>
+            </div>
+
+            <!-- Step 3: Success -->
+            <div id="step-success" class="step">
+                <div class="success-icon">&#x2713;</div>
+                <div class="success-text">
+                    <h2>Access Granted</h2>
+                    <p id="success-msg">Authentication successful. Your secure connection is being established. You can close this window.</p>
+                </div>
+            </div>
+
+            <!-- Step 4: Denied -->
+            <div id="step-denied" class="step">
+                <div class="success-icon" style="background: linear-gradient(135deg, #ef4444, #dc2626);">&#x2717;</div>
+                <div class="success-text">
+                    <h2>Access Denied</h2>
+                    <p id="denied-msg">Your access request has been denied based on security policy evaluation.</p>
+                </div>
+            </div>
+
+            <div class="session-info" id="session-info"></div>
+        </div>
+    </div>
+
+    <script>
+        // Get session ID from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const sessionId = urlParams.get('session');
+        const oidcSessionId = urlParams.get('oidc_session');
+        const enrollSessionId = urlParams.get('enroll_session');
+        const isMFAStepUp = urlParams.get('mfa_step') === 'true';
+        let mfaToken = '';
+        let pendingAuthToken = ''; // Auth token held during MFA step-up flow
+        let deviceHealthData = null;
+
+        // Read CSRF token from cookie (double-submit cookie pattern)
+        function getCSRFToken() {
+            const match = document.cookie.match(/(?:^|; )csrf_token=([^;]*)/);
+            return match ? match[1] : '';
+        }
+
+        // Display session info
+        if (sessionId) {
+            document.getElementById('session-info').textContent = 'Session: ' + sessionId.substring(0, 12) + '...';
+        } else if (oidcSessionId) {
+            document.getElementById('session-info').textContent = 'OIDC Session: ' + oidcSessionId.substring(0, 12) + '...';
+        } else if (enrollSessionId) {
+            document.getElementById('session-info').textContent = 'Device Enrollment: ' + enrollSessionId.substring(0, 12) + '...';
+        }
+
+        // Load device health from the pending auth session
+        async function loadSessionInfo() {
+            if (!sessionId) return;
+            try {
+                const resp = await fetch('/api/auth/session-info?session=' + sessionId);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.device_health) {
+                        deviceHealthData = data.device_health;
+                        displayDeviceHealth(data.device_health);
+                    }
+                }
+            } catch (e) {
+                console.log('Could not load session info:', e);
+            }
+        }
+
+        function displayDeviceHealth(health) {
+            const container = document.getElementById('health-checks');
+            const display = document.getElementById('health-display');
+            display.style.display = 'block';
+
+            let html = '';
+            if (health.checks) {
+                health.checks.forEach(function(check) {
+                    html += '<div class="health-item">' +
+                            '<span class="name">' + escapeHtml(check.name) + '</span>' +
+                            '<span class="health-badge ' + check.status + '">' + check.status + '</span>' +
+                            '</div>';
+                });
+            }
+            container.innerHTML = html;
+
+            // Score bar
+            const score = health.overall_score || 0;
+            const fill = document.getElementById('score-fill');
+            fill.style.width = score + '%';
+            fill.className = 'score-fill ' + (score >= 70 ? 'high' : score >= 40 ? 'medium' : 'low');
+            document.getElementById('score-label').textContent = 'Device Score: ' + score + '/100';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function showStep(stepId) {
+            document.querySelectorAll('.step').forEach(function(el) { el.classList.remove('active'); });
+            const step = document.getElementById(stepId);
+            step.classList.add('active');
+            step.classList.add('fade-in');
+        }
+
+        function showError(elementId, message) {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+
+        function hideError(elementId) {
+            document.getElementById(elementId).style.display = 'none';
+        }
+
+        function setButtonLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            if (loading) {
+                btn.disabled = true;
+                btn.dataset.originalText = btn.textContent;
+                btn.innerHTML = '<span class="spinner"></span> Please wait...';
+            } else {
+                btn.disabled = false;
+                btn.textContent = btn.dataset.originalText || 'Submit';
+            }
+        }
+
+        // Handle login form submission
+        async function handleLogin(event) {
+            event.preventDefault();
+            hideError('login-error');
+            setButtonLoading('login-btn', true);
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({ username: username, password: password })
+                });
+
+                const data = await resp.json();
+
+                if (data.status === 'authenticated') {
+                    if (isMFAStepUp && data.mfa_methods && data.mfa_methods.length > 0) {
+                        // MFA step-up required — request MFA token before completing session
+                        pendingAuthToken = data.auth_token;
+                        await requestMFAStepUp(data.auth_token);
+                    } else {
+                        // No MFA needed — complete the session directly
+                        await completeAuthSession(data.auth_token);
+                    }
+                } else if (data.status === 'mfa_required') {
+                    // Legacy: MFA required from login (shouldn't happen with new flow)
+                    mfaToken = data.mfa_token;
+                    showStep('step-mfa');
+                    document.getElementById('totp-code').focus();
+                } else {
+                    showError('login-error', data.message || 'Authentication failed');
+                }
+            } catch (err) {
+                showError('login-error', 'Connection error. Please try again.');
+            } finally {
+                setButtonLoading('login-btn', false);
+            }
+        }
+
+        // Request MFA step-up: exchange auth_token for MFA token + method list
+        async function requestMFAStepUp(authToken) {
+            try {
+                const resp = await fetch('/api/auth/mfa-step-up', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({
+                        auth_token: authToken,
+                        oidc_session_id: oidcSessionId || ''
+                    })
+                });
+
+                const data = await resp.json();
+
+                if (data.status === 'mfa_required') {
+                    mfaToken = data.mfa_token;
+                    showMFAMethodSelection(data.mfa_methods);
+                } else {
+                    showError('login-error', data.message || 'MFA step-up failed');
+                    showStep('step-login');
+                }
+            } catch (err) {
+                showError('login-error', 'Connection error during MFA step-up.');
+                showStep('step-login');
+            }
+        }
+
+        // Show MFA method selection UI
+        function showMFAMethodSelection(methods) {
+            const methodMeta = {
+                totp:     { icon: '&#x1F4F1;', name: 'Authenticator App',  desc: 'Enter a 6-digit code from your authenticator app' },
+                webauthn: { icon: '&#x1F511;', name: 'Security Key',       desc: 'Use your passkey or hardware security key' },
+                push:     { icon: '&#x1F514;', name: 'Push Notification',  desc: 'Approve the login request on your device' }
+            };
+
+            if (methods.length === 1) {
+                // Single method — skip selection, go directly to verification
+                selectMFAMethod(methods[0]);
+                return;
+            }
+
+            const container = document.getElementById('mfa-methods-list');
+            let html = '';
+            methods.forEach(function(m) {
+                const meta = methodMeta[m] || { icon: '&#x2753;', name: m, desc: '' };
+                html += '<button type="button" class="mfa-method-btn" onclick="selectMFAMethod(\'' + m + '\')">' +
+                        '<div class="method-icon ' + m + '">' + meta.icon + '</div>' +
+                        '<div class="method-info"><div class="method-name">' + meta.name + '</div>' +
+                        '<div class="method-desc">' + meta.desc + '</div></div></button>';
+            });
+            container.innerHTML = html;
+            showStep('step-mfa-select');
+        }
+
+        // User selected an MFA method — show the appropriate verification UI
+        function selectMFAMethod(method) {
+            if (method === 'totp') {
+                document.getElementById('mfa-info').textContent =
+                    'Enter the 6-digit verification code from your authenticator app.';
+                document.getElementById('mfa-info').style.display = 'block';
+                showStep('step-mfa');
+                document.getElementById('totp-code').focus();
+            } else if (method === 'webauthn') {
+                startWebAuthn();
+            } else if (method === 'push') {
+                startPushApproval();
+            }
+        }
+
+        // WebAuthn / Passkey authentication flow
+        async function startWebAuthn() {
+            document.getElementById('mfa-info').textContent =
+                'Verifying with your security key or passkey…';
+            document.getElementById('mfa-info').style.display = 'block';
+            showStep('step-mfa-select');
+
+            try {
+                // 1. Begin — get challenge options from the server
+                const beginResp = await fetch('/api/mfa/webauthn/authenticate/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mfa_token: mfaToken })
+                });
+                if (!beginResp.ok) {
+                    const err = await beginResp.json();
+                    throw new Error(err.error || 'Failed to start WebAuthn');
+                }
+                const options = await beginResp.json();
+
+                // 2. Decode challenge and credential IDs from base64url
+                options.publicKey.challenge = base64urlToBuffer(options.publicKey.challenge);
+                if (options.publicKey.allowCredentials) {
+                    options.publicKey.allowCredentials = options.publicKey.allowCredentials.map(c => ({
+                        ...c,
+                        id: base64urlToBuffer(c.id)
+                    }));
+                }
+
+                // 3. Call the browser WebAuthn API
+                const assertion = await navigator.credentials.get({ publicKey: options.publicKey });
+
+                // 4. Encode the response for the server
+                const assertionJSON = JSON.stringify({
+                    id:       assertion.id,
+                    rawId:    bufferToBase64url(assertion.rawId),
+                    type:     assertion.type,
+                    response: {
+                        authenticatorData: bufferToBase64url(assertion.response.authenticatorData),
+                        clientDataJSON:    bufferToBase64url(assertion.response.clientDataJSON),
+                        signature:         bufferToBase64url(assertion.response.signature),
+                        userHandle:        assertion.response.userHandle
+                                           ? bufferToBase64url(assertion.response.userHandle) : ''
+                    }
+                });
+
+                // 5. Finish — send assertion to the server for verification
+                const finishResp = await fetch('/api/mfa/webauthn/authenticate/finish?mfa_token=' + encodeURIComponent(mfaToken), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: assertionJSON
+                });
+                const finishData = await finishResp.json();
+
+                if (finishData.status === 'authenticated') {
+                    await completeAuthSession(finishData.auth_token);
+                } else {
+                    showError('mfa-error', finishData.message || 'WebAuthn verification failed');
+                    showStep('step-mfa-select');
+                }
+
+            } catch (err) {
+                if (err.name === 'NotAllowedError') {
+                    showError('mfa-error', 'Security key request was cancelled or timed out.');
+                } else {
+                    showError('mfa-error', err.message || 'WebAuthn verification failed');
+                }
+                showStep('step-mfa-select');
+            }
+        }
+
+        // Base64url ↔ ArrayBuffer helpers for WebAuthn
+        function base64urlToBuffer(base64url) {
+            const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+            const binary = atob(base64 + pad);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        }
+
+        function bufferToBase64url(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        // Push approval MFA flow
+        let pushPollTimer = null;
+
+        async function startPushApproval() {
+            hideError('mfa-error');
+            document.getElementById('mfa-info').textContent =
+                'Sending push notification to your device…';
+            document.getElementById('mfa-info').style.display = 'block';
+            showStep('step-mfa-select');
+
+            try {
+                // 1. Begin — create push challenge on the server
+                const beginResp = await fetch('/api/mfa/push/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mfa_token: mfaToken })
+                });
+                if (!beginResp.ok) {
+                    const err = await beginResp.json();
+                    throw new Error(err.error || 'Failed to send push notification');
+                }
+                const beginData = await beginResp.json();
+                const challengeId = beginData.challenge_id;
+
+                // 2. Show waiting UI
+                document.getElementById('mfa-info').innerHTML =
+                    '&#x1F514; Waiting for approval on your device…<br>' +
+                    '<small style="opacity:0.7">The request will expire in 2 minutes</small>';
+
+                // 3. Poll for status every 3 seconds
+                let pollCount = 0;
+                const maxPolls = 40; // 40 * 3s = 2 minutes
+
+                pushPollTimer = setInterval(async () => {
+                    pollCount++;
+                    if (pollCount > maxPolls) {
+                        clearInterval(pushPollTimer);
+                        pushPollTimer = null;
+                        showError('mfa-error', 'Push notification expired. Please try again.');
+                        document.getElementById('mfa-info').style.display = 'none';
+                        showStep('step-mfa-select');
+                        return;
+                    }
+
+                    try {
+                        const statusResp = await fetch(
+                            '/api/mfa/push/status?challenge_id=' + encodeURIComponent(challengeId) +
+                            '&mfa_token=' + encodeURIComponent(mfaToken)
+                        );
+                        const statusData = await statusResp.json();
+
+                        if (statusData.status === 'approved') {
+                            clearInterval(pushPollTimer);
+                            pushPollTimer = null;
+                            document.getElementById('mfa-info').textContent = 'Approved! Completing authentication…';
+                            await completeAuthSession(statusData.auth_token);
+                        } else if (statusData.status === 'denied') {
+                            clearInterval(pushPollTimer);
+                            pushPollTimer = null;
+                            showError('mfa-error', 'Push request was denied.');
+                            document.getElementById('mfa-info').style.display = 'none';
+                            showStep('step-mfa-select');
+                        } else if (statusData.status === 'expired') {
+                            clearInterval(pushPollTimer);
+                            pushPollTimer = null;
+                            showError('mfa-error', 'Push request expired. Please try again.');
+                            document.getElementById('mfa-info').style.display = 'none';
+                            showStep('step-mfa-select');
+                        }
+                        // else still "pending" — keep polling
+                    } catch (pollErr) {
+                        // Silently retry on network errors
+                    }
+                }, 3000);
+
+            } catch (err) {
+                showError('mfa-error', err.message || 'Failed to send push notification');
+                document.getElementById('mfa-info').style.display = 'none';
+                showStep('step-mfa-select');
+            }
+        }
+
+        // Handle MFA form submission
+        async function handleMFA(event) {
+            event.preventDefault();
+            hideError('mfa-error');
+            setButtonLoading('mfa-btn', true);
+
+            const code = document.getElementById('totp-code').value;
+
+            try {
+                const resp = await fetch('/api/auth/verify-mfa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': getCSRFToken() },
+                    body: JSON.stringify({ mfa_token: mfaToken, method: 'totp', totp_code: code })
+                });
+
+                const data = await resp.json();
+
+                if (data.status === 'authenticated') {
+                    await completeAuthSession(data.auth_token);
+                } else {
+                    showError('mfa-error', data.message || 'Invalid verification code');
+                    document.getElementById('totp-code').value = '';
+                    document.getElementById('totp-code').focus();
+                }
+            } catch (err) {
+                showError('mfa-error', 'Connection error. Please try again.');
+            } finally {
+                setButtonLoading('mfa-btn', false);
+            }
+        }
+
+        // Complete the auth session - notify cloud that login is done
+        async function completeAuthSession(authToken) {
+            // ── Enrollment Flow: Complete via /api/enroll/complete-session ──
+            if (enrollSessionId) {
+                try {
+                    const resp = await fetch('/api/enroll/complete-session', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            session_id: enrollSessionId,
+                            auth_token: authToken
+                        })
+                    });
+
+                    const data = await resp.json();
+
+                    if (data.success) {
+                        document.getElementById('success-msg').textContent =
+                            'Device enrolled successfully! You can close this window.';
+                        showStep('step-success');
+                    } else {
+                        document.getElementById('denied-msg').textContent = data.error || 'Enrollment failed.';
+                        showStep('step-denied');
+                    }
+                } catch (err) {
+                    document.getElementById('denied-msg').textContent = 'Connection error during enrollment.';
+                    showStep('step-denied');
+                }
+                return;
+            }
+
+            // ── OIDC Flow: Complete via /api/auth/oidc-complete ──
+            if (oidcSessionId) {
+                try {
+                    const resp = await fetch('/api/auth/oidc-complete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            oidc_session: oidcSessionId,
+                            auth_token: authToken
+                        })
+                    });
+
+                    const data = await resp.json();
+
+                    if (data.redirect_url) {
+                        // Redirect browser to Gateway callback with authorization code
+                        document.getElementById('success-msg').textContent =
+                            'Authentication successful. Redirecting to your application...';
+                        showStep('step-success');
+                        // Small delay so user sees the success message
+                        setTimeout(function() {
+                            window.location.href = data.redirect_url;
+                        }, 500);
+                    } else {
+                        document.getElementById('denied-msg').textContent = data.error || 'OIDC authorization failed.';
+                        showStep('step-denied');
+                    }
+                } catch (err) {
+                    document.getElementById('denied-msg').textContent = 'Connection error during OIDC completion.';
+                    showStep('step-denied');
+                }
+                return;
+            }
+
+            // ── Legacy Flow: Complete via /api/auth/complete-session ──
+            if (!sessionId) {
+                // No session ID means direct browser access - just show success
+                showStep('step-success');
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/auth/complete-session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        auth_token: authToken
+                    })
+                });
+
+                const data = await resp.json();
+
+                if (data.success) {
+                    showStep('step-success');
+                } else if (data.decision === 'denied') {
+                    document.getElementById('denied-msg').textContent = data.message || 'Access denied by security policy.';
+                    showStep('step-denied');
+                } else if (data.decision === 'mfa_required') {
+                    // Policy engine demands MFA step-up — request MFA token
+                    pendingAuthToken = authToken;
+                    await requestMFAStepUp(authToken);
+                } else {
+                    document.getElementById('denied-msg').textContent = data.message || 'An error occurred.';
+                    showStep('step-denied');
+                }
+            } catch (err) {
+                showStep('step-success'); // Fail-open for UX, connect-app will validate
+            }
+        }
+
+        // ── Device Health Agent Detection (Duo-style, OIDC flow only) ──
+        const HEALTH_AGENT_URL = 'http://127.0.0.1:12080';
+        let healthCheckInterval = null;
+
+        async function checkDeviceHealthAgent() {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(function() { controller.abort(); }, 3000);
+                const resp = await fetch(HEALTH_AGENT_URL + '/health', {
+                    mode: 'cors',
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                if (!resp.ok) return null;
+                const data = await resp.json();
+                if (data.status === 'ok') return data;
+                return null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        async function fetchAgentHealthStatus() {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(function() { controller.abort(); }, 3000);
+                const resp = await fetch(HEALTH_AGENT_URL + '/status', {
+                    mode: 'cors',
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+                if (!resp.ok) return null;
+                return await resp.json();
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function showHealthGateState(state) {
+            document.getElementById('hc-checking').style.display = state === 'checking' ? 'block' : 'none';
+            document.getElementById('hc-missing').style.display = state === 'missing' ? 'block' : 'none';
+        }
+
+        async function performHealthCheck() {
+            showHealthGateState('checking');
+            const alive = await checkDeviceHealthAgent();
+
+            if (alive) {
+                // Agent is running — fetch full status for health display
+                if (healthCheckInterval) {
+                    clearInterval(healthCheckInterval);
+                    healthCheckInterval = null;
+                }
+                const status = await fetchAgentHealthStatus();
+                if (status && status.overall_score !== undefined) {
+                    // Transform agent status to DeviceHealthReport format
+                    const healthReport = {
+                        overall_score: status.overall_score,
+                        checks: status.checks || []
+                    };
+                    displayDeviceHealth(healthReport);
+                }
+                // Transition to login form
+                showStep('step-login');
+                document.getElementById('username').focus();
+                return true;
+            } else {
+                // Agent not running — show blocking banner
+                showHealthGateState('missing');
+                return false;
+            }
+        }
+
+        async function retryHealthCheck() {
+            await performHealthCheck();
+        }
+
+        function startAutoRetry() {
+            if (healthCheckInterval) return;
+            healthCheckInterval = setInterval(async function() {
+                const alive = await checkDeviceHealthAgent();
+                if (alive) {
+                    await performHealthCheck();
+                }
+            }, 5000);
+        }
+
+        // ── Initialize ──
+        if (oidcSessionId) {
+            // OIDC flow (user accessing a resource) — require health agent
+            showStep('step-health-check');
+            performHealthCheck().then(function(ok) {
+                if (!ok) startAutoRetry();
+            });
+        } else if (enrollSessionId) {
+            // Enrollment flow — go straight to login
+            showStep('step-login');
+            document.getElementById('username').focus();
+        }
+        loadSessionInfo();
+    </script>
+</body>
+</html>

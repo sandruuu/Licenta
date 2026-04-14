@@ -1,0 +1,239 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Applications</h1>
+        <p>Protected applications accessible through the gateway</p>
+    </div>
+    <div class="page-header-right">
+        <button class="refresh-btn" onclick="loadApplications()" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+        </button>
+        <div class="dropdown-wrap">
+            <button class="btn btn-primary" id="add-app-btn" onclick="toggleAddMenu()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add New…
+            </button>
+            <div class="dropdown-menu" id="add-app-menu">
+                <button onclick="showAppForm('web')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    Web Application
+                </button>
+                <button onclick="showAppForm('ssh')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    SSH Server
+                </button>
+                <button onclick="showAppForm('rdp')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    RDP Server
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Add / Edit form (hidden by default) ── -->
+<div class="section-card" id="app-form-card" style="display:none;">
+    <div class="section-title" id="app-form-title">Add Web Application</div>
+
+    <!-- ── Wizard Step Indicator ── -->
+    <div class="wizard-steps" id="wizard-steps">
+        <div class="wizard-step active" id="wizard-step-1">
+            <span class="wizard-step-num">1</span>
+            <span class="wizard-step-label">Link to Cloud</span>
+        </div>
+        <div class="wizard-step-line"></div>
+        <div class="wizard-step" id="wizard-step-2">
+            <span class="wizard-step-num">2</span>
+            <span class="wizard-step-label">Configure Routing</span>
+        </div>
+    </div>
+
+    <!-- ═══ STEP 1: Cloud Link ═══ -->
+    <div id="wizard-panel-1">
+        <div class="cloud-link-info">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <span>Enter the credentials generated in the Cloud dashboard when you created this application.</span>
+        </div>
+        <div class="form-group">
+            <label>Client ID</label>
+            <input id="app-cloud-client-id" placeholder="DI..." autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label>Client Secret</label>
+            <input id="app-cloud-secret" type="password" placeholder="Paste secret here" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label>Cloud API Hostname</label>
+            <input id="app-cloud-api" placeholder="https://cloud.example.com:8443">
+            <span class="form-help">Leave empty to use the gateway's configured Cloud URL</span>
+        </div>
+        <div id="cloud-verify-result" style="display:none;"></div>
+        <div class="app-form-actions">
+            <button class="btn btn-primary" type="button" id="verify-cloud-btn" onclick="verifyCloudApp()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                Verify &amp; Continue
+            </button>
+            <button class="btn btn-secondary" type="button" onclick="skipCloudLink()">Skip (manual setup)</button>
+            <button class="btn btn-secondary" type="button" onclick="hideAppForm()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- ═══ STEP 2: Local Routing ═══ -->
+    <div id="wizard-panel-2" style="display:none;">
+        <!-- Cloud app summary (shown after verification) -->
+        <div class="cloud-app-summary" id="cloud-app-summary" style="display:none;">
+            <div class="cloud-app-summary-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+            </div>
+            <div>
+                <div class="cloud-app-summary-name" id="cloud-app-name-display"></div>
+                <div class="cloud-app-summary-meta" id="cloud-app-meta-display"></div>
+            </div>
+            <span class="badge badge-green" style="margin-left:auto;">Cloud Linked</span>
+        </div>
+
+        <form id="app-form" autocomplete="off">
+            <input type="hidden" id="app-type" value="web">
+            <input type="hidden" id="app-editing" value="">
+            <!-- Cloud data (filled by verify step) -->
+            <input type="hidden" id="app-cloud-app-id" value="">
+            <input type="hidden" id="app-cloud-cid-final" value="">
+            <input type="hidden" id="app-cloud-secret-final" value="">
+            <input type="hidden" id="app-cloud-desc" value="">
+
+            <!-- Common: Name -->
+            <div class="form-group">
+                <label>Application Name</label>
+                <input id="app-name" placeholder="e.g. Internal Wiki" required>
+            </div>
+
+            <!-- External URL -->
+            <div class="form-group">
+                <label>External URL</label>
+                <input id="app-external-url" placeholder="https://wiki.example.com" required>
+                <span class="form-help">The public URL users will access</span>
+            </div>
+
+            <!-- Web-only: Internal URL -->
+            <div class="form-group" id="app-internal-url-group">
+                <label>Internal URL (Backend)</label>
+                <input id="app-internal-url" placeholder="http://10.0.0.5:8080">
+                <span class="form-help">Where this app is hosted on your internal network</span>
+            </div>
+
+            <!-- SSH/RDP: Internal Hosts -->
+            <div id="app-hosts-group" style="display:none;">
+                <label style="display:block;font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;letter-spacing:0.2px;">Internal Hosts</label>
+                <div id="app-hosts-list"></div>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="addHostRow()" style="margin-top:8px;">+ Add Host</button>
+            </div>
+
+            <!-- Certificate Source -->
+            <div class="form-group" style="margin-top:16px;">
+                <label>Certificate Source</label>
+                <div class="cert-source-group">
+                    <label class="cert-radio-label">
+                        <input type="radio" name="app-cert" value="upload" checked onchange="toggleAppCert()"> Provide my own certificate
+                    </label>
+                    <label class="cert-radio-label">
+                        <input type="radio" name="app-cert" value="letsencrypt" onchange="toggleAppCert()"> Generate a certificate on save (Let's Encrypt)
+                    </label>
+                </div>
+            </div>
+
+            <!-- Upload panel -->
+            <div id="app-cert-upload-panel">
+                <div class="form-group">
+                    <label>SSL Certificate (PEM)</label>
+                    <div class="file-upload-row">
+                        <label class="file-upload-btn">
+                            Choose file
+                            <input type="file" id="app-cert-file" accept=".pem,.crt,.cer" style="display:none" onchange="onAppFileSelect(this,'app-cert-name')">
+                        </label>
+                        <span class="file-upload-name" id="app-cert-name">No file chosen</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>SSL Certificate Key (PEM)</label>
+                    <div class="file-upload-row">
+                        <label class="file-upload-btn">
+                            Choose file
+                            <input type="file" id="app-key-file" accept=".pem,.key" style="display:none" onchange="onAppFileSelect(this,'app-key-name')">
+                        </label>
+                        <span class="file-upload-name" id="app-key-name">No file chosen</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LE panel -->
+            <div id="app-cert-le-panel" style="display:none;">
+                <div class="le-info-box">
+                    <p>A certificate will be automatically provisioned via Let's Encrypt when you save. The external URL's domain must resolve to this gateway.</p>
+                </div>
+            </div>
+
+            <!-- Session Duration -->
+            <div class="form-row" style="margin-top:16px;">
+                <div class="form-group">
+                    <label>Session Duration (minutes)</label>
+                    <input type="number" id="app-session" value="480" min="1">
+                </div>
+                <div class="form-group">
+                    <label>MFA</label>
+                    <div class="checkbox-row" style="margin-top:6px;margin-bottom:0;">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="app-mfa"> Require MFA
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legacy fields (hidden, for backward compat) -->
+            <div id="app-legacy-fields" style="display:none;">
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label>Internal IP</label>
+                        <input id="app-ip">
+                    </div>
+                    <div class="form-group">
+                        <label>Port</label>
+                        <input type="number" id="app-port">
+                    </div>
+                    <div class="form-group">
+                        <label>Tunnel IP</label>
+                        <input id="app-tunnel">
+                    </div>
+                </div>
+            </div>
+
+            <div class="app-form-actions">
+                <button class="btn btn-secondary" type="button" onclick="goToWizardStep(1)" id="back-to-step1-btn">Back</button>
+                <button class="btn btn-primary" type="submit" id="app-submit-btn">Add Application</button>
+                <button class="btn btn-secondary" type="button" onclick="hideAppForm()">Cancel</button>
+            </div>
+        </form>
+        <div id="resource-msg"></div>
+    </div>
+</div>
+
+<!-- ── Filter bar + List ── -->
+<div class="section-card">
+    <div class="app-list-header">
+        <div class="section-title" style="margin-bottom:0;">Applications <span class="app-count" id="resource-count">0</span></div>
+        <div class="app-filters" id="app-filters">
+            <button class="app-filter active" data-filter="all" onclick="filterApps('all')">All</button>
+            <button class="app-filter" data-filter="web" onclick="filterApps('web')">Web</button>
+            <button class="app-filter" data-filter="ssh" onclick="filterApps('ssh')">SSH</button>
+            <button class="app-filter" data-filter="rdp" onclick="filterApps('rdp')">RDP</button>
+        </div>
+    </div>
+    <div id="resources-content">
+        <div class="loading-screen" style="padding: 32px;">
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
+</div>
+{{end}}

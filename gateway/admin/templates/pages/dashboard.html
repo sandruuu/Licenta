@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Dashboard</h1>
+        <p>Secure Alert Gateway overview</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+        <span class="sse-tag" id="sse-tag">● LIVE</span>
+        <button class="refresh-btn" onclick="loadDashboard()" title="Refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+        </button>
+    </div>
+</div>
+
+<!-- ── Live Status Bar (SSE-powered) ──────── -->
+<div class="live-bar" id="live-bar">
+    <div class="live-indicator">
+        <span class="pulse muted" id="pulse-cloud"></span>
+        <span>Cloud</span>
+    </div>
+    <div class="live-indicator">
+        <span class="pulse muted" id="pulse-mtls"></span>
+        <span>mTLS</span>
+    </div>
+    <div class="live-indicator">
+        <span class="pulse muted" id="pulse-store"></span>
+        <span>Store</span>
+    </div>
+    <div class="live-stat">
+        <span class="live-value" id="live-sessions">0</span>
+        <span>Active Sessions</span>
+    </div>
+</div>
+
+<!-- ── Certificate Expiry Alert ───────────── -->
+<div class="cert-alert" id="cert-alert" style="display:none">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <span>SSL Certificate expires in <strong id="cert-days">—</strong> days</span>
+</div>
+
+<div class="stat-grid" id="stat-grid"></div>
+
+<div class="section-card">
+    <div class="section-title">System Status</div>
+    <div id="status-list"></div>
+</div>
+
+<div class="section-card" id="resources-section" style="display: none;">
+    <div class="section-title">Applications</div>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Internal IP</th>
+                <th>Tunnel IP</th>
+                <th>Port</th>
+                <th>Protocol</th>
+            </tr>
+        </thead>
+        <tbody id="dashboard-resources-table"></tbody>
+    </table>
+</div>
+{{end}}

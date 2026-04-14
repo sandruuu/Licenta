@@ -1,0 +1,66 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Primary Authentication</h1>
+        <p>Configure the Identity Provider for user authentication</p>
+    </div>
+</div>
+
+<!-- ── IdP Status ────────────────────────────────────────── -->
+<div class="section-card">
+    <div class="section-title">Current Status</div>
+    <div class="detail-grid" id="idp-status">
+        <div class="detail-row"><span>Configured</span><span>—</span></div>
+    </div>
+</div>
+
+<!-- ── Configure Identity Provider ───────────────────────── -->
+<div class="section-card">
+    <div class="section-title">Configure Identity Provider</div>
+    <form id="idp-form">
+        <div class="form-group">
+            <label>IdP Hostname</label>
+            <input id="idp-hostname" placeholder="auth.company.com">
+            <span class="input-hint">The global, unique name for your identity provider entity.</span>
+        </div>
+        <div class="form-group">
+            <label>Authorization URL</label>
+            <input id="idp-auth-url" placeholder="https://auth.company.com/authorize">
+            <span class="input-hint">URL to use when performing primary authentication. This is provided by your primary authentication identity provider.</span>
+        </div>
+        <div class="form-group">
+            <label>Token URL</label>
+            <input id="idp-token-url" placeholder="https://auth.company.com/token">
+            <span class="input-hint">URL to use for token exchange. This is provided by your primary authentication identity provider.</span>
+        </div>
+        <div class="form-group">
+            <label>UserInfo URL</label>
+            <input id="idp-userinfo-url" placeholder="https://auth.company.com/userinfo">
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border-color);margin:20px 0">
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Client ID</label>
+                <input id="idp-client-id" placeholder="gateway-client">
+            </div>
+            <div class="form-group">
+                <label>Client Secret</label>
+                <input type="password" id="idp-client-secret" placeholder="••••••••">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Redirect URI</label>
+            <input id="idp-redirect-uri" placeholder="https://gw.company.com/callback">
+        </div>
+        <div class="form-group">
+            <label>Scopes</label>
+            <input id="idp-scopes" placeholder="openid profile email" value="openid profile email">
+        </div>
+
+        <button class="btn btn-primary" type="submit">Save Authentication Settings</button>
+    </form>
+    <div id="idp-msg"></div>
+</div>
+{{end}}

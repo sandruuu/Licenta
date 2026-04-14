@@ -1,0 +1,5 @@
+ztna.test:53 {
+    file /etc/coredns/db.ztna.test
+    log
+    errors
+}

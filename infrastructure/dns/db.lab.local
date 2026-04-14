@@ -1,0 +1,22 @@
+$ORIGIN lab.local.
+$TTL 3600
+
+@   IN SOA  ns.lab.local. admin.lab.local. (
+    2024010101  ; serial
+    3600        ; refresh
+    600         ; retry
+    86400       ; expire
+    60          ; minimum TTL
+)
+
+        IN NS   ns.lab.local.
+
+; ─── DNS Server ───
+ns              IN A    10.10.0.2
+
+; ─── Private Resources ───
+rdp-desktop     IN A    10.10.0.10
+remote-desktop  IN A    10.10.0.10
+
+; ─── Gateway (private-side) ───
+gateway         IN A    10.10.0.1

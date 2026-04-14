@@ -1,0 +1,17 @@
+{
+  "pep_address": "localhost:9443",
+  "server_name": "localhost",
+  "cert_file": "",
+  "key_file": "",
+  "ca_file": "./certs/ca.crt",
+  "cloud_url": "https://localhost:8443",
+  "device_id": "connect-device-001",
+  "data_dir": "./data",
+  "tun_name": "CGNAT-TUN",
+  "tun_ip": "100.64.0.1",
+  "tun_netmask": "255.192.0.0",
+  "cgnat_range": "100.64.0.0/10",
+  "dns_listen_addr": "127.0.0.1:53",
+  "upstream_dns": "8.8.8.8:53",
+  "internal_suffix": "lab.local"
+}

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureAlert Gateway — Initial Setup</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body data-page="setup-wizard">
+    <div class="setup-screen">
+        <div class="setup-wizard">
+
+            <!-- Step indicators -->
+            <div class="setup-steps">
+                <div class="setup-step active" data-step="1">
+                    <div class="step-dot"><span class="step-num">1</span></div>
+                    <span class="step-label">Token</span>
+                </div>
+                <div class="step-connector" data-after="1">
+                    <div class="step-connector-fill"></div>
+                </div>
+                <div class="setup-step" data-step="2">
+                    <div class="step-dot"><span class="step-num">2</span></div>
+                    <span class="step-label">Configure</span>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════
+                 Step 1 — Setup Token
+                 ════════════════════════════════════════ -->
+            <div class="wizard-panel active" id="wizard-step-1">
+                <div class="setup-card">
+                    <h2>Setup Token</h2>
+                    <p class="card-desc">Enter the setup token displayed in the container logs to begin configuration.</p>
+
+                    <form id="wizard-form-1">
+                        <div class="form-group">
+                            <label>Setup Token</label>
+                            <input type="text" id="w-setup-token" class="mono-input"
+                                placeholder="Paste the token from container logs"
+                                autocomplete="off" spellcheck="false" required>
+                            <span class="input-hint">Find this token in the container logs:
+                                <code>docker compose logs gateway-admin</code></span>
+                        </div>
+                        <div id="wizard-msg-1"></div>
+                        <div class="setup-nav">
+                            <div></div>
+                            <button class="btn btn-primary" type="submit" id="wizard-btn-1">Continue</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- ════════════════════════════════════════
+                 Step 2 — Hostname & Certificate
+                 ════════════════════════════════════════ -->
+            <div class="wizard-panel" id="wizard-step-2">
+                <div class="setup-card">
+                    <h2>Gateway Configuration</h2>
+                    <p class="card-desc">Set the hostname and SSL certificate for the gateway.</p>
+
+                    <form id="wizard-form-2">
+                        <!-- Hostname -->
+                        <div class="form-group">
+                            <label>Hostname (FQDN)</label>
+                            <input class="mono-input" type="text" id="w-fqdn" placeholder="gateway.company.com"
+                                required>
+                            <span class="input-hint">The fully qualified domain name users will connect to.</span>
+                        </div>
+
+                        <hr class="wizard-divider">
+
+                        <!-- Certificate -->
+                        <div class="setup-section-label">SSL Certificate</div>
+
+                        <div class="cert-source-group">
+                            <label class="cert-radio-label">
+                                <input type="radio" name="w-cert-source" value="upload" id="w-cert-upload" checked>
+                                <strong>Upload my own certificate</strong>
+                            </label>
+                            <label class="cert-radio-label">
+                                <input type="radio" name="w-cert-source" value="letsencrypt" id="w-cert-le">
+                                <strong>Use Let's Encrypt (auto-generate)</strong>
+                            </label>
+                        </div>
+
+                        <!-- Upload panel -->
+                        <div id="w-cert-upload-panel" class="cert-panel">
+                            <div class="form-group">
+                                <label>Certificate (PEM)</label>
+                                <div class="file-upload-row">
+                                    <label class="file-upload-btn" for="w-cert-file">Choose File</label>
+                                    <input type="file" id="w-cert-file" accept=".pem,.crt,.cer" style="display:none">
+                                    <span class="file-upload-name" id="w-cert-file-name">No file chosen</span>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Private Key (PEM)</label>
+                                <div class="file-upload-row">
+                                    <label class="file-upload-btn" for="w-key-file">Choose File</label>
+                                    <input type="file" id="w-key-file" accept=".pem,.key" style="display:none">
+                                    <span class="file-upload-name" id="w-key-file-name">No file chosen</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Let's Encrypt panel -->
+                        <div id="w-cert-le-panel" class="cert-panel" style="display:none">
+                            <div class="le-info-box">
+                                <p>A trusted SSL certificate will be automatically generated via
+                                    <strong>Let's Encrypt</strong>. This requires:</p>
+                                <ul style="margin:8px 0 0 16px;font-size:12px;line-height:1.8">
+                                    <li>The hostname must be publicly resolvable via DNS</li>
+                                    <li>Port 80 must be reachable for the ACME HTTP-01 challenge</li>
+                                </ul>
+                                <p style="margin-top:10px">The certificate is valid for 90 days and renews
+                                    automatically.</p>
+                            </div>
+                            <label class="cert-radio-label" style="margin-top:12px">
+                                <input type="checkbox" id="w-le-agree">
+                                <span>I agree to the Let's Encrypt <a href="https://letsencrypt.org/repository/"
+                                        target="_blank" rel="noopener" style="color:var(--accent-blue)">Terms of
+                                        Service</a>.</span>
+                            </label>
+                        </div>
+
+                        <div id="wizard-msg-2"></div>
+                        <div class="setup-nav">
+                            <button class="btn btn-ghost" type="button" onclick="wizardGoTo(1)">Back</button>
+                            <button class="btn btn-primary" type="submit" id="wizard-btn-2">Complete Setup</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

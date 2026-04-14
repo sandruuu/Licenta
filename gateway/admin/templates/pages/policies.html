@@ -1,0 +1,26 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Policies</h1>
+        <p>Access policies for protected applications</p>
+    </div>
+    <button class="refresh-btn" onclick="loadPolicies()" title="Refresh">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+    </button>
+</div>
+
+<div id="policies-msg"></div>
+
+<div class="section-card">
+    <div class="section-title">Application Access Policies</div>
+    <p class="section-desc">Configure per-application security policies. These policies control how users authenticate and access each protected application.</p>
+    <div id="policies-content">
+        <div class="loading-screen" style="padding: 32px;">
+            <div class="loading-spinner"></div>
+        </div>
+    </div>
+</div>
+{{end}}

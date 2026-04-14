@@ -1,0 +1,31 @@
+{{define "content"}}
+<div class="page-header">
+    <div class="page-header-left">
+        <h1>Enrollment</h1>
+        <p>Register this gateway with the cloud control plane</p>
+    </div>
+</div>
+
+<div class="section-card">
+    <div class="section-title">Enrollment Status</div>
+    <div id="enrollment-status"></div>
+</div>
+
+<div class="section-card" id="enroll-form-card" style="display: none;">
+    <div class="section-title">Enroll Gateway</div>
+    <form id="enroll-form">
+        <div class="form-group">
+            <label>Cloud URL</label>
+            <input class="mono-input" id="enroll-cloud-url" placeholder="https://cloud.example.com:8443">
+            <span class="input-hint">Leave empty to use the current cloud_url from configuration.</span>
+        </div>
+        <div class="form-group">
+            <label>Enrollment Token</label>
+            <input class="mono-input" type="password" id="enroll-token" placeholder="Paste the one-time enrollment token from the cloud dashboard" required>
+            <span class="input-hint">Generate this token in the Cloud PDP Console under Gateways.</span>
+        </div>
+        <button class="btn btn-primary" type="submit">Enroll</button>
+    </form>
+    <div id="enroll-msg"></div>
+</div>
+{{end}}

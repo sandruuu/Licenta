@@ -1,0 +1,22 @@
+# Portal Data Plane (PEP) microservice
+FROM golang:1.25-alpine AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o portal ./cmd/portal
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget
+RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
+WORKDIR /app
+RUN mkdir -p config certs data && chown -R appuser:appuser /app
+COPY --from=builder /build/portal .
+COPY docker-config.json /app/config/gateway-config.json
+USER appuser
+EXPOSE 9443 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/health || exit 1
+VOLUME ["/app/config", "/app/certs", "/app/data"]
+ENTRYPOINT ["./portal"]
+CMD ["-config", "/app/config/gateway-config.json", "-store-url", "http://sessionstore:6380", "-syslog-addr", "syslog:5514", "-data", "/app/data"]
