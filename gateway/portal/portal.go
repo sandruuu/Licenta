@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/url"
 	"os"
@@ -113,7 +114,7 @@ func (p *Portal) ListenAndServe() error {
 			if err != nil {
 				log.Printf("[PORTAL] Warning: could not read client CA file %s: %v", clientCAPath, err)
 			} else {
-				// Also fetch Cloud's internal CA (signs enrollment client certs)
+				// Also fetch the issuer CA returned by cloud enrollment endpoints.
 				if cloudCA, err := p.cloud.GetCACert(); err == nil && len(cloudCA) > 0 {
 					caCert = append(caCert, cloudCA...)
 					log.Printf("[PORTAL] Added Cloud CA to client cert pool")
@@ -134,10 +135,13 @@ func (p *Portal) ListenAndServe() error {
 					// VerifyConnection callback — reject revoked certificate serials
 					tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 						if len(cs.PeerCertificates) > 0 {
-							serial := cs.PeerCertificates[0].SerialNumber.String()
-							if _, revoked := p.revokedSerials.Load(serial); revoked {
-								log.Printf("[PORTAL] Rejected revoked certificate serial %s", serial)
-								return fmt.Errorf("certificate serial %s is revoked", serial)
+							cert := cs.PeerCertificates[0]
+							serial := cert.SerialNumber.String()
+							for _, key := range serialLookupKeys(serial) {
+								if _, revoked := p.revokedSerials.Load(key); revoked {
+									log.Printf("[PORTAL] Rejected revoked certificate serial %s (key=%s)", serial, key)
+									return fmt.Errorf("certificate serial %s is revoked", serial)
+								}
 							}
 						}
 						return nil
@@ -998,18 +1002,30 @@ func generateSessionID() string {
 	return "gw_" + hex.EncodeToString(b)
 }
 
-// syncRevokedSerials fetches revoked certificate serials from the cloud and
-// rebuilds the local cache used by the VerifyConnection TLS callback.
+// syncRevokedSerials fetches revoked certificate serials from the configured
+// PKI source (Vault CRL or cloud compatibility feed) and rebuilds the local
+// cache used by the VerifyConnection TLS callback.
 func (p *Portal) syncRevokedSerials() {
-	serials, err := p.cloud.GetRevokedSerials()
+	serials, source, err := p.cloud.GetRevokedSerialsByProvider()
 	if err != nil {
-		log.Printf("[PORTAL] Failed to sync revoked serials: %v", err)
-		// If cloud returned 403, our own cert may have been revoked — flush session cache
-		if strings.Contains(err.Error(), "403") {
-			log.Printf("[PORTAL] Cloud returned 403 — flushing session cache (possible cert revocation)")
-			p.cloud.FlushSessionCache()
+		if len(serials) == 0 {
+			log.Printf("[PORTAL] Failed to sync revoked serials (%s): %v", source, err)
+			// If cloud returned 403, our own cert may have been revoked — flush session cache
+			if strings.Contains(err.Error(), "403") {
+				log.Printf("[PORTAL] Cloud returned 403 — flushing session cache (possible cert revocation)")
+				p.cloud.FlushSessionCache()
+			}
+			return
 		}
-		return
+
+		log.Printf("[PORTAL] Revocation sync warning (%s): %v", source, err)
+	}
+
+	cache := make(map[string]struct{})
+	for _, serial := range serials {
+		for _, key := range serialLookupKeys(serial) {
+			cache[key] = struct{}{}
+		}
 	}
 
 	// Clear and rebuild
@@ -1017,13 +1033,69 @@ func (p *Portal) syncRevokedSerials() {
 		p.revokedSerials.Delete(key)
 		return true
 	})
-	for _, s := range serials {
-		p.revokedSerials.Store(s, struct{}{})
+	for key := range cache {
+		p.revokedSerials.Store(key, struct{}{})
 	}
 
 	if len(serials) > 0 {
-		log.Printf("[PORTAL] Synced %d revoked certificate serials", len(serials))
+		log.Printf("[PORTAL] Synced %d revoked certificate serials (%s source, %d cache keys)", len(serials), source, len(cache))
 	}
+}
+
+func serialLookupKeys(serial string) []string {
+	trimmed := strings.TrimSpace(strings.ToLower(serial))
+	if trimmed == "" {
+		return nil
+	}
+
+	keys := map[string]struct{}{
+		trimmed: {},
+	}
+
+	if decimal, ok := new(big.Int).SetString(trimmed, 10); ok {
+		keys[decimal.String()] = struct{}{}
+		if colon := serialToColonHex(decimal); colon != "" {
+			keys[colon] = struct{}{}
+		}
+	} else {
+		hexCandidate := strings.TrimPrefix(strings.ReplaceAll(trimmed, ":", ""), "0x")
+		if hexCandidate != "" {
+			if parsedHex, ok := new(big.Int).SetString(hexCandidate, 16); ok {
+				keys[parsedHex.String()] = struct{}{}
+				if colon := serialToColonHex(parsedHex); colon != "" {
+					keys[colon] = struct{}{}
+				}
+			}
+		}
+	}
+
+	out := make([]string, 0, len(keys))
+	for key := range keys {
+		out = append(out, key)
+	}
+	return out
+}
+
+func serialToColonHex(serial *big.Int) string {
+	if serial == nil {
+		return ""
+	}
+
+	hexSerial := strings.ToLower(serial.Text(16))
+	hexSerial = strings.TrimLeft(hexSerial, "0")
+	if hexSerial == "" {
+		hexSerial = "00"
+	}
+	if len(hexSerial)%2 != 0 {
+		hexSerial = "0" + hexSerial
+	}
+
+	parts := make([]string, 0, len(hexSerial)/2)
+	for i := 0; i < len(hexSerial); i += 2 {
+		parts = append(parts, hexSerial[i:i+2])
+	}
+
+	return strings.Join(parts, ":")
 }
 
 // syncResources fetches the gateway's assigned resources from the cloud

@@ -4,7 +4,6 @@ import (
 	"log"
 	"strconv"
 
-	"cloud/certs"
 	"cloud/config"
 	"cloud/idp"
 	"cloud/models"
@@ -26,7 +25,6 @@ type PolicyAdministrator struct {
 	Audit    *AuditLogger
 	Store    *store.Store
 	Cfg      *config.Config
-	CA       *certs.CABundle // Internal CA for signing device/gateway certificates
 }
 
 // NewPolicyAdministrator creates and initializes the Policy Administrator

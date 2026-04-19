@@ -27,6 +27,7 @@ import (
 	"cloud/certs"
 	"cloud/idp"
 	"cloud/models"
+	"cloud/pki"
 	"cloud/util"
 
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -44,6 +45,9 @@ type Server struct {
 	mux        *http.ServeMux
 	addr       string
 	mtlsCAPool *x509.CertPool
+
+	externalPKI   *pki.VaultClient
+	externalCAPEM []byte
 
 	enrollLimiterMu sync.Mutex
 	enrollLimiter   map[string]*enrollRateEntry
@@ -73,6 +77,27 @@ func NewServer(pa *admin.PolicyAdministrator, addr, mtlsCAPath string) (*Server,
 	}
 	s.mtlsCAPool = pool
 	log.Printf("[API] mTLS client cert verification enabled (CA: %s)", mtlsCAPath)
+
+	vaultClient, err := pki.NewVaultClient(pki.VaultConfig{
+		URL:        pa.Cfg.PKIURL,
+		Token:      pa.Cfg.PKIToken,
+		PKIPath:    pa.Cfg.PKIPath,
+		CAFile:     pa.Cfg.PKICAFile,
+		ServerName: pa.Cfg.PKIServerName,
+		Timeout:    pa.Cfg.PKITimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize Vault PKI client: %w", err)
+	}
+
+	caPEM, err := vaultClient.GetCAPEM()
+	if err != nil {
+		return nil, fmt.Errorf("fetch Vault PKI CA certificate: %w", err)
+	}
+
+	s.externalPKI = vaultClient
+	s.externalCAPEM = caPEM
+	log.Printf("[API] PKI provider: vault (url=%s path=%s)", pa.Cfg.PKIURL, pa.Cfg.PKIPath)
 
 	s.registerRoutes()
 	return s, nil
@@ -242,19 +267,20 @@ func (s *Server) StartTLS(certFile, keyFile string) error {
 // Health check
 // ─────────────────────────────────────────────
 
-// handleCACert returns the Cloud's internal CA certificate (public info, no auth needed).
-// Gateways use this to add the Cloud CA to their client cert verification pool.
+// handleCACert returns the active issuer CA certificate (public info, no auth needed).
+// Gateways use this to validate certificates issued via the cloud signer path.
 func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if s.pa.CA == nil {
+	caPEM, err := s.getCAPEM()
+	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "CA not initialized"})
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Write(s.pa.CA.CertPEM)
+	w.Write(caPEM)
 }
 
 // handleCertFingerprint returns the SHA-256 fingerprint of the cloud server's TLS certificate.
@@ -294,8 +320,8 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		checks["db"] = "ok"
 	}
 
-	// Check CA loaded
-	if s.pa.CA != nil {
+	// Check Vault issuer CA loaded
+	if len(s.externalCAPEM) > 0 {
 		checks["ca"] = "ok"
 	} else {
 		checks["ca"] = "not_configured"
@@ -1389,6 +1415,78 @@ func writeError(w http.ResponseWriter, status int, userMsg string, err error) {
 	writeJSON(w, status, map[string]string{"error": userMsg})
 }
 
+func (s *Server) getCAPEM() ([]byte, error) {
+	if len(s.externalCAPEM) > 0 {
+		return s.externalCAPEM, nil
+	}
+	return nil, fmt.Errorf("CA not initialized")
+}
+
+func (s *Server) signerReady() bool {
+	return s.externalPKI != nil
+}
+
+func (s *Server) deviceRole(component string) string {
+	if strings.EqualFold(strings.TrimSpace(component), "health") {
+		if strings.TrimSpace(s.pa.Cfg.PKIRoleHealth) != "" {
+			return s.pa.Cfg.PKIRoleHealth
+		}
+	}
+	return s.pa.Cfg.PKIRoleDevice
+}
+
+func (s *Server) signCSR(csrPEM []byte, validDays int, vaultRole string) ([]byte, error) {
+	if s.externalPKI != nil {
+		ttl := fmt.Sprintf("%dh", validDays*24)
+		return s.externalPKI.SignCSR(csrPEM, vaultRole, ttl)
+	}
+	return nil, fmt.Errorf("PKI signer not initialized")
+}
+
+// signResourceCert generates a fresh ECDSA P-256 keypair, builds a CSR for the
+// given backend resource domain, and submits it to Vault PKI under the
+// resource role. Returns the signed certificate bundle (leaf + chain) and
+// the matching private key, both PEM-encoded. No self-signed fallback.
+func (s *Server) signResourceCert(domain string, validDays int) (certPEM, keyPEM []byte, err error) {
+	if s.externalPKI == nil {
+		return nil, nil, fmt.Errorf("PKI signer not initialized")
+	}
+	role := strings.TrimSpace(s.pa.Cfg.PKIRoleResource)
+	if role == "" {
+		return nil, nil, fmt.Errorf("pki_role_resource is not configured")
+	}
+	if validDays <= 0 {
+		validDays = 365
+	}
+
+	csrPEM, keyPEM, err := certs.BuildResourceCSR(domain)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build resource CSR: %w", err)
+	}
+
+	certPEM, err = s.externalPKI.SignCSR(csrPEM, role, fmt.Sprintf("%dh", validDays*24))
+	if err != nil {
+		return nil, nil, fmt.Errorf("vault sign resource cert: %w", err)
+	}
+	return certPEM, keyPEM, nil
+}
+
+func (s *Server) revokeCertificate(serial, certPEM, subjectID string, expiresOn time.Time) {
+	if strings.TrimSpace(serial) == "" && strings.TrimSpace(certPEM) == "" {
+		return
+	}
+
+	if s.externalPKI != nil {
+		if err := s.externalPKI.RevokeCertificate(serial, []byte(certPEM)); err != nil {
+			log.Printf("[PKI] Failed to revoke certificate in Vault (subject=%s serial=%s): %v", subjectID, serial, err)
+		}
+	}
+
+	if strings.TrimSpace(serial) != "" {
+		s.pa.Store.RevokeCertSerial(serial, subjectID, expiresOn)
+	}
+}
+
 // generateClientCredentials creates Duo-style per-app credentials.
 // ClientID: "DI" + 18 hex chars (20 chars total)
 // ClientSecret: 40 hex chars
@@ -1796,20 +1894,21 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 		res.ClientID = cid
 		res.ClientSecret = csec
 
-		// Auto-generate self-signed cert if requested
-		if res.CertMode == "self-signed" {
+		// Auto-provision Vault-signed cert if requested
+		if res.CertMode == "self-signed" || res.CertMode == "vault-signed" {
 			domain := res.CertDomain
 			if domain == "" {
 				domain = res.Host
 			}
-			certPEM, keyPEM, err := certs.GenerateSelfSignedCert(domain, 365)
+			certPEM, keyPEM, err := s.signResourceCert(domain, 365)
 			if err != nil {
-				log.Printf("[PDP] Failed to generate self-signed cert for %s: %v", domain, err)
+				log.Printf("[PDP] Failed to sign resource cert for %s via Vault: %v", domain, err)
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate certificate"})
 				return
 			}
 			res.CertPEM = string(certPEM)
 			res.KeyPEM = string(keyPEM)
+			res.CertMode = "vault-signed"
 			res.CertExpiry = now.Add(365 * 24 * time.Hour).Format(time.RFC3339)
 			res.CertDomain = domain
 		}
@@ -2074,16 +2173,16 @@ func (s *Server) handleGenerateCert(w http.ResponseWriter, r *http.Request) {
 		validDays = 365
 	}
 
-	certPEM, keyPEM, err := certs.GenerateSelfSignedCert(domain, validDays)
+	certPEM, keyPEM, err := s.signResourceCert(domain, validDays)
 	if err != nil {
-		log.Printf("[PDP] Failed to generate cert for %s: %v", domain, err)
+		log.Printf("[PDP] Failed to sign resource cert for %s via Vault: %v", domain, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate certificate"})
 		return
 	}
 
 	res.CertPEM = string(certPEM)
 	res.KeyPEM = string(keyPEM)
-	res.CertMode = "self-signed"
+	res.CertMode = "vault-signed"
 	res.CertDomain = domain
 	res.CertExpiry = time.Now().Add(time.Duration(validDays) * 24 * time.Hour).Format(time.RFC3339)
 	res.UpdatedAt = time.Now()
@@ -2894,7 +2993,7 @@ func (s *Server) handleDeviceEnroll(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[ENROLL] Device %s re-enrolling with new key (old_fp=%s, new_fp=%s) — revoking old",
 				req.DeviceID, existing.PublicKeyFingerprint[:16], csrFingerprint[:16])
 			if existing.CertSerial != "" {
-				s.pa.Store.RevokeCertSerial(existing.CertSerial, existing.DeviceID, existing.ExpiresAt)
+				s.revokeCertificate(existing.CertSerial, existing.CertPEM, existing.DeviceID, existing.ExpiresAt)
 			}
 			existing.Status = "revoked"
 			s.pa.Store.SaveDeviceEnrollment(existing)
@@ -2923,8 +3022,8 @@ func (s *Server) handleDeviceEnroll(w http.ResponseWriter, r *http.Request) {
 		enrollmentID, req.DeviceID, component, req.Hostname, csrFingerprint)
 
 	// Auto-approve health component enrollments (HDA has no browser for OIDC)
-	if component == "health" && s.pa.CA != nil {
-		certPEM, signErr := certs.SignCSR([]byte(req.CSRPEM), s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 1)
+	if component == "health" && s.signerReady() {
+		certPEM, signErr := s.signCSR([]byte(req.CSRPEM), 1, s.deviceRole(component))
 		if signErr == nil {
 			certSerial := ""
 			if block, _ := pem.Decode(certPEM); block != nil {
@@ -2990,8 +3089,8 @@ func (s *Server) handleEnrollmentStatus(w http.ResponseWriter, r *http.Request) 
 
 	if enrollment.Status == "approved" {
 		resp.CertPEM = enrollment.CertPEM
-		if s.pa.CA != nil {
-			resp.CAPEM = string(s.pa.CA.CertPEM)
+		if caPEM, err := s.getCAPEM(); err == nil {
+			resp.CAPEM = string(caPEM)
 		}
 		resp.Message = "Certificate issued"
 	} else if enrollment.Status == "pending" {
@@ -3059,7 +3158,7 @@ func (s *Server) handleEnrollStartSession(w http.ResponseWriter, r *http.Request
 			log.Printf("[ENROLL] Device %s re-enrolling with new key (old_fp=%s, new_fp=%s) — revoking old enrollment",
 				req.DeviceID, existing.PublicKeyFingerprint[:16], csrFingerprint[:16])
 			if existing.CertSerial != "" {
-				s.pa.Store.RevokeCertSerial(existing.CertSerial, existing.DeviceID, existing.ExpiresAt)
+				s.revokeCertificate(existing.CertSerial, existing.CertPEM, existing.DeviceID, existing.ExpiresAt)
 			}
 			existing.Status = "revoked"
 			s.pa.Store.SaveDeviceEnrollment(existing)
@@ -3141,12 +3240,7 @@ func (s *Server) handleEnrollCompleteSession(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Sign the CSR — identity comes from OIDC, no admin approval needed
-	if s.pa.CA == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "CA not initialized"})
-		return
-	}
-
-	certPEM, err := certs.SignCSR([]byte(session.CSRPEM), s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 1)
+	certPEM, err := s.signCSR([]byte(session.CSRPEM), 1, s.deviceRole(session.Component))
 	if err != nil {
 		log.Printf("[ENROLL] Failed to sign CSR for device %s: %v", session.DeviceID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign certificate"})
@@ -3198,8 +3292,8 @@ func (s *Server) handleEnrollCompleteSession(w http.ResponseWriter, r *http.Requ
 	session.UserID = claims.UserID
 	session.Username = claims.Username
 	session.CertPEM = string(certPEM)
-	if s.pa.CA != nil {
-		session.CAPEM = string(s.pa.CA.CertPEM)
+	if caPEM, err := s.getCAPEM(); err == nil {
+		session.CAPEM = string(caPEM)
 	}
 	s.pa.Store.SavePendingEnroll(session)
 
@@ -3294,16 +3388,19 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "enrollment is not pending"})
 			return
 		}
-		if s.pa.CA == nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "CA not initialized"})
-			return
-		}
 
-		// Sign the CSR with the internal CA — short-lived cert (24h, BeyondCorp model)
-		certPEM, err := certs.SignCSR([]byte(enrollment.CSRPEM), s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 1)
+		// Sign the CSR with the configured PKI backend — short-lived cert (24h, BeyondCorp model)
+		certPEM, err := s.signCSR([]byte(enrollment.CSRPEM), 1, s.deviceRole(enrollment.Component))
 		if err != nil {
 			log.Printf("[ENROLL] Failed to sign CSR for %s: %v", enrollmentID, err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign certificate"})
+			return
+		}
+
+		caPEM, err := s.getCAPEM()
+		if err != nil {
+			log.Printf("[ENROLL] Failed to get CA PEM for %s: %v", enrollmentID, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
 			return
 		}
 
@@ -3333,14 +3430,14 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			ID:      enrollmentID,
 			Status:  "approved",
 			CertPEM: string(certPEM),
-			CAPEM:   string(s.pa.CA.CertPEM),
+			CAPEM:   string(caPEM),
 			Message: "Certificate issued",
 		})
 
 	case "revoke":
 		// Save cert serial to revoked_certs for gateway cache sync
 		if enrollment.CertSerial != "" {
-			s.pa.Store.RevokeCertSerial(enrollment.CertSerial, enrollment.DeviceID, enrollment.ExpiresAt)
+			s.revokeCertificate(enrollment.CertSerial, enrollment.CertPEM, enrollment.DeviceID, enrollment.ExpiresAt)
 		}
 		enrollment.Status = "revoked"
 		s.pa.Store.SaveDeviceEnrollment(enrollment)
@@ -3406,21 +3503,23 @@ func (s *Server) handleCertRenewal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.pa.CA == nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "CA not initialized"})
-		return
-	}
-
 	// Revoke the old certificate serial (prevents replay in overlap window)
 	if enrollment.CertSerial != "" {
-		s.pa.Store.RevokeCertSerial(enrollment.CertSerial, enrollment.DeviceID, enrollment.ExpiresAt)
+		s.revokeCertificate(enrollment.CertSerial, enrollment.CertPEM, enrollment.DeviceID, enrollment.ExpiresAt)
 	}
 
 	// Sign new CSR with 1-day validity
-	certPEM, err := certs.SignCSR([]byte(req.CSRPEM), s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 1)
+	certPEM, err := s.signCSR([]byte(req.CSRPEM), 1, s.deviceRole(enrollment.Component))
 	if err != nil {
 		log.Printf("[ENROLL] Renewal: failed to sign CSR for device %s: %v", req.DeviceID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign certificate"})
+		return
+	}
+
+	caPEM, err := s.getCAPEM()
+	if err != nil {
+		log.Printf("[ENROLL] Renewal: failed to load CA PEM for device %s: %v", req.DeviceID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
 		return
 	}
 
@@ -3445,7 +3544,7 @@ func (s *Server) handleCertRenewal(w http.ResponseWriter, r *http.Request) {
 		ID:      enrollment.ID,
 		Status:  "approved",
 		CertPEM: string(certPEM),
-		CAPEM:   string(s.pa.CA.CertPEM),
+		CAPEM:   string(caPEM),
 		Message: "Certificate renewed (24h validity)",
 	})
 }
@@ -3522,10 +3621,17 @@ func (s *Server) handleGatewayEnroll(w http.ResponseWriter, r *http.Request) {
 
 	// Validate and sign the CSR
 	csrPEM := []byte(req.CSRPEM)
-	certPEM, err := certs.SignCSR(csrPEM, s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 7)
+	certPEM, err := s.signCSR(csrPEM, 7, s.pa.Cfg.PKIRoleGateway)
 	if err != nil {
 		log.Printf("[GATEWAY-ENROLL] CSR signing failed for gateway %s: %v", gw.ID, err)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid CSR"})
+		return
+	}
+
+	caPEM, err := s.getCAPEM()
+	if err != nil {
+		log.Printf("[GATEWAY-ENROLL] Failed to load CA PEM for gateway %s: %v", gw.ID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
 		return
 	}
 
@@ -3604,7 +3710,7 @@ func (s *Server) handleGatewayEnroll(w http.ResponseWriter, r *http.Request) {
 		Status:           "enrolled",
 		GatewayID:        gw.ID,
 		CertPEM:          string(certPEM),
-		CAPEM:            string(s.pa.CA.CertPEM),
+		CAPEM:            string(caPEM),
 		OIDCClientID:     oidcClientID,
 		OIDCClientSecret: oidcClientSecret,
 		OIDCAuthURL:      baseURL + "/auth/authorize",
@@ -3661,10 +3767,24 @@ func (s *Server) handleGatewayRenewCert(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	oldSerial := gw.CertSerial
+	oldCertPEM := gw.CertPEM
+	oldExpiresOn := time.Now().Add(7 * 24 * time.Hour)
+	if parsedExpiry, err := time.Parse(time.RFC3339, gw.CertExpiresAt); err == nil {
+		oldExpiresOn = parsedExpiry
+	}
+
 	// Sign the new CSR
-	certPEM, err := certs.SignCSR([]byte(req.CSRPEM), s.pa.CA.CertPEM, s.pa.CA.KeyPEM, 7)
+	certPEM, err := s.signCSR([]byte(req.CSRPEM), 7, s.pa.Cfg.PKIRoleGateway)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid CSR"})
+		return
+	}
+
+	caPEM, err := s.getCAPEM()
+	if err != nil {
+		log.Printf("[GATEWAY] Failed to load CA PEM for renewal (gateway=%s): %v", gw.ID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
 		return
 	}
 
@@ -3686,12 +3806,16 @@ func (s *Server) handleGatewayRenewCert(w http.ResponseWriter, r *http.Request) 
 	gw.LastSeenAt = now
 	s.pa.Store.SaveGateway(gw)
 
+	if oldSerial != "" && oldSerial != gw.CertSerial {
+		s.revokeCertificate(oldSerial, oldCertPEM, "gateway:"+gw.ID, oldExpiresOn)
+	}
+
 	log.Printf("[GATEWAY] Cert renewed for gateway %s (serial=%s)", gw.ID, gw.CertSerial)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "renewed",
 		"cert_pem": string(certPEM),
-		"ca_pem":   string(s.pa.CA.CertPEM),
+		"ca_pem":   string(caPEM),
 		"message":  "Certificate renewed (7-day validity)",
 	})
 }
@@ -3962,7 +4086,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 		// Revoke the gateway's certificate serial before deleting
 		if gw.CertSerial != "" {
 			expiresAt := time.Now().Add(7 * 24 * time.Hour) // keep in revocation list for at least one cert lifetime
-			s.pa.Store.RevokeCertSerial(gw.CertSerial, gw.ID, expiresAt)
+			s.revokeCertificate(gw.CertSerial, gw.CertPEM, gw.ID, expiresAt)
 			log.Printf("[ADMIN] Revoked cert serial %s for gateway %s before deletion", gw.CertSerial, id)
 		}
 		s.pa.Store.DeleteGateway(id)
@@ -4007,7 +4131,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			// Revoke the gateway's certificate if it has one
 			if gw.CertSerial != "" {
 				expiresOn := time.Now().Add(7 * 24 * time.Hour)
-				s.pa.Store.RevokeCertSerial(gw.CertSerial, "gateway:"+gw.ID, expiresOn)
+				s.revokeCertificate(gw.CertSerial, gw.CertPEM, "gateway:"+gw.ID, expiresOn)
 			}
 
 			log.Printf("[ADMIN] Gateway revoked: id=%s name=%s", gw.ID, gw.Name)

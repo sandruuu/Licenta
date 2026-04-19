@@ -17,3 +17,8 @@ to this in your browser, and you can call your Go code from devtools.
 ## Building
 
 To build a redistributable, production mode package, use `wails build`.
+
+## Test/Compile Note
+
+`device-health-app/main.go` uses `//go:embed all:frontend/dist`, so `frontend/dist` must exist for `go build` or `go test`.
+If Node/npm is unavailable in the environment, provide a minimal placeholder `frontend/dist/index.html` to satisfy embed pattern matching.

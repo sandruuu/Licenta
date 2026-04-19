@@ -4,16 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"cloud/admin"
 	"cloud/api"
-	"cloud/certs"
 	"cloud/config"
 	"cloud/idp"
 	"cloud/models"
@@ -24,7 +22,6 @@ func main() {
 	// CLI flags
 	configPath := flag.String("config", "", "Path to config.json")
 	genConfig := flag.Bool("gen-config", false, "Generate default config.json and exit")
-	genCerts := flag.String("gen-certs", "", "Generate all component TLS certificates signed by internal CA into the given directory (e.g. --gen-certs=../certs)")
 	createAdmin := flag.String("create-admin", "", "Create admin user (format: username:password:email)")
 	flag.Parse()
 
@@ -43,14 +40,6 @@ func main() {
 			log.Fatalf("Failed to save config: %v", err)
 		}
 		fmt.Printf("Default config written to %s\n", outPath)
-		os.Exit(0)
-	}
-
-	// ──────────────────────────────
-	// Generate component certificates
-	// ──────────────────────────────
-	if *genCerts != "" {
-		generateComponentCerts(*genCerts)
 		os.Exit(0)
 	}
 
@@ -81,6 +70,15 @@ func main() {
 	if cfg.MTLSCA == "" {
 		log.Fatal("[SECURITY] mtls_ca is required because gateway-to-cloud communication is strictly mTLS")
 	}
+	if strings.TrimSpace(cfg.PKIURL) == "" {
+		log.Fatal("[SECURITY] pki_url is required")
+	}
+	if strings.TrimSpace(cfg.PKIToken) == "" {
+		log.Fatal("[SECURITY] pki_token is required")
+	}
+	if strings.TrimSpace(cfg.PKIRoleDevice) == "" || strings.TrimSpace(cfg.PKIRoleHealth) == "" || strings.TrimSpace(cfg.PKIRoleGateway) == "" {
+		log.Fatal("[SECURITY] pki_role_device, pki_role_health and pki_role_gateway must be configured")
+	}
 
 	// ──────────────────────────────
 	// 1. Initialize data store (SQLite)
@@ -100,22 +98,15 @@ func main() {
 	dataStore.StartAutoSave(1*time.Minute, stopChan)
 
 	// ──────────────────────────────
-	// 1b. Initialize internal CA
+	// 1b. Vault-backed certificate signing is configured via API server init
 	// ──────────────────────────────
-	caCertPath := filepath.Join(cfg.DataDir, "ca-cert.pem")
-	caKeyPath := filepath.Join(cfg.DataDir, "ca-key.pem")
-	caBundle, err := certs.LoadOrInitCA(caCertPath, caKeyPath)
-	if err != nil {
-		log.Fatalf("Failed to initialize CA: %v", err)
-	}
-	log.Printf("[CA] Internal CA ready (cert: %s)", caCertPath)
+	log.Printf("[CA] Vault PKI signer required (url=%s path=%s)", cfg.PKIURL, cfg.PKIPath)
 
 	// ──────────────────────────────
 	// 2. Initialize Policy Administrator (PA)
 	//    This also initializes IdP and PE
 	// ──────────────────────────────
 	pa := admin.NewPolicyAdministrator(cfg, dataStore)
-	pa.CA = caBundle
 
 	// ──────────────────────────────
 	// 2b. Register OIDC clients (gateways)
@@ -336,95 +327,4 @@ func printStatus(cfg *config.Config, s *store.Store) {
 	log.Println("  Dashboard:")
 	log.Println("    GET  /dashboard/                - React admin console")
 	log.Println("──────────────────────────────────────────")
-}
-
-// generateComponentCerts creates the internal CA (if missing) and generates
-// the Cloud server TLS certificate. The Gateway manages its own TLS certificate
-// (self-signed at first boot, admin upload, or Let's Encrypt).
-// Agent certificates (connect-app, device-health-app) are NOT generated here —
-// they use TPM-bound keys and obtain certificates through the enrollment API.
-func generateComponentCerts(outDir string) {
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		log.Fatalf("Failed to create output directory %s: %v", outDir, err)
-	}
-
-	// Load or create the internal CA (stored alongside certs)
-	caCertPath := filepath.Join(outDir, "ca.crt")
-	caKeyPath := filepath.Join(outDir, "ca.key")
-	ca, err := certs.LoadOrInitCA(caCertPath, caKeyPath)
-	if err != nil {
-		log.Fatalf("Failed to initialize CA: %v", err)
-	}
-	fmt.Printf("  CA certificate: %s\n", caCertPath)
-
-	// Also copy CA cert into data dir so Cloud can use it at runtime
-	dataDir := "./data"
-	if err := os.MkdirAll(dataDir, 0755); err == nil {
-		os.WriteFile(filepath.Join(dataDir, "ca-cert.pem"), ca.CertPEM, 0644)
-		os.WriteFile(filepath.Join(dataDir, "ca-key.pem"), ca.KeyPEM, 0600)
-	}
-
-	localhost := net.ParseIP("127.0.0.1")
-
-	// Only the Cloud server certificate is generated here.
-	// Gateway generates its own TLS cert (self-signed, upload, or Let's Encrypt).
-	// Agent certs (connect-app, health-app) are obtained via TPM enrollment.
-	fmt.Println("\n=== Generating ZTNA Cloud Certificate ===")
-
-	certPEM, keyPEM, err := certs.GenerateComponentCert(
-		ca, "ZTNA Cloud",
-		[]string{"localhost", "cloud", "cloud.lab.local"},
-		[]net.IP{localhost},
-		365, true, false,
-	)
-	if err != nil {
-		log.Fatalf("Failed to generate cloud cert: %v", err)
-	}
-
-	certPath := filepath.Join(outDir, "cloud.crt")
-	keyPath := filepath.Join(outDir, "cloud.key")
-	if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
-		log.Fatalf("Failed to write %s: %v", certPath, err)
-	}
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		log.Fatalf("Failed to write %s: %v", keyPath, err)
-	}
-	fmt.Printf("  cloud        %s / %s  (server)\n", certPath, keyPath)
-
-	// Distribute ca.crt to sibling component directories so they can validate
-	// the Cloud's TLS certificate. Each component keeps its own certs/ folder.
-	siblingDirs := []string{
-		filepath.Join(outDir, "..", "..", "gateway", "certs"),
-		filepath.Join(outDir, "..", "..", "connect-app", "certs"),
-		filepath.Join(outDir, "..", "..", "device-health-app", "certs"),
-	}
-	// If outDir is cloud/certs, siblings are at ../gateway/certs etc.
-	// Detect layout: if outDir ends with cloud/certs, use relative sibling paths
-	absOut, _ := filepath.Abs(outDir)
-	if filepath.Base(filepath.Dir(absOut)) == "cloud" {
-		siblingDirs = []string{
-			filepath.Join(filepath.Dir(filepath.Dir(absOut)), "gateway", "certs"),
-			filepath.Join(filepath.Dir(filepath.Dir(absOut)), "connect-app", "certs"),
-			filepath.Join(filepath.Dir(filepath.Dir(absOut)), "device-health-app", "certs"),
-		}
-	}
-
-	fmt.Println("\n  Distributing ca.crt to component directories:")
-	for _, dir := range siblingDirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Printf("    SKIP %s: %v\n", dir, err)
-			continue
-		}
-		dst := filepath.Join(dir, "ca.crt")
-		if err := os.WriteFile(dst, ca.CertPEM, 0644); err != nil {
-			fmt.Printf("    FAIL %s: %v\n", dst, err)
-		} else {
-			fmt.Printf("    OK   %s\n", dst)
-		}
-	}
-
-	fmt.Println("\nCloud certificate generated and signed by internal CA.")
-	fmt.Println("Gateway TLS cert: generated at first boot (self-signed) or uploaded via admin UI.")
-	fmt.Println("Agent certificates (connect-app, health-app) are obtained via TPM enrollment.")
-	fmt.Println("  POST /api/enroll — submit CSR generated with TPM-bound key")
 }

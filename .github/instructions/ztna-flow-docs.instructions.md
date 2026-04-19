@@ -17,12 +17,15 @@ cloud/
   main.go              Control plane — IdP, Policy Engine, Policy Administrator
   admin/               Admin handlers (users, audit, sessions)
   api/                 HTTP router + middleware (JWT auth, mTLS, CORS)
-  certs/               Internal CA management (sign CSRs, revoke certs)
+  certs/               Certificate utilities (fingerprints, CSR generation for Vault signing, metadata parsing)
+  pki/                 External PKI clients/adapters (Vault signer integration)
   config/              JSON config loader + validation
   idp/                 Identity Provider (login, OIDC, JWT ES256, TOTP HMAC-SHA256)
+  mfa/                 MFA providers (WebAuthn/Passkeys, Push approval)
   models/              Domain models (User, PolicyRule, Session, DeviceHealth, etc.)
-  policy/              Policy engine + risk scoring + rule evaluation
+  policy/              Policy engine + risk scoring + rule evaluation (geo-velocity)
   store/               SQLite persistence layer
+  util/                ID generation utilities
   web/                 Login HTML template
   dashboard/           React 19 + Vite 7 admin SPA
     src/               Pages: Login, Dashboard, Users, Policies, Sessions, Audit,
@@ -90,7 +93,6 @@ infrastructure/
 | Document | Content |
 |----------|---------|
 | `doc.md` | Thesis specification — objectives, chapters, bibliography requirements |
-| `architecture_oidc_flow.md` | OIDC Authorization Code flow, gateway enrollment, sequence diagrams (Mermaid) |
 | `cloud/dashboard/README.md` | Dashboard setup and development guide |
 | `connect-app/CONNECT_APP_DOCUMENTATION.md` | Connect-app architecture, TUN, DNS, TPM enrollment |
 | `device-health-app/DEVICE_HEALTH_APP_DOCUMENTATION.md` | Health collectors, scoring algorithm, reporting |
@@ -100,7 +102,7 @@ infrastructure/
 ## Collaboration
 
 - **Language**: User communicates in Romanian. All code, comments, documentation, and commit messages must be in **English**.
-- **Domain**: Academic network security research (thesis project). Zero Trust architecture, MFA, device compliance, policy enforcement, TLS/mTLS, OIDC, and tunnel mechanisms are the core domain — implement them with full rigor.
+- **Domain**: Academic network security research (thesis project). Zero Trust architecture, MFA, device compliance, policy enforcement, TLS/mTLS, PKI, OIDC, and tunnel mechanisms are the core domain — implement them with full rigor.
 - **Workflow**: Prefer implementation over asking permission — if the intent is clear, proceed. Test changes by running `go build ./...` in the affected module directory.
 - **Documentation discipline**: After **every** codebase change, update the relevant documentation files **and** this file (`ztna-flow-docs.instructions.md`) to reflect the current state. This is mandatory — not optional, not "only for major refactors." Keeping docs in sync eliminates the need to re-analyze the codebase on each session start and ensures productive collaboration from the first message.
 
@@ -130,6 +132,14 @@ This is a **thesis-grade** project — all contributions must meet the highest p
 - **Error handling**: Return `error`, never `panic` in library code
 - **Crypto & TLS**: TLS 1.3 minimum for all connections. mTLS between gateway ↔ cloud and device ↔ cloud. JWT signing uses ES256 (ECDSA P-256). TOTP uses HMAC-SHA256 with 6-digit codes and 30-second time steps (±1 skew window).
 - **JWT**: Auto-generated ECDSA P-256 keys at cloud startup (`data/jwt-signing.key` + `jwt-signing.pub`). Public key exposed via `/.well-known/jwks.json`. Claims include `UserID`, `Username`, `Role`, `DeviceID`, `MFADone`. Access token TTL: 1 hour.
+- **PKI backend**: Cloud uses Vault PKI as the only certificate signing backend (no internal CA signer mode). Required settings: `pki_url`, `pki_token`, `pki_path`, `pki_role_device`, `pki_role_health`, `pki_role_gateway`, `pki_role_resource`.
+- **Resource TLS certs**: Backend resource certificates (presented by the gateway portal for proxied apps) are signed exclusively by Vault PKI under role `pki_role_resource` (default `ztna-resource`). No self-signed certificate generation remains in cloud; `cert_mode` values are `manual`, `vault-signed`, or `letsencrypt`.
+- **CA distribution endpoint**: `GET /api/ca/cert` returns the Vault issuer CA PEM used by enrollment responses.
+- **Certificate revocation behavior**: In Vault mode, cloud mirrors certificate revocation events to Vault (`/v1/<pki_path>/revoke`) while still persisting revoked serials locally for gateway compatibility (`/api/gateway/revoked-serials`).
+- **Gateway cert renewal hardening**: On successful gateway mTLS renewal, cloud revokes the previous gateway certificate serial to reduce certificate overlap/replay risk.
+- **Gateway revocation source selection**: Portal revocation sync is Vault-first. Gateway reads Vault PKI CRL endpoints directly and falls back to cloud revoked-serial feed if Vault is unavailable.
+- **Gateway revocation unit tests**: `gateway/internal/auth` includes tests for Vault CRL parsing (PEM/DER), Vault-token propagation, and cloud fallback when Vault CRL endpoints fail.
+- **Gateway PKI config**: Gateway config/environment includes `pki_url`, `pki_token`, `pki_path`, and `pki_role_gateway`.
 - **OIDC flow**: Authorization Code + PKCE (S256). Per-gateway `client_id`/`client_secret` generated at enrollment. Auth codes are one-time use with 60-second TTL. Refresh tokens rotated on use.
 - **Device identity**: TPM 2.0 ECDSA P-256 key (software fallback if TPM unavailable). Device ID = SHA-256 of Endorsement Key public key (or `MachineGuid` fallback). Certificates are 24-hour validity with auto-renewal at 12-hour mark.
 - **CGNAT**: Dynamic IP allocation from 100.64.0.0/10 pool. TTL-based expiration (5 min default). Garbage collection every 30 seconds. LRU eviction on pool exhaustion (aggressive GC + evict oldest mapping by `LastAccess`).
@@ -139,7 +149,7 @@ This is a **thesis-grade** project — all contributions must meet the highest p
 - **Policy engine**: Rules evaluated in priority order (lower = higher precedence), first match wins. Conditions: roles, users, IPs, time windows, days, blocked dates, health scores, required checks, target resources/ports, max risk score. Default fallback: risk-based decision.
 - **Risk scoring**: Contextual factors — `UserID`, `SourceIP`, `DeviceHealth`, `FailedAttempts`, `TimeOfDay`, `Protocol`. Score range 0–100.
 - **Health scoring**: Weighted collectors — Firewall (25%), Antivirus (25%), Disk Encryption (20%), Password Policy (15%), OS Info (15%). Status values: `"good"` = 1.0, `"warning"` = 0.5, `"critical"` = 0.
-- **Gateway microservices**: 4 independent Docker containers — Portal (PEP, :9443/:443), Admin (:8444), Session Store (:6380), Syslog (:5514). Portal depends on Session Store health and Cloud connectivity. Syslog has TCP healthcheck (`nc -z localhost 5514`); Admin and Portal depend on both SessionStore and Syslog being healthy.
+- **Gateway microservices**: 4 independent Docker containers — Portal (PEP, :9443/:443), Admin (:8444), Session Store (:6380), Syslog (TCP log :5514 + HTTP health :8081). Portal depends on Session Store health and Cloud connectivity. Syslog healthcheck uses HTTP (`wget -qO- http://localhost:8081/health`) on a dedicated port separate from the TCP log listener; Admin and Portal depend on both SessionStore and Syslog being healthy.
 - **Gateway session cache**: Cloud session cache with 5-min cleanup goroutine, 15-min TTL cap, and 5-min max staleness bound (circuit breaker fallback won't serve arbitrarily old cached sessions).
 - **Gateway connection limiter**: Max 1000 concurrent connections on portal (atomic counter). Excess connections refused with warning log.
 - **Gateway resource sync**: Portal syncs resources from cloud every 2 minutes via `GET /api/gateway/resources`. Upsert changed, delete removed, preserve local-only fields (TunnelIP, Protocol, CertPEM).
@@ -149,32 +159,35 @@ This is a **thesis-grade** project — all contributions must meet the highest p
 - **Gateway device identity enforcement**: Portal rejects connections where `certDeviceID` is empty but request claims a `DeviceID` (prevents spoofing without mTLS proof).
 - **Gateway admin improvements**: FQDN regex validation at setup, cert expiry check on upload (reject expired, warn <24h), CORS validated with `url.Parse()`, admin email redacted from startup logs, log cleanup goroutine (1h, max 10000 entries).
 - **Gateway circuit breaker observability**: State transition logging at all 4 transition points. Public `State()` and `Metrics()` methods for monitoring.
-- **Gateway enrollment**: Cloud generates one-time enrollment token (1h TTL) → gateway sends CSR + token → receives mTLS cert + CA + OIDC client credentials. mTLS cert is short-lived and renewble via CSR.
+- **Gateway enrollment**: Cloud generates one-time enrollment token (1h TTL) → gateway sends CSR + token → receives mTLS cert + CA + OIDC client credentials. mTLS cert is short-lived and renewable via CSR.
 - **Gateway admin**: Setup wizard (2 steps: validate token, configure hostname + SSL). Admin auth via HttpOnly cookie (Secure, SameSiteStrict) + CSRF double-submit pattern.
-- **Password policy**: Min 8 chars (upper + lower + digit + special). bcrypt cost factor 12. Setup token expires after 30 minutes.
+- **Password policy**: Currently only enforces non-empty password (`len(req.Password) >= 1`); bcrypt hashing uses `bcrypt.DefaultCost` (= 10). Setup token expires after 30 minutes. **Known gap**: complexity rules (min 8, upper + lower + digit + special) and bcrypt cost ≥ 12 are advertised as thesis-grade requirements but not yet enforced — see *Remaining Work*.
 - **Account lockout**: 5 failed attempts → 15-minute lockout.
 - **Session management**: Max 5 concurrent sessions per user. Session TTL: 8 hours. Automatic cleanup every 5 minutes (cloud) / 60 seconds (session store).
 - **Dashboard (cloud/dashboard)**: React 19 + Vite 7 + TailwindCSS + Lucide Icons. Pages: Login, Dashboard, Users, Policies, Sessions, Audit, Gateways, DeviceHealth, ProtectApp, Resources. Layout with sidebar navigation.
 - **Device Health App**: Wails v2 desktop app. React frontend with animated score gauge and expandable health cards. Backend emits `health:updated` Wails events. Local API at `:12080/health`.
+- **Device Health App embed requirement**: `device-health-app/main.go` embeds `all:frontend/dist`; ensure `frontend/dist` exists before running `go build`/`go test` for the module.
 - **Configuration**: JSON config files per component (`cloud-config.json`, `connect-config.json`, `gateway-config.json`, `health-config.json`). Environment variable overrides supported. Secrets validated at startup (fail-fast in production, warn in dev mode). Gateway config saved with fsync before atomic rename. Gateway `InternalDNS` defaults to empty string (no hardcoded external DNS).
-- **Docker lab**: 3 networks — public (172.30.0.0/24), dmz (172.22.0.0/24), private (10.10.0.0/24). Services: ztna-cloud (:8443), ztna-public-dns (:1053), ztna-gateway-portal (:9443/:9444), ztna-gateway-admin (:8444), ztna-sessionstore (:6380), ztna-syslog (:5514).
+- **Docker lab**: 4 networks — public (172.30.0.0/24), dmz (172.22.0.0/24), private (10.10.0.0/24), security (172.24.0.0/24). Core services: ztna-cloud (:8443), ztna-public-dns (:1053), ztna-gateway-portal (:9443/:9444), ztna-gateway-admin (:8444), ztna-sessionstore (:6380), ztna-syslog (:5514). Optional profile service: `vault` (:8200, dev mode for migration testing).
 - **connect-app TLS**: Can run without local cert/key files by using server certificate pinning (`server_cert_sha256`) and optional client cert loading. Requires Administrator rights on Windows for TUN adapter creation.
 - **Identity Broker (per-gateway federation)**: Cloud acts as an identity broker. Each gateway has an `auth_mode` field (`"builtin"` or `"federated"`). When `"builtin"`, cloud shows its own login page. When `"federated"`, cloud redirects the user to an external OIDC IdP (e.g. Keycloak) configured via `FederationConfig` (issuer, client_id, client_secret, scopes, claim_mapping). External IdP discovery uses `.well-known/openid-configuration` with 6-hour cache. PKCE S256 is mandatory for external exchanges. After external authentication, cloud maps claims, auto-provisions federated users, and issues its own JWT (MFADone=false). Gateway code is unchanged — it always talks to cloud's OIDC endpoints.
 - **Federated users**: Users provisioned via federation have `ExternalSubject` (external `sub` claim) and `AuthSource` (issuer URL). They have no local password. MFA methods (TOTP/WebAuthn/Push) can still be enrolled in cloud for step-up at access time.
 - **MFA at access time (Conditional Access)**: MFA is never required at login. Login always produces a JWT with `MFADone=false`. MFA is triggered only when the policy engine returns `"mfa_required"` during resource access. The gateway sends `"auth_required"` + OIDC URL with `mfa_step=true`, and the browser opens the MFA step-up flow.
 - **MFA methods**: Three methods supported — TOTP (HMAC-SHA256, 6-digit, 30s), WebAuthn/Passkeys (go-webauthn v0.16.4, ECDSA P-256), Push Approval (device-health-app polls every 3s, 2-min TTL, Windows toast notification). Method selection is dynamic based on user's configured methods.
-- **Geo-velocity / Impossible travel**: IP geolocation via MaxMind GeoLite2-City (.mmdb). Haversine distance calculation between consecutive logins. Speed thresholds: <500 km/h normal (0 risk pts), 500–900 km/h suspicious (15 pts), >900 km/h impossible travel (30 pts). Last 50 login locations stored per user.
+- **Geo-velocity / Impossible travel**: IP geolocation via [ipapi.co](https://ipapi.co) free tier (HTTPS, 1000 req/day, in-memory cache). Haversine distance calculation between consecutive logins. Speed thresholds: <500 km/h normal (0 risk pts), 500–900 km/h suspicious (15 pts), >900 km/h impossible travel (30 pts). Last 50 login locations stored per user. **Privacy caveat**: client IP is sent to a third party — see *Remaining Work* for migration to MaxMind GeoLite2-City (offline DB).
 
 ## Key Authentication & Authorization Flows
 
 ### Device Enrollment (connect-app / device-health-app)
-1. Derive `device_id` from TPM EK (or MachineGuid)
+1. Derive `device_id` from TPM EK
 2. Generate CSR signed by TPM key
 3. `POST /api/enroll/start-session` → receive `auth_url` + `session_id`
 4. Open browser for user authentication at cloud
 5. Poll `GET /api/enroll/session-status` every 2s (5-min timeout)
 6. Receive `cert_pem` + `ca_pem` → save to `data/`
-7. Background auto-renewal at 12-hour mark
+7. Background auto-renewal at 12-hour mark via `POST /api/enroll/renew`
+
+Related endpoints: `POST /api/enroll/complete-session` (auto-completion after OIDC), `GET /api/enroll/status` (poll by enrollment ID).
 
 ### OIDC Authorization Code Flow (resource access)
 1. User accesses internal resource via connect-app (CGNAT IP)
@@ -227,8 +240,7 @@ This is a **thesis-grade** project — all contributions must meet the highest p
 ### Cloud Public Endpoints
 ```
 POST   /api/auth/login              Login (returns mfa_token or auth_token)
-POST   /api/auth/verify-mfa         MFA verification (TOTP / WebAuthn / Push)
-POST   /api/auth/mfa-step-up        MFA step-up (access-time conditional MFA)
+POST   /api/auth/register           Self-service user registration
 GET    /health                      Health check
 GET    /api/ca/cert                 CA certificate (PEM)
 GET    /.well-known/jwks.json       JWT public keys
@@ -244,32 +256,34 @@ GET    /auth/userinfo               User identity (Bearer token)
 
 ### Cloud MFA Endpoints
 ```
-POST   /api/auth/mfa-step-up                  Initiate MFA step-up (returns mfa_token + methods)
-POST   /api/auth/verify-mfa                   Verify MFA (dispatches to TOTP/WebAuthn/Push)
-POST   /api/webauthn/register/begin           Start WebAuthn credential registration
-POST   /api/webauthn/register/finish          Complete WebAuthn credential registration
-POST   /api/webauthn/authenticate/begin       Start WebAuthn authentication challenge
-POST   /api/webauthn/authenticate/finish      Complete WebAuthn authentication
-POST   /api/auth/push/begin                   Start push MFA challenge
-GET    /api/auth/push/status                   Poll push challenge status
+POST   /api/auth/mfa-step-up                 Initiate MFA step-up (returns mfa_token + methods)
+POST   /api/auth/verify-mfa                  Verify MFA (dispatches to TOTP/WebAuthn/Push)
+POST   /api/mfa/webauthn/register/begin      Start WebAuthn credential registration (JWT-auth)
+POST   /api/mfa/webauthn/register/finish     Complete WebAuthn credential registration (JWT-auth)
+POST   /api/mfa/webauthn/authenticate/begin  Start WebAuthn authentication (mfa_token)
+POST   /api/mfa/webauthn/authenticate/finish Complete WebAuthn authentication (mfa_token)
+POST   /api/mfa/push/begin                   Start push MFA challenge (mfa_token)
+GET    /api/mfa/push/status                  Poll push challenge status (mfa_token)
 ```
 
-### Cloud Device Push Endpoints (mTLS)
+### Cloud Device Endpoints (mTLS)
 ```
-GET    /api/device/push-challenges             Pending push challenges for device
-POST   /api/device/push-challenges/respond     Approve or deny a push challenge
+GET    /api/device/push-challenges          Pending push challenges for device
+POST   /api/device/push-challenges/respond  Approve or deny a push challenge
+POST   /api/device/health-report            Device health report (device-health-app reporter)
 ```
 
 ### Cloud Gateway Endpoints (mTLS + API Key)
 ```
-POST   /api/gateway/authorize       Access decision request
-POST   /api/gateway/validate-token  JWT validation
-POST   /api/gateway/device-report   Forward device health
+POST   /api/gateway/authorize        Access decision request
+POST   /api/gateway/validate-token   JWT validation
+POST   /api/gateway/device-report    Forward device health (gateway → cloud relay)
 POST   /api/gateway/session-validate Session check
-POST   /api/gateway/revoked-serials Revoked certificate list
-POST   /api/gateway/enroll          Gateway enrollment (token + CSR)
-POST   /api/gateway/renew-cert      Certificate renewal
-GET    /api/gateway/resources       Synced resource list
+GET    /api/gateway/revoked-serials  Revoked certificate serials feed (cloud fallback)
+POST   /api/gateway/enroll           Gateway enrollment (token + CSR)
+POST   /api/gateway/renew-cert       Certificate renewal (CSR)
+GET    /api/gateway/resources        Synced resource list
+GET    /api/gateway/app-info         Gateway/app metadata
 ```
 
 ### Cloud Admin Endpoints (JWT + admin role)
@@ -279,6 +293,10 @@ GET/POST   /api/admin/rules         Policy rule management
 GET/POST   /api/admin/sessions      Session oversight
 GET        /api/admin/audit         Audit log
 GET/POST   /api/admin/gateways      Gateway lifecycle
+GET/POST   /api/admin/resources     Resource catalog management
+GET        /api/admin/device-health Device health overview
+GET/POST   /api/admin/enrollments   Device enrollment approvals
+GET        /api/admin/dashboard     Aggregated dashboard metrics
 ```
 
 ### Gateway Session Store (:6380)
@@ -288,6 +306,7 @@ POST   /sessions/get                Retrieve session
 POST   /sessions/touch              Update activity
 POST   /sessions/revoke             Revoke session
 GET    /sessions                    List active sessions
+GET    /sessions/count              Count active sessions
 GET    /health                      Health check
 ```
 
@@ -298,7 +317,16 @@ GET    /health                      Status + device_id + last_report
 
 ## Remaining Work
 
+### Documentation / Tooling
 - End-to-end integration testing script (`test-oidc-flow.ps1`) needs update for latest enrollment flow.
+
+### Known Code Gaps (advertised as thesis-grade, not yet implemented)
+- **Password complexity validation**: [cloud/idp/users.go](cloud/idp/users.go#L32) only checks `len < 1`. Add regex check for min 8 chars + upper + lower + digit + special.
+- **bcrypt cost factor**: [cloud/idp/users.go](cloud/idp/users.go#L45) uses `bcrypt.DefaultCost` (= 10). Raise to 12 for closer alignment with NIST SP 800-63B / OWASP guidance.
+- **Geo-velocity provider**: [cloud/policy/geo.go](cloud/policy/geo.go) currently calls `ipapi.co` (third-party HTTPS lookup, leaks user IP, 1000 req/day cap). Migrate to offline MaxMind GeoLite2-City `.mmdb` for privacy + rate independence.
+
+### Endpoints to verify on next API audit
+- Admin endpoints (`/api/admin/resources`, `/api/admin/device-health`, `/api/admin/enrollments`, `/api/admin/dashboard`) added to docs from router scan; confirm response schemas remain stable.
 
 ## Commands
 
@@ -311,6 +339,9 @@ cd device-health-app && go build ./...
 
 # Run Docker lab
 docker-compose up --build
+
+# Run Docker lab with Vault PKI (dev mode)
+PKI_URL=http://vault:8200 PKI_TOKEN=ztna-dev-root-token docker compose --profile vault up --build
 
 # Run cloud dashboard dev server
 cd cloud/dashboard && npm install && npm run dev

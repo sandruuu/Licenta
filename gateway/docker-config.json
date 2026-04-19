@@ -7,6 +7,10 @@
   "cloud_ca": "/app/certs/ca.crt",
   "require_client_cert": true,
   "cloud_url": "https://cloud.ztna.local:8443",
+  "pki_url": "",
+  "pki_token": "",
+  "pki_path": "pki_int",
+  "pki_role_gateway": "ztna-gateway",
   "cgnat": {
     "enabled": true,
     "pool_start": "100.64.0.2",

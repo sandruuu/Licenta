@@ -312,7 +312,7 @@ type Resource struct {
 	ClientSecret string `json:"client_secret,omitempty"`
 
 	// TLS Certificate
-	CertMode   string `json:"cert_mode"`             // "manual", "self-signed", "letsencrypt"
+	CertMode   string `json:"cert_mode"`             // "manual", "vault-signed", "letsencrypt"
 	CertPEM    string `json:"cert_pem,omitempty"`    // PEM-encoded certificate
 	KeyPEM     string `json:"key_pem,omitempty"`     // PEM-encoded private key
 	CertExpiry string `json:"cert_expiry,omitempty"` // ISO8601 expiration date

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +25,9 @@ import (
 type CloudClient struct {
 	cloudURL string
 	client   *http.Client
+	pkiURL   string
+	pkiPath  string
+	pkiToken string
 	mu       sync.RWMutex
 	// Local cache of validated sessions to reduce cloud calls
 	sessionCache map[string]*CachedSession
@@ -158,9 +163,15 @@ func NewCloudClient(cfg *config.Config) (*CloudClient, error) {
 	client := &CloudClient{
 		cloudURL:     cfg.CloudURL,
 		client:       httpClient,
+		pkiURL:       strings.TrimRight(strings.TrimSpace(cfg.PKIURL), "/"),
+		pkiPath:      strings.Trim(strings.TrimSpace(cfg.PKIPath), "/"),
+		pkiToken:     strings.TrimSpace(cfg.PKIToken),
 		sessionCache: make(map[string]*CachedSession),
 		breaker:      NewCircuitBreaker(),
 		stopCh:       make(chan struct{}),
+	}
+	if client.pkiPath == "" {
+		client.pkiPath = "pki_int"
 	}
 
 	// Background session cache cleanup to prevent unbounded memory growth
@@ -407,8 +418,8 @@ func (c *CloudClient) doCloudGet(path string) ([]byte, error) {
 	return respBody, nil
 }
 
-// GetCACert fetches the Cloud's internal CA certificate PEM.
-// The gateway needs this to verify client certs signed by the Cloud CA.
+// GetCACert fetches the issuer CA certificate PEM exposed by cloud.
+// The gateway needs this to verify enrollment client certificates.
 func (c *CloudClient) GetCACert() ([]byte, error) {
 	resp, err := c.cloudGet("/api/ca/cert")
 	if err != nil {
@@ -432,6 +443,200 @@ func (c *CloudClient) GetRevokedSerials() ([]string, error) {
 	}
 
 	return result.RevokedSerials, nil
+}
+
+// GetRevokedSerialsByProvider returns revoked serials from Vault CRL endpoints
+// and falls back to the cloud compatibility feed when Vault is unavailable.
+func (c *CloudClient) GetRevokedSerialsByProvider() ([]string, string, error) {
+	serials, err := c.GetVaultRevokedSerials()
+	if err == nil {
+		return serials, "vault", nil
+	}
+
+	fallback, fallbackErr := c.GetRevokedSerials()
+	if fallbackErr != nil {
+		return nil, "vault", fmt.Errorf("vault revocation sync failed: %w; cloud fallback failed: %v", err, fallbackErr)
+	}
+
+	return fallback, "cloud-fallback", fmt.Errorf("vault revocation sync failed, using cloud fallback: %w", err)
+}
+
+// GetVaultRevokedSerials pulls revoked serials from Vault PKI CRL endpoints.
+func (c *CloudClient) GetVaultRevokedSerials() ([]string, error) {
+	if c.pkiURL == "" {
+		return nil, fmt.Errorf("pki_url is required for vault CRL sync")
+	}
+
+	endpoints := []string{
+		fmt.Sprintf("%s/v1/%s/cert/crl/pem", c.pkiURL, c.pkiPath),
+		fmt.Sprintf("%s/v1/%s/crl/pem", c.pkiURL, c.pkiPath),
+		fmt.Sprintf("%s/v1/%s/cert/crl", c.pkiURL, c.pkiPath),
+		fmt.Sprintf("%s/v1/%s/crl", c.pkiURL, c.pkiPath),
+	}
+
+	var errs []string
+	for _, endpoint := range endpoints {
+		respBody, err := c.fetchVaultCRL(endpoint)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s (%v)", endpoint, err))
+			continue
+		}
+
+		serials, err := parseVaultRevokedSerials(respBody)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s (%v)", endpoint, err))
+			continue
+		}
+
+		return dedupeStrings(serials), nil
+	}
+
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("vault CRL endpoints returned no usable response")
+	}
+
+	return nil, fmt.Errorf("vault CRL fetch failed: %s", strings.Join(errs, "; "))
+}
+
+func (c *CloudClient) fetchVaultCRL(endpoint string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
+	if c.pkiToken != "" {
+		req.Header.Set("X-Vault-Token", c.pkiToken)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	return respBody, nil
+}
+
+func parseVaultRevokedSerials(respBody []byte) ([]string, error) {
+	der, err := extractCRLDER(respBody)
+	if err != nil {
+		return nil, err
+	}
+
+	crl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		return nil, fmt.Errorf("parse CRL: %w", err)
+	}
+
+	serials := make([]string, 0, len(crl.RevokedCertificateEntries)+len(crl.RevokedCertificates))
+	for _, entry := range crl.RevokedCertificateEntries {
+		if entry.SerialNumber != nil {
+			serials = append(serials, entry.SerialNumber.String())
+		}
+	}
+	for _, revoked := range crl.RevokedCertificates {
+		if revoked.SerialNumber != nil {
+			serials = append(serials, revoked.SerialNumber.String())
+		}
+	}
+
+	return dedupeStrings(serials), nil
+}
+
+func extractCRLDER(respBody []byte) ([]byte, error) {
+	trimmed := bytes.TrimSpace(respBody)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty CRL response")
+	}
+
+	if block, _ := pem.Decode(trimmed); block != nil && strings.Contains(block.Type, "CRL") {
+		return block.Bytes, nil
+	}
+
+	var payload struct {
+		Errors []string `json:"errors"`
+		Data   struct {
+			CRL         string `json:"crl"`
+			Certificate string `json:"certificate"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(trimmed, &payload); err == nil {
+		if len(payload.Errors) > 0 {
+			return nil, fmt.Errorf("vault response errors: %s", strings.Join(payload.Errors, "; "))
+		}
+		for _, candidate := range []string{payload.Data.CRL, payload.Data.Certificate} {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" {
+				continue
+			}
+			if block, _ := pem.Decode([]byte(candidate)); block != nil && strings.Contains(block.Type, "CRL") {
+				return block.Bytes, nil
+			}
+			if der, ok := decodeBase64CRL(candidate); ok {
+				return der, nil
+			}
+		}
+	}
+
+	if der, ok := decodeBase64CRL(string(trimmed)); ok {
+		return der, nil
+	}
+
+	if _, err := x509.ParseRevocationList(trimmed); err == nil {
+		return trimmed, nil
+	}
+
+	return nil, fmt.Errorf("unsupported CRL response format")
+}
+
+func decodeBase64CRL(value string) ([]byte, bool) {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		if _, parseErr := x509.ParseRevocationList(decoded); parseErr == nil {
+			return decoded, true
+		}
+	}
+
+	decoded, err = base64.RawStdEncoding.DecodeString(value)
+	if err == nil {
+		if _, parseErr := x509.ParseRevocationList(decoded); parseErr == nil {
+			return decoded, true
+		}
+	}
+
+	return nil, false
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+
+	return result
 }
 
 // GetResources fetches the gateway's assigned resources from the cloud.

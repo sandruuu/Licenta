@@ -17,6 +17,12 @@ networks:
     ipam:
       config:
         - subnet: 10.10.0.0/24
+  security:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.24.0.0/24
 
 services:
   cloud:
@@ -31,12 +37,23 @@ services:
         ipv4_address: 172.30.0.20
         aliases:
           - cloud.ztna.local
+      security:
+        ipv4_address: 172.24.0.20
     volumes:
       - ./cloud/certs:/app/certs:ro
       - ./cloud/data:/app/data
       - ./cloud/dashboard/dist:/app/dashboard/dist:ro
     environment:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - PKI_URL=${PKI_URL:-http://vault:8200}
+      - PKI_TOKEN=${PKI_TOKEN:-}
+      - PKI_PATH=${PKI_PATH:-pki_int}
+      - PKI_ROLE_DEVICE=${PKI_ROLE_DEVICE:-ztna-device}
+      - PKI_ROLE_HEALTH=${PKI_ROLE_HEALTH:-ztna-device-health}
+      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
+      - PKI_CA_FILE=${PKI_CA_FILE:-}
+      - PKI_SERVER_NAME=${PKI_SERVER_NAME:-}
+      - PKI_TIMEOUT=${PKI_TIMEOUT:-10s}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
@@ -99,6 +116,8 @@ services:
     networks:
       dmz:
         ipv4_address: 172.22.0.11
+      security:
+        ipv4_address: 172.24.0.11
     volumes:
       - ./gateway/docker-config.json:/app/config/gateway-config.json
       - ./gateway/certs:/app/certs
@@ -108,6 +127,10 @@ services:
       - ADMIN_AUTO_SETUP=${ADMIN_AUTO_SETUP:-false}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - PKI_URL=${PKI_URL:-http://vault:8200}
+      - PKI_TOKEN=${PKI_TOKEN:-}
+      - PKI_PATH=${PKI_PATH:-pki_int}
+      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
     depends_on:
       sessionstore:
         condition: service_healthy
@@ -133,12 +156,18 @@ services:
         ipv4_address: 172.22.0.10
       private:
         ipv4_address: 10.10.0.5
+      security:
+        ipv4_address: 172.24.0.10
     volumes:
       - ./gateway/docker-config.json:/app/config/gateway-config.json
       - ./gateway/certs:/app/certs
       - gateway-data:/app/data
     environment:
       - GATEWAY_API_KEY=${GATEWAY_API_KEY:?GATEWAY_API_KEY must be set}
+      - PKI_URL=${PKI_URL:-http://vault:8200}
+      - PKI_TOKEN=${PKI_TOKEN:-}
+      - PKI_PATH=${PKI_PATH:-pki_int}
+      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
     depends_on:
       cloud:
         condition: service_healthy
@@ -150,6 +179,29 @@ services:
         condition: service_started
       private-dns:
         condition: service_started
+    restart: unless-stopped
+
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: ztna-vault
+    profiles:
+      - vault
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    command: >
+      server -dev
+      -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-ztna-dev-root-token}
+      -dev-listen-address=0.0.0.0:8200
+    networks:
+      security:
+        ipv4_address: 172.24.0.5
+    volumes:
+      - vault-data:/vault/file
+    environment:
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://0.0.0.0:8200
     restart: unless-stopped
 
   private-dns:
@@ -200,4 +252,6 @@ volumes:
   gateway-logs:
     driver: local
   gateway-data:
+    driver: local
+  vault-data:
     driver: local

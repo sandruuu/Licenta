@@ -20,6 +20,7 @@ volumes:
   gateway-certs:
   gateway-config:
   gateway-data:
+  vault-data:
 
 services:
   # ── Session Store (replaces Redis) ──────────────────────────
@@ -84,6 +85,10 @@ services:
       - SYSLOG_ADDR=syslog:5514
       - SESSION_STORE_TOKEN=${SESSION_STORE_TOKEN:-}
       - SYSLOG_AUTH_TOKEN=${SYSLOG_AUTH_TOKEN:-}
+      - PKI_URL=${PKI_URL:-http://vault:8200}
+      - PKI_TOKEN=${PKI_TOKEN:-}
+      - PKI_PATH=${PKI_PATH:-pki_int}
+      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
     networks:
       - gateway-net
     depends_on:
@@ -111,6 +116,10 @@ services:
       - SYSLOG_ADDR=syslog:5514
       - SESSION_STORE_TOKEN=${SESSION_STORE_TOKEN:-}
       - SYSLOG_AUTH_TOKEN=${SYSLOG_AUTH_TOKEN:-}
+      - PKI_URL=${PKI_URL:-http://vault:8200}
+      - PKI_TOKEN=${PKI_TOKEN:-}
+      - PKI_PATH=${PKI_PATH:-pki_int}
+      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
     networks:
       - gateway-net
     depends_on:
@@ -120,3 +129,26 @@ services:
         condition: service_healthy
       admin:
         condition: service_started
+
+  # ── Optional External PKI (development bootstrap) ─────────
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: gw-vault
+    profiles:
+      - vault
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    command: >
+      server -dev
+      -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-ztna-dev-root-token}
+      -dev-listen-address=0.0.0.0:8200
+    volumes:
+      - vault-data:/vault/file
+    environment:
+      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
+      - VAULT_ADDR=http://0.0.0.0:8200
+    networks:
+      - gateway-net
+    restart: unless-stopped

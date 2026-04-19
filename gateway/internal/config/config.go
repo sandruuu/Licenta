@@ -37,6 +37,12 @@ type Config struct {
 	CloudCertSHA256 string `json:"cloud_cert_sha256,omitempty"` // SHA-256 fingerprint of cloud TLS cert for pinning
 	EnrollmentToken string `json:"enrollment_token,omitempty"`  // one-time token for cloud enrollment (cleared after enrollment)
 
+	// External PKI connection
+	PKIURL         string `json:"pki_url,omitempty"`          // e.g. "http://vault:8200"
+	PKIToken       string `json:"pki_token,omitempty"`        // optional Vault token for CRL/revocation endpoints
+	PKIPath        string `json:"pki_path,omitempty"`         // e.g. "pki_int"
+	PKIRoleGateway string `json:"pki_role_gateway,omitempty"` // gateway mTLS issuance role
+
 	// Primary Authentication Source (IdP / OIDC)
 	AuthSource *AuthSourceConfig `json:"auth_source,omitempty"`
 
@@ -137,8 +143,10 @@ type InternalHost struct {
 // from CloudURL and FQDN after config is loaded, or set during enrollment/setup wizard.
 func DefaultConfig() *Config {
 	return &Config{
-		ListenAddr:  ":9443",
-		InternalDNS: "",
+		ListenAddr:     ":9443",
+		InternalDNS:    "",
+		PKIPath:        "pki_int",
+		PKIRoleGateway: "ztna-gateway",
 		CGNAT: &CGNATConfig{
 			Enabled:    true,
 			PoolStart:  "100.64.0.2",
@@ -212,16 +220,20 @@ func (c *Config) DeriveAuthEndpoints() {
 // Supported: CLOUD_URL, LISTEN_ADDR, INTERNAL_DNS
 func (c *Config) ApplyEnvOverrides() {
 	overrides := map[string]*string{
-		"CLOUD_URL":    &c.CloudURL,
-		"LISTEN_ADDR":  &c.ListenAddr,
-		"INTERNAL_DNS": &c.InternalDNS,
-		"TLS_CERT":     &c.TLSCert,
-		"TLS_KEY":      &c.TLSKey,
-		"TLS_CA":       &c.TLSCA,
-		"CLIENT_CA":    &c.ClientCA,
-		"CLOUD_CA":     &c.CloudCA,
-		"MTLS_CERT":    &c.MTLSCert,
-		"MTLS_KEY":     &c.MTLSKey,
+		"CLOUD_URL":        &c.CloudURL,
+		"LISTEN_ADDR":      &c.ListenAddr,
+		"INTERNAL_DNS":     &c.InternalDNS,
+		"TLS_CERT":         &c.TLSCert,
+		"TLS_KEY":          &c.TLSKey,
+		"TLS_CA":           &c.TLSCA,
+		"CLIENT_CA":        &c.ClientCA,
+		"CLOUD_CA":         &c.CloudCA,
+		"MTLS_CERT":        &c.MTLSCert,
+		"MTLS_KEY":         &c.MTLSKey,
+		"PKI_URL":          &c.PKIURL,
+		"PKI_TOKEN":        &c.PKIToken,
+		"PKI_PATH":         &c.PKIPath,
+		"PKI_ROLE_GATEWAY": &c.PKIRoleGateway,
 	}
 
 	for env, field := range overrides {

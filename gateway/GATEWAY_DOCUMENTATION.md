@@ -359,8 +359,10 @@ Portalul verifică expirarea a **4 certificate** din configurare:
 
 ### 3.8 Sincronizarea listei de revocare (CRL)
 
-- **Sursă**: `cloud.GetRevokedSerials()` → `GET /api/gateway/revoked-serials`
-- **Format răspuns**: `{"revoked_serials": ["serial1", "serial2", ...]}`
+- **Sursă (Vault-first)**:
+  - `cloud.GetVaultRevokedSerials()` → Vault CRL endpoint (`/v1/<pki_path>/cert/crl/pem`, cu fallback pe endpoint-urile CRL alternative)
+  - Dacă Vault nu este disponibil: fallback automat la `GET /api/gateway/revoked-serials`
+- **Format seriale**: serialele sunt normalizate în cache (decimal + hex colonizat) pentru potrivire robustă indiferent de formatul sursei
 - **Stocare locală**: `sync.Map` (thread-safe, fără lock pentru citiri)
 - **Strategie**: Ștergere completă + reconstrucție la fiecare sincronizare
 - **Frecvență**: La pornire + la fiecare **60 secunde**
