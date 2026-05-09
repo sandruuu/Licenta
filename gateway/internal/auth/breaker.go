@@ -41,31 +41,48 @@ type CircuitBreaker struct {
 	lastSuccess time.Time // timestamp of last success
 
 	// Configuration
-	maxFailures int           // failures before opening (default: 5)
-	timeout     time.Duration // how long to stay open before half-open (default: 30s)
-	halfOpenMax int           // max probe requests in half-open (default: 1)
+	maxFailures        int           // failures before opening (default: 5)
+	timeout            time.Duration // how long to stay open before half-open (default: 30s)
+	halfOpenMax        int           // max probe requests in half-open (default: 1)
+	halfOpenMaxLatency time.Duration // max duration of a half-open probe (default: 2s)
 
 	// Metrics
-	totalTrips   int64 // number of times breaker opened
-	totalSuccess int64
-	totalFailure int64
+	totalTrips           int64 // number of times breaker opened
+	totalSuccess         int64
+	totalFailure         int64
+	totalHalfOpenTimeout int64 // half-open probes that exceeded halfOpenMaxLatency
 }
 
 // NewCircuitBreaker creates a circuit breaker with sensible defaults.
 func NewCircuitBreaker() *CircuitBreaker {
 	return &CircuitBreaker{
-		state:       CircuitClosed,
-		maxFailures: 5,
-		timeout:     30 * time.Second,
-		halfOpenMax: 1,
+		state:              CircuitClosed,
+		maxFailures:        5,
+		timeout:            30 * time.Second,
+		halfOpenMax:        1,
+		halfOpenMaxLatency: 2 * time.Second,
 	}
+}
+
+// SetHalfOpenMaxLatency overrides the maximum duration a half-open probe
+// is allowed to run before being treated as a failure. A value <= 0 disables
+// the timeout (probe waits for the underlying client timeout).
+func (cb *CircuitBreaker) SetHalfOpenMaxLatency(d time.Duration) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	cb.halfOpenMaxLatency = d
 }
 
 // Execute runs the given function through the circuit breaker.
 // If the circuit is open, it returns ErrCircuitOpen immediately.
-// If the circuit is half-open, it allows a single probe request.
+// If the circuit is half-open, it allows a single probe request bounded by
+// halfOpenMaxLatency — a probe that exceeds this duration is treated as a
+// failure and re-opens the circuit, preventing a slow cloud from stalling
+// the gateway via half-open probes.
 func (cb *CircuitBreaker) Execute(fn func() ([]byte, error)) ([]byte, error) {
 	cb.mu.Lock()
+
+	probing := false
 
 	switch cb.state {
 	case CircuitOpen:
@@ -74,6 +91,7 @@ func (cb *CircuitBreaker) Execute(fn func() ([]byte, error)) ([]byte, error) {
 			log.Printf("[AUTH] Circuit breaker: open → half-open (timeout elapsed)")
 			cb.state = CircuitHalfOpen
 			cb.failures = 0
+			probing = true
 			cb.mu.Unlock()
 			// Fall through to execute the probe
 		} else {
@@ -82,15 +100,54 @@ func (cb *CircuitBreaker) Execute(fn func() ([]byte, error)) ([]byte, error) {
 		}
 
 	case CircuitHalfOpen:
-		// Allow limited probe requests
+		probing = true
 		cb.mu.Unlock()
 
 	case CircuitClosed:
 		cb.mu.Unlock()
 	}
 
-	// Execute the actual call
-	result, err := fn()
+	// Execute the actual call. In half-open mode, bound the probe latency so
+	// a slow-but-not-dead cloud cannot keep the breaker stuck blocking other
+	// callers. The orphan goroutine is bounded by the underlying HTTP client
+	// timeout configured by the caller.
+	var (
+		result []byte
+		err    error
+	)
+
+	cb.mu.Lock()
+	probeBudget := cb.halfOpenMaxLatency
+	cb.mu.Unlock()
+
+	if probing && probeBudget > 0 {
+		type probeResult struct {
+			data []byte
+			err  error
+		}
+		ch := make(chan probeResult, 1)
+		go func() {
+			d, e := fn()
+			ch <- probeResult{d, e}
+		}()
+		select {
+		case r := <-ch:
+			result, err = r.data, r.err
+		case <-time.After(probeBudget):
+			cb.mu.Lock()
+			cb.totalHalfOpenTimeout++
+			cb.totalFailure++
+			cb.totalTrips++
+			cb.failures = 0
+			cb.lastFailure = time.Now()
+			cb.state = CircuitOpen
+			log.Printf("[AUTH] Circuit breaker: half-open → open (probe exceeded %s)", probeBudget)
+			cb.mu.Unlock()
+			return nil, fmt.Errorf("circuit breaker: half-open probe exceeded %s", probeBudget)
+		}
+	} else {
+		result, err = fn()
+	}
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -137,6 +194,14 @@ func (cb *CircuitBreaker) Metrics() (trips, successes, failures int64) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	return cb.totalTrips, cb.totalSuccess, cb.totalFailure
+}
+
+// HalfOpenTimeouts returns the cumulative number of half-open probes that
+// exceeded halfOpenMaxLatency and forced the circuit back to open.
+func (cb *CircuitBreaker) HalfOpenTimeouts() int64 {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.totalHalfOpenTimeout
 }
 
 // ErrCircuitOpen is returned when the circuit breaker is open

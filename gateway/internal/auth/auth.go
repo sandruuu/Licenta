@@ -2,14 +2,21 @@ package auth
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -20,131 +27,94 @@ import (
 	"gateway/internal/config"
 )
 
-// CloudClient communicates with the ZTNA Cloud service (PA + PE + IdP)
-// to authenticate users and authorize access requests
+// CloudClient handles communication with the Cloud control plane.
 type CloudClient struct {
 	cloudURL string
 	client   *http.Client
+
 	pkiURL   string
 	pkiPath  string
 	pkiToken string
-	mu       sync.RWMutex
-	// Local cache of validated sessions to reduce cloud calls
-	sessionCache map[string]*CachedSession
-	// Circuit breaker for graceful degradation when cloud is unreachable
+
+	mu      sync.RWMutex
 	breaker *CircuitBreaker
-	// stopCh signals background goroutines to exit during graceful shutdown
-	stopCh chan struct{}
+	stopCh  chan struct{}
 }
 
-// CloudResource mirrors the cloud's GatewayResourceSync model.
-type CloudResource struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Type         string   `json:"type"`
-	Host         string   `json:"host"`
-	Port         int      `json:"port"`
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	AllowedRoles []string `json:"allowed_roles,omitempty"`
-	RequireMFA   bool     `json:"require_mfa"`
-	Enabled      bool     `json:"enabled"`
-}
-
-// CachedSession stores a locally cached session validation result
-type CachedSession struct {
-	SessionID  string
-	UserID     string
-	Username   string
-	Resource   string
-	ValidUntil time.Time
-}
-
-// AuthRequest is the payload sent from connect-app for authentication
-type AuthRequest struct {
-	Type      string `json:"type"`
-	Token     string `json:"token"`
-	DeviceID  string `json:"device_id"`
-	Hostname  string `json:"hostname"`
-	Timestamp int64  `json:"timestamp"`
-}
-
-// AuthResponse is sent back to connect-app after authentication
-type AuthResponse struct {
-	Type     string   `json:"type"`
-	Status   string   `json:"status"` // "authorized", "denied", "mfa_required"
-	Message  string   `json:"message"`
-	Policies []string `json:"policies"`
-}
-
-// ConnectRequest is sent by connect-app to access a specific resource
+// ConnectRequest asks the gateway to open a data relay to a resource.
 type ConnectRequest struct {
-	Type       string `json:"type"`
-	RemoteAddr string `json:"remote_addr"`
-	RemotePort int    `json:"remote_port"`
+	Type         string           `json:"type"`
+	RemoteAddr   string           `json:"remote_addr"`
+	RemotePort   int              `json:"remote_port"`
+	Token        string           `json:"token,omitempty"`
+	SessionID    string           `json:"session_id,omitempty"`
+	SessionToken string           `json:"session_token,omitempty"`
+	ResourceID   string           `json:"resource_id,omitempty"`
+	Protocol     string           `json:"protocol,omitempty"`
+	DeviceID     string           `json:"device_id,omitempty"`
+	Process      *ProcessIdentity `json:"process,omitempty"`
 }
 
-// ConnectResponse is sent back to connect-app
+// ProcessIdentity carries the local application identity observed by
+// connect-app when the TCP flow was intercepted. It is a policy/risk signal,
+// not a cryptographic attestation.
+type ProcessIdentity struct {
+	PID    int    `json:"pid,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Path   string `json:"path,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
+	Signer string `json:"signer,omitempty"`
+}
+
+// ConnectResponse is sent back to connect-app.
 type ConnectResponse struct {
 	Type    string `json:"type"`
-	Status  string `json:"status"` // "connected", "denied", "error"
+	Status  string `json:"status"`         // legacy free-form status (kept for back-compat)
+	Code    string `json:"code,omitempty"` // structured machine-readable error code
 	Message string `json:"message"`
 }
 
-// DNSResolveRequest is sent by connect-app over the yamux tunnel to resolve
-// an internal domain name to a CGNAT tunnel IP. This replaces static DNS
-// mappings — the gateway dynamically allocates a CGNAT IP on demand.
-type DNSResolveRequest struct {
-	Type   string `json:"type"`   // "dns_resolve"
-	Domain string `json:"domain"` // e.g. "bob.external.lab.local"
+// HelloRequest is the first frame a connect-app sends after yamux session
+// setup. It announces the wire-protocol version and lets the gateway reject
+// clients that are too old / too new before any auth state is allocated.
+type HelloRequest struct {
+	Type          string   `json:"type"`           // "hello"
+	ClientVersion string   `json:"client_version"` // semver, e.g. "1.0"
+	ClientApp     string   `json:"client_app"`     // "connect-app"
+	ClientBuild   string   `json:"client_build"`   // commit / build id, optional
+	Features      []string `json:"features"`       // optional capability flags
 }
 
-// DNSResolveResponse is sent back to connect-app with the allocated CGNAT IP
-type DNSResolveResponse struct {
-	Type    string `json:"type"`   // "dns_resolve_response"
-	Status  string `json:"status"` // "resolved", "not_found", "error"
-	Domain  string `json:"domain"`
-	CGNATIP string `json:"cgnat_ip,omitempty"` // allocated CGNAT address
-	TTL     int    `json:"ttl,omitempty"`      // seconds until the mapping expires
-	Message string `json:"message,omitempty"`
+// HelloResponse is the gateway's reply to a HelloRequest. A non-CodeOK reply
+// instructs the client to close the session immediately.
+type HelloResponse struct {
+	Type             string   `json:"type"` // "hello_ack"
+	Code             string   `json:"code"` // CodeOK or CodeBadRequest / CodeInternalError
+	ServerVersion    string   `json:"server_version"`
+	MinClientVersion string   `json:"min_client_version"`
+	MaxClientVersion string   `json:"max_client_version"`
+	Features         []string `json:"features"` // gateway-supported capability flags
+	Message          string   `json:"message,omitempty"`
 }
 
-// TunnelPacket wraps a raw IP packet sent by connect-app through the yamux
-// tunnel. The gateway decapsulates it and forwards it to the internal host
-// after performing DNAT (CGNAT IP → internal IP).
-type TunnelPacket struct {
-	Type string `json:"type"` // "tunnel_data"
-	Data []byte `json:"data"` // raw IP packet
-}
+// Wire-protocol version supported by this build.
+const (
+	ProtocolVersion          = "1.0"
+	ProtocolMinClientVersion = "1.0"
+	ProtocolMaxClientVersion = "1.0"
+)
 
-// AccessDecision mirrors the cloud's access decision
-type AccessDecision struct {
-	Decision    string   `json:"decision"`
-	Reason      string   `json:"reason"`
-	RiskScore   int      `json:"risk_score"`
-	MatchedRule string   `json:"matched_rule"`
-	Policies    []string `json:"policies"`
-	SessionID   string   `json:"session_id"`
-	ExpiresAt   int64    `json:"expires_at"`
-}
-
-// DeviceHealthReport for forwarding to cloud
-type DeviceHealthReport struct {
-	DeviceID     string        `json:"device_id"`
-	Hostname     string        `json:"hostname"`
-	OS           string        `json:"os"`
-	Checks       []HealthCheck `json:"checks"`
-	OverallScore int           `json:"overall_score"`
-	ReportedAt   time.Time     `json:"reported_at"`
-}
-
-// HealthCheck is a single device health check
-type HealthCheck struct {
-	Name        string            `json:"name"`
-	Status      string            `json:"status"`
-	Description string            `json:"description"`
-	Details     map[string]string `json:"details"`
-}
+// Structured error codes returned to connect-app via the Code field of
+// ConnectResponse codes are stable across versions so the client can branch
+// on machine-readable identifiers instead of matching free-form messages.
+const (
+	CodeOK               = "ok"
+	CodeAuthInvalid      = "auth_invalid"
+	CodeSessionInvalid   = "session_invalid"
+	CodeCloudUnreachable = "cloud_unreachable"
+	CodeInternalError    = "internal_error"
+	CodeBadRequest       = "bad_request"
+)
 
 // NewCloudClient creates a new client for cloud communication
 func NewCloudClient(cfg *config.Config) (*CloudClient, error) {
@@ -161,21 +131,17 @@ func NewCloudClient(cfg *config.Config) (*CloudClient, error) {
 	}
 
 	client := &CloudClient{
-		cloudURL:     cfg.CloudURL,
-		client:       httpClient,
-		pkiURL:       strings.TrimRight(strings.TrimSpace(cfg.PKIURL), "/"),
-		pkiPath:      strings.Trim(strings.TrimSpace(cfg.PKIPath), "/"),
-		pkiToken:     strings.TrimSpace(cfg.PKIToken),
-		sessionCache: make(map[string]*CachedSession),
-		breaker:      NewCircuitBreaker(),
-		stopCh:       make(chan struct{}),
+		cloudURL: cfg.CloudURL,
+		client:   httpClient,
+		pkiURL:   strings.TrimRight(strings.TrimSpace(cfg.PKIURL), "/"),
+		pkiPath:  strings.Trim(strings.TrimSpace(cfg.PKIPath), "/"),
+		pkiToken: strings.TrimSpace(cfg.PKIToken),
+		breaker:  NewCircuitBreaker(),
+		stopCh:   make(chan struct{}),
 	}
 	if client.pkiPath == "" {
 		client.pkiPath = "pki_int"
 	}
-
-	// Background session cache cleanup to prevent unbounded memory growth
-	go client.startCacheCleanup()
 
 	return client, nil
 }
@@ -233,118 +199,42 @@ func buildCloudTLSConfig(cfg *config.Config) (*tls.Config, error) {
 	}
 	tlsConfig.Certificates = []tls.Certificate{cert}
 
+	// Optional certificate pinning by SHA-256 fingerprint of the cloud's leaf
+	// certificate. When configured, this protects against a MITM that holds a
+	// valid chain from any trusted CA — only the explicitly-pinned cert is
+	// accepted. Configured via `cloud_cert_sha256` (hex, optional colons).
+	if pinHex := normalizeFingerprint(cfg.CloudCertSHA256); pinHex != "" {
+		expected, err := hex.DecodeString(pinHex)
+		if err != nil || len(expected) != 32 {
+			return nil, fmt.Errorf("cloud_cert_sha256 must be a 32-byte hex SHA-256 fingerprint (got %d bytes after normalisation)", len(expected))
+		}
+		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("cloud presented no certificate")
+			}
+			leaf := cs.PeerCertificates[0]
+			actual := sha256.Sum256(leaf.Raw)
+			if subtle.ConstantTimeCompare(actual[:], expected) != 1 {
+				return fmt.Errorf("cloud cert pinning mismatch: got %x, want %x", actual[:8], expected[:8])
+			}
+			return nil
+		}
+		log.Printf("[AUTH] Cloud cert pinning enabled (sha256=%s…)", pinHex[:16])
+	}
+
 	return tlsConfig, nil
 }
 
-// ValidateToken asks the cloud to validate a JWT auth token
-func (c *CloudClient) ValidateToken(token string) (map[string]interface{}, error) {
-	body := map[string]string{"token": token}
-	resp, err := c.cloudPost("/api/gateway/validate-token", body)
-	if err != nil {
-		return nil, fmt.Errorf("validate token: %w", err)
+// normalizeFingerprint strips whitespace and ":" separators from a hex SHA-256
+// fingerprint and lowercases it. Returns "" for an empty input.
+func normalizeFingerprint(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
 	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	if valid, ok := result["valid"].(bool); !ok || !valid {
-		errMsg := "token validation failed"
-		if e, ok := result["error"].(string); ok {
-			errMsg = e
-		}
-		return nil, fmt.Errorf("%s", errMsg)
-	}
-
-	return result, nil
-}
-
-// AuthorizeAccess asks the cloud to evaluate an access request
-func (c *CloudClient) AuthorizeAccess(userID, username, deviceID, sourceIP, resource string, port int, protocol, authToken, appID string, anomalyAlerts []string, anomalyScore int) (*AccessDecision, error) {
-	reqBody := map[string]interface{}{
-		"user_id":        userID,
-		"username":       username,
-		"device_id":      deviceID,
-		"source_ip":      sourceIP,
-		"resource":       resource,
-		"resource_port":  port,
-		"protocol":       protocol,
-		"auth_token":     authToken,
-		"app_id":         appID,
-		"anomaly_alerts": anomalyAlerts,
-		"anomaly_score":  anomalyScore,
-	}
-
-	resp, err := c.cloudPost("/api/gateway/authorize", reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("authorize access: %w", err)
-	}
-
-	var decision AccessDecision
-	if err := json.Unmarshal(resp, &decision); err != nil {
-		return nil, fmt.Errorf("parse decision: %w", err)
-	}
-
-	// Cache the session if access was granted
-	if decision.Decision == "allow" && decision.SessionID != "" {
-		c.cacheSession(decision.SessionID, userID, username, resource, decision.ExpiresAt)
-	}
-
-	return &decision, nil
-}
-
-// ReportDeviceHealth forwards a device health report to the cloud
-func (c *CloudClient) ReportDeviceHealth(report *DeviceHealthReport) error {
-	_, err := c.cloudPost("/api/gateway/device-report", report)
-	if err != nil {
-		return fmt.Errorf("report device health: %w", err)
-	}
-	log.Printf("[AUTH] Device health report forwarded to cloud for device %s", report.DeviceID)
-	return nil
-}
-
-// ValidateSession checks if a session is valid (local cache first, then cloud).
-// When the circuit breaker is open, falls back to cached sessions for resilience.
-func (c *CloudClient) ValidateSession(sessionID string) (*CachedSession, error) {
-	// Check local cache first
-	c.mu.RLock()
-	cached, ok := c.sessionCache[sessionID]
-	c.mu.RUnlock()
-
-	if ok && cached.ValidUntil.After(time.Now()) {
-		return cached, nil
-	}
-
-	// Cache miss or expired — validate with cloud
-	resp, err := c.cloudPost("/api/gateway/session-validate", map[string]string{
-		"session_id": sessionID,
-	})
-	if err != nil {
-		// If circuit is open and we have a stale cache entry, use it as fallback
-		// but only if the entry is less than 5 minutes stale (max staleness bound)
-		if err == ErrCircuitOpen && cached != nil {
-			staleness := time.Since(cached.ValidUntil)
-			if staleness < 5*time.Minute {
-				log.Printf("[AUTH] Circuit open — using stale cached session for %s (stale %s)", sessionID, staleness.Round(time.Second))
-				return cached, nil
-			}
-			log.Printf("[AUTH] Circuit open — rejecting stale cached session for %s (stale %s exceeds 5min limit)", sessionID, staleness.Round(time.Second))
-			return nil, fmt.Errorf("session cache expired beyond staleness limit")
-		}
-		return nil, fmt.Errorf("validate session: %w", err)
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
-	}
-
-	if valid, ok := result["valid"].(bool); !ok || !valid {
-		return nil, fmt.Errorf("session is no longer valid")
-	}
-
-	return cached, nil
+	s = strings.ReplaceAll(s, ":", "")
+	s = strings.ReplaceAll(s, " ", "")
+	return strings.ToLower(s)
 }
 
 // cloudPost sends a POST request to the cloud service, wrapped by the circuit breaker.
@@ -354,36 +244,24 @@ func (c *CloudClient) cloudPost(path string, payload interface{}) ([]byte, error
 	})
 }
 
-// doCloudPost is the raw POST implementation without circuit breaker.
+// doCloudPost is the raw POST implementation without circuit breaker. It
+// retries up to 3 times on transient errors (timeouts, connection refused,
+// HTTP 5xx) with exponential backoff (100ms, 200ms, 400ms ±25% jitter).
+// Permanent errors (4xx, malformed responses) skip retry.
 func (c *CloudClient) doCloudPost(path string, payload interface{}) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", c.cloudURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cloud request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("cloud returned %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
+	return c.withRetry(func() (int, []byte, error) {
+		req, reqErr := http.NewRequest(http.MethodPost, c.cloudURL+path, bytes.NewReader(body))
+		if reqErr != nil {
+			return 0, nil, fmt.Errorf("create request: %w", reqErr)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return c.doRequest(req)
+	})
 }
 
 // cloudGet sends a GET request to the cloud service, wrapped by the circuit breaker.
@@ -393,29 +271,107 @@ func (c *CloudClient) cloudGet(path string) ([]byte, error) {
 	})
 }
 
-// doCloudGet is the raw GET implementation without circuit breaker.
+// doCloudGet is the raw GET implementation without circuit breaker. Same
+// retry semantics as doCloudPost.
 func (c *CloudClient) doCloudGet(path string) ([]byte, error) {
-	req, err := http.NewRequest("GET", c.cloudURL+path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
+	return c.withRetry(func() (int, []byte, error) {
+		req, reqErr := http.NewRequest(http.MethodGet, c.cloudURL+path, nil)
+		if reqErr != nil {
+			return 0, nil, fmt.Errorf("create request: %w", reqErr)
+		}
+		return c.doRequest(req)
+	})
+}
 
+// doRequest executes a single HTTP request and returns the status code, body,
+// and error separately so the retry wrapper can decide whether to retry based
+// on the status code (5xx → retry, 4xx → fail-fast).
+func (c *CloudClient) doRequest(req *http.Request) (int, []byte, error) {
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("cloud request failed: %w", err)
+		return 0, nil, fmt.Errorf("cloud request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return resp.StatusCode, nil, fmt.Errorf("read response: %w", err)
 	}
+	return resp.StatusCode, respBody, nil
+}
 
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("cloud returned %d: %s", resp.StatusCode, string(respBody))
+// withRetry executes attempt up to 3 times with exponential backoff on
+// transient errors. The attempt returns (status, body, err) so the wrapper
+// can distinguish retryable HTTP statuses (502/503/504/408/429) from
+// permanent failures (other 4xx/5xx with stable error semantics).
+func (c *CloudClient) withRetry(attempt func() (int, []byte, error)) ([]byte, error) {
+	const maxAttempts = 3
+	baseDelay := 100 * time.Millisecond
+
+	var lastErr error
+	for i := 0; i < maxAttempts; i++ {
+		if i > 0 {
+			delay := baseDelay * time.Duration(1<<uint(i-1))
+			// ±25% jitter
+			jitter := time.Duration(rand.Int63n(int64(delay) / 2)) //nolint:gosec // non-crypto jitter
+			sleepFor := delay - delay/4 + jitter
+			select {
+			case <-time.After(sleepFor):
+			case <-c.stopCh:
+				return nil, fmt.Errorf("cloud request cancelled during shutdown")
+			}
+		}
+
+		status, body, err := attempt()
+		if err == nil && status < 400 {
+			return body, nil
+		}
+
+		// Compose an error that captures status when present.
+		current := err
+		if current == nil {
+			current = fmt.Errorf("cloud returned %d: %s", status, strings.TrimSpace(string(body)))
+		}
+
+		if !isTransient(status, err) {
+			return nil, current
+		}
+		lastErr = current
 	}
+	return nil, fmt.Errorf("cloud request failed after %d attempts: %w", maxAttempts, lastErr)
+}
 
-	return respBody, nil
+// isTransient reports whether a request should be retried. Network timeouts,
+// connection failures, and HTTP 408/429/502/503/504 are considered transient.
+// Other 4xx and 5xx responses are permanent and skip retry.
+func isTransient(status int, err error) bool {
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return true
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return true
+		}
+		// Heuristic: dial errors, connection resets, EOF on idle connection.
+		msg := err.Error()
+		if strings.Contains(msg, "connection refused") ||
+			strings.Contains(msg, "connection reset") ||
+			strings.Contains(msg, "no such host") ||
+			strings.Contains(msg, "EOF") ||
+			strings.Contains(msg, "broken pipe") {
+			return true
+		}
+	}
+	switch status {
+	case http.StatusRequestTimeout, // 408
+		http.StatusTooManyRequests,    // 429
+		http.StatusBadGateway,         // 502
+		http.StatusServiceUnavailable, // 503
+		http.StatusGatewayTimeout:     // 504
+		return true
+	}
+	return false
 }
 
 // GetCACert fetches the issuer CA certificate PEM exposed by cloud.
@@ -639,24 +595,6 @@ func dedupeStrings(values []string) []string {
 	return result
 }
 
-// GetResources fetches the gateway's assigned resources from the cloud.
-// The cloud identifies the gateway from its mTLS certificate CN.
-func (c *CloudClient) GetResources() ([]CloudResource, error) {
-	resp, err := c.cloudGet("/api/gateway/resources")
-	if err != nil {
-		return nil, fmt.Errorf("get resources: %w", err)
-	}
-
-	var result struct {
-		Resources []CloudResource `json:"resources"`
-	}
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse resources: %w", err)
-	}
-
-	return result.Resources, nil
-}
-
 // CertRenewalResponse is the response from POST /api/gateway/renew-cert
 type CertRenewalResponse struct {
 	Status  string `json:"status"`
@@ -703,192 +641,4 @@ func (c *CloudClient) ReloadTLSCert(certPath, keyPath string) error {
 	return nil
 }
 
-// cacheSession stores a validated session in the local cache.
-// The cache TTL is capped at 15 minutes to prevent stale sessions from
-// persisting when the cloud is unreachable.
-func (c *CloudClient) cacheSession(sessionID, userID, username, resource string, expiresAt int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	validUntil := time.Unix(expiresAt, 0)
-	maxCacheTTL := time.Now().Add(15 * time.Minute)
-	if validUntil.After(maxCacheTTL) {
-		validUntil = maxCacheTTL
-	}
-
-	c.sessionCache[sessionID] = &CachedSession{
-		SessionID:  sessionID,
-		UserID:     userID,
-		Username:   username,
-		Resource:   resource,
-		ValidUntil: validUntil,
-	}
-}
-
-// CleanExpiredCache removes expired entries from the session cache.
-func (c *CloudClient) CleanExpiredCache() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	now := time.Now()
-	removed := 0
-	for id, sess := range c.sessionCache {
-		if sess.ValidUntil.Before(now) {
-			delete(c.sessionCache, id)
-			removed++
-		}
-	}
-	return removed
-}
-
-// startCacheCleanup periodically removes expired session cache entries.
-func (c *CloudClient) startCacheCleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			if n := c.CleanExpiredCache(); n > 0 {
-				log.Printf("[AUTH] Cleaned %d expired session cache entries", n)
-			}
-		case <-c.stopCh:
-			return
-		}
-	}
-}
-
-// Close signals background goroutines to stop.
-func (c *CloudClient) Close() {
-	close(c.stopCh)
-}
-
-// FlushSessionCache removes all entries from the session cache.
-// Called when the gateway's own certificate may have been revoked (e.g. 403 from cloud).
-func (c *CloudClient) FlushSessionCache() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for id := range c.sessionCache {
-		delete(c.sessionCache, id)
-	}
-	log.Printf("[AUTH] Session cache flushed")
-}
-
-// ──────────────────────────────────────────────────────────────────────
-// OIDC Token Exchange — Gateway as Relying Party
-// ──────────────────────────────────────────────────────────────────────
-
-// OIDCTokenResponse is the response from the Cloud's /auth/token endpoint
-type OIDCTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
-	IDToken      string `json:"id_token"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	Nonce        string `json:"nonce,omitempty"` // OIDC nonce echo for replay validation
-	UserID       string `json:"user_id"`
-	Username     string `json:"username"`
-	Role         string `json:"role"`
-}
-
-// ExchangeCodeForToken exchanges an OIDC authorization code for tokens.
-// This is the backend-to-backend call from Gateway to Cloud (Relying Party → IdP).
-// The code was obtained via the browser redirect flow.
-func (c *CloudClient) ExchangeCodeForToken(tokenURL, clientID, clientSecret, code, redirectURI, codeVerifier string) (*OIDCTokenResponse, error) {
-	reqBody := map[string]string{
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"grant_type":    "authorization_code",
-		"code":          code,
-		"redirect_uri":  redirectURI,
-		"code_verifier": codeVerifier,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal token request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", tokenURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create token request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	log.Printf("[AUTH] OIDC token exchange: POST %s (client=%s)", tokenURL, clientID)
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("token exchange request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read token response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("token exchange failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var tokenResp OIDCTokenResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse token response: %w", err)
-	}
-
-	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("empty access_token in token response")
-	}
-
-	log.Printf("[AUTH] OIDC token exchange successful: user=%s", tokenResp.Username)
-	return &tokenResp, nil
-}
-
-// RefreshAccessToken uses a refresh token to obtain a new access token and
-// a rotated refresh token from the Cloud's /auth/token endpoint.
-func (c *CloudClient) RefreshAccessToken(tokenURL, clientID, clientSecret, refreshToken string) (*OIDCTokenResponse, error) {
-	reqBody := map[string]string{
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"grant_type":    "refresh_token",
-		"refresh_token": refreshToken,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("marshal refresh request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", tokenURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create refresh request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("refresh token request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read refresh response: %w", err)
-	}
-
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("refresh failed (HTTP %d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var tokenResp OIDCTokenResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return nil, fmt.Errorf("parse refresh response: %w", err)
-	}
-
-	if tokenResp.AccessToken == "" {
-		return nil, fmt.Errorf("empty access_token in refresh response")
-	}
-
-	log.Printf("[AUTH] Token refresh successful: user=%s", tokenResp.Username)
-	return &tokenResp, nil
-}
+func (c *CloudClient) Close() {}

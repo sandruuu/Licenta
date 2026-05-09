@@ -2,7 +2,7 @@
 
 This lab simulates:
 
-- `cloud` (IdP + policy decision point) in a public segment
+- `pdp` (PA + PE + IdP) in a public segment
 - `gateway-*` services in a DMZ segment
 - internal resources (`rdp-desktop`, `web-app`) in a private segment
 - `private-dns` used by gateway to resolve `internal_url` targets
@@ -46,7 +46,7 @@ nslookup web.internal.lab.local 127.0.0.1 -port=1053
 Notes:
 
 - `connect-app` still runs on the Windows host (not in Docker).
-- OIDC browser endpoints are exposed on `https://localhost:8443` (cloud) and callback on `https://localhost:9444`.
+- OIDC browser endpoints are exposed on `https://localhost:8443` (PDP) and callback on `https://localhost:9444`.
 - Gateway tunnel endpoint for `connect-app` is `localhost:9443`.
-- `PKI_URL` and `PKI_TOKEN` are consumed by both cloud and gateway services during Vault-profile runs.
+- `PKI_URL` and `PKI_TOKEN` are consumed by both PDP and gateway services during Vault-profile runs.
 - Vault in Docker lab runs in dev mode only (profile `vault`) and is intended for migration/testing, not production hardening.

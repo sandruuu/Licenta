@@ -1,0 +1,28 @@
+{
+  "listen_addr": ":9443",
+  "fqdn": "localhost",
+  "tls_cert": "",
+  "tls_key": "",
+  "tls_ca": "",
+  "client_ca": "",
+  "cloud_ca": "./certs/cloud-ca.crt",
+  "require_client_cert": false,
+  "mtls_cert": "./certs/gateway-mtls.crt",
+  "mtls_key": "./certs/gateway-mtls.key",
+  "mtls_csr": "./certs/gateway-mtls.csr",
+  "cloud_url": "https://localhost:8443",
+  "enrollment_token": "",
+  "control_plane": {
+    "enabled": false,
+    "pa_url": "https://localhost:8443",
+    "gateway_id": "gateway-local",
+    "gateway_endpoint": "localhost:9443",
+    "ca_file": "./certs/cloud-ca.crt",
+    "cert_file": "./certs/gateway-mtls.crt",
+    "key_file": "./certs/gateway-mtls.key"
+  },
+  "pki_path": "pki_int",
+  "pki_role_gateway": "ztna-gateway",
+  "dev_mode": true,
+  "max_relay_bandwidth_mbps": 400
+}

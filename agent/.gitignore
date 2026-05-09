@@ -1,0 +1,6 @@
+*.exe
+*.exe~
+*.log
+*.err
+data/
+internal/tray/frontend/node_modules/

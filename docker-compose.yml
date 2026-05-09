@@ -25,31 +25,30 @@ networks:
         - subnet: 172.24.0.0/24
 
 services:
-  cloud:
+  pdp:
     build:
-      context: ./cloud
+      context: ./pdp
       dockerfile: Dockerfile
-    container_name: ztna-cloud
+    container_name: ztna-pdp
     ports:
       - "8443:8443"
     networks:
       public:
         ipv4_address: 172.30.0.20
         aliases:
-          - cloud.ztna.local
+          - pdp.ztna.local
       security:
         ipv4_address: 172.24.0.20
     volumes:
-      - ./cloud/certs:/app/certs:ro
-      - ./cloud/data:/app/data
-      - ./cloud/dashboard/dist:/app/dashboard/dist:ro
+      - ./pdp/certs:/app/certs:ro
+      - ./pdp/data:/app/data
+      - ./pdp/pa/dashboard/dist:/app/dashboard/dist:ro
     environment:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
       - PKI_URL=${PKI_URL:-http://vault:8200}
       - PKI_TOKEN=${PKI_TOKEN:-}
       - PKI_PATH=${PKI_PATH:-pki_int}
       - PKI_ROLE_DEVICE=${PKI_ROLE_DEVICE:-ztna-device}
-      - PKI_ROLE_HEALTH=${PKI_ROLE_HEALTH:-ztna-device-health}
       - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
       - PKI_CA_FILE=${PKI_CA_FILE:-}
       - PKI_SERVER_NAME=${PKI_SERVER_NAME:-}
@@ -136,7 +135,7 @@ services:
         condition: service_healthy
       syslog:
         condition: service_started
-      cloud:
+      pdp:
         condition: service_healthy
     restart: unless-stopped
 
@@ -169,7 +168,7 @@ services:
       - PKI_PATH=${PKI_PATH:-pki_int}
       - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
     depends_on:
-      cloud:
+      pdp:
         condition: service_healthy
       sessionstore:
         condition: service_healthy

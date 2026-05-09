@@ -122,12 +122,10 @@ func TestGetVaultRevokedSerialsSendsToken(t *testing.T) {
 
 func newCloudClientForTests(cloudURL string) *CloudClient {
 	return &CloudClient{
-		cloudURL:     strings.TrimRight(cloudURL, "/"),
-		client:       &http.Client{Timeout: 2 * time.Second},
-		pkiPath:      "pki_int",
-		sessionCache: make(map[string]*CachedSession),
-		breaker:      NewCircuitBreaker(),
-		stopCh:       make(chan struct{}),
+		cloudURL: strings.TrimRight(cloudURL, "/"),
+		client:   &http.Client{Timeout: 2 * time.Second},
+		pkiPath:  "pki_int",
+		breaker:  NewCircuitBreaker(),
 	}
 }
 
