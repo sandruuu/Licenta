@@ -88,6 +88,10 @@ func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskSco
 	req := ctx.Request
 	cond := rule.Conditions
 
+	if !matchesRuleScope(rule, req) {
+		return false
+	}
+
 	if len(cond.AllowedRoles) > 0 {
 		if strings.TrimSpace(ctx.UserRole) == "" || !containsString(cond.AllowedRoles, ctx.UserRole) {
 			return false
@@ -206,6 +210,36 @@ func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskSco
 	}
 
 	return true
+}
+
+func matchesRuleScope(rule *models.PolicyRule, req models.AccessRequest) bool {
+	if rule == nil {
+		return false
+	}
+
+	ruleTenantID := strings.TrimSpace(rule.TenantID)
+	requestTenantID := strings.TrimSpace(req.TenantID)
+	if ruleTenantID != "" && !strings.EqualFold(ruleTenantID, requestTenantID) {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(rule.Scope)) {
+	case "resource":
+		resourceID := strings.TrimSpace(rule.ResourceID)
+		if resourceID == "" {
+			return false
+		}
+		return strings.EqualFold(resourceID, strings.TrimSpace(req.Resource)) ||
+			strings.EqualFold(resourceID, strings.TrimSpace(req.AppID))
+	case "gateway":
+		gatewayID := strings.TrimSpace(rule.GatewayID)
+		if gatewayID == "" {
+			return false
+		}
+		return strings.EqualFold(gatewayID, strings.TrimSpace(req.GatewayID))
+	default:
+		return true
+	}
 }
 
 func (e *Engine) defaultDecision(req models.AccessRequest, riskScore int) *models.AccessDecision {

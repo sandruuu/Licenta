@@ -32,6 +32,7 @@ type Config struct {
 	AuthorizedUserSID string
 	CloudIssuer       string
 	CloudURL          string
+	CloudCertSHA256   string
 	JWKSURL           string
 	CAFile            string
 	DNSServer         string
@@ -88,6 +89,9 @@ func InstallOrUpdate(config Config, logger *slog.Logger) error {
 	}
 	if strings.TrimSpace(config.CloudURL) != "" {
 		args = append(args, "--cloud-url", config.CloudURL)
+	}
+	if strings.TrimSpace(config.CloudCertSHA256) != "" {
+		args = append(args, "--cloud-cert-sha256", config.CloudCertSHA256)
 	}
 	if strings.TrimSpace(config.JWKSURL) != "" {
 		args = append(args, "--jwks-url", config.JWKSURL)

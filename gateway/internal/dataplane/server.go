@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -166,12 +167,8 @@ func (gateway *Gateway) listen() (net.Listener, error) {
 		return nil, err
 	}
 	if !useTLS {
-		if !gateway.cfg.DevMode {
-			baseListener.Close()
-			return nil, fmt.Errorf("tls_cert and tls_key are required when dev_mode is false")
-		}
-		log.Printf("[GATEWAY] dev_mode enabled: accepting plaintext yamux connections on %s", addr)
-		return baseListener, nil
+		baseListener.Close()
+		return nil, fmt.Errorf("tls_cert and tls_key are required")
 	}
 	return tls.NewListener(baseListener, tlsConfig), nil
 }
@@ -180,15 +177,6 @@ func (gateway *Gateway) buildServerTLSConfig() (*tls.Config, bool, error) {
 	useAutocert := gateway.cfg.LetsEncrypt && strings.TrimSpace(gateway.cfg.FQDN) != ""
 	certPath := strings.TrimSpace(gateway.cfg.TLSCert)
 	keyPath := strings.TrimSpace(gateway.cfg.TLSKey)
-
-	if !useAutocert && (certPath == "" || keyPath == "") && gateway.cfg.DevMode {
-		generatedCert, generatedKey, err := generateSelfSignedCert(firstNonEmpty(gateway.cfg.FQDN, "localhost"), "certs")
-		if err != nil {
-			return nil, false, fmt.Errorf("generate development TLS certificate: %w", err)
-		}
-		certPath, keyPath = generatedCert, generatedKey
-		log.Printf("[GATEWAY] generated development self-signed TLS certificate")
-	}
 
 	if !useAutocert && (certPath == "" || keyPath == "") {
 		return nil, false, nil
@@ -649,8 +637,29 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		log.Printf("[GATEWAY] generate renewal key failed: %v", err)
 		return
 	}
-	fqdn := firstNonEmpty(gateway.cfg.FQDN, cert.Subject.CommonName)
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: fqdn}}, newKey)
+	gatewayID, tenantID := gateway.identityForCertificateRenewal()
+	if gatewayID == "" || tenantID == "" {
+		log.Printf("[GATEWAY] cannot renew mTLS certificate: tenant_id and gateway_id are required")
+		return
+	}
+	fqdn := firstNonEmpty(gateway.cfg.FQDN, firstDNSName(cert))
+	identityURL, err := url.Parse(fmt.Sprintf(
+		"spiffe://ztna.local/tenant/%s/gateway/%s",
+		url.PathEscape(tenantID),
+		url.PathEscape(gatewayID),
+	))
+	if err != nil {
+		log.Printf("[GATEWAY] build renewal identity URI failed: %v", err)
+		return
+	}
+	renewalCSR := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: gatewayID},
+		URIs:    []*url.URL{identityURL},
+	}
+	if fqdn != "" {
+		renewalCSR.DNSNames = []string{fqdn}
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, renewalCSR, newKey)
 	if err != nil {
 		log.Printf("[GATEWAY] create renewal CSR failed: %v", err)
 		return
@@ -683,7 +692,30 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		log.Printf("[GATEWAY] reload renewed mTLS certificate failed: %v", err)
 		return
 	}
-	log.Printf("[GATEWAY] renewed mTLS certificate for %s", fqdn)
+	log.Printf("[GATEWAY] renewed mTLS certificate for gateway_id=%s tenant_id=%s", gatewayID, tenantID)
+}
+
+func (gateway *Gateway) identityForCertificateRenewal() (gatewayID, tenantID string) {
+	if gateway == nil || gateway.cfg == nil {
+		return "", ""
+	}
+	tenantID = strings.TrimSpace(gateway.cfg.TenantID)
+	if gateway.cfg.ControlPlane != nil {
+		gatewayID = strings.TrimSpace(gateway.cfg.ControlPlane.GatewayID)
+	}
+	return gatewayID, tenantID
+}
+
+func firstDNSName(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	for _, name := range cert.DNSNames {
+		if strings.TrimSpace(name) != "" {
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
 }
 
 func (gateway *Gateway) Shutdown() {
@@ -835,59 +867,6 @@ func rateLimitedCopy(dst io.Writer, src io.Reader, bytesPerSecond, bufferSize in
 			return total, readErr
 		}
 	}
-}
-
-func generateSelfSignedCert(fqdn, dir string) (string, string, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", "", err
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return "", "", err
-	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return "", "", err
-	}
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: fqdn},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().AddDate(1, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{fqdn, "localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return "", "", err
-	}
-	certPath := dir + "/gateway-selfsigned.crt"
-	keyPath := dir + "/gateway-selfsigned.key"
-	certOut, err := os.OpenFile(certPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", "", err
-	}
-	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
-		certOut.Close()
-		return "", "", err
-	}
-	certOut.Close()
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return "", "", err
-	}
-	keyOut, err := os.OpenFile(keyPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", "", err
-	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}); err != nil {
-		keyOut.Close()
-		return "", "", err
-	}
-	keyOut.Close()
-	return certPath, keyPath, nil
 }
 
 func firstNonEmpty(values ...string) string {

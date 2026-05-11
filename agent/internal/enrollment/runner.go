@@ -33,12 +33,13 @@ type InstallResult struct {
 }
 
 type RunnerConfig struct {
-	CloudURL    string
-	CAFile      string
-	Hostname    string
-	HTTPClient  *http.Client
-	KeyProvider KeyProvider
-	Installer   CertificateInstaller
+	CloudURL        string
+	CAFile          string
+	CloudCertSHA256 string
+	Hostname        string
+	HTTPClient      *http.Client
+	KeyProvider     KeyProvider
+	Installer       CertificateInstaller
 }
 
 type RunnerInput struct {
@@ -67,12 +68,13 @@ type RunnerResult struct {
 }
 
 type Runner struct {
-	cloudURL    string
-	caFile      string
-	hostname    string
-	httpClient  *http.Client
-	keyProvider KeyProvider
-	installer   CertificateInstaller
+	cloudURL        string
+	caFile          string
+	cloudCertSHA256 string
+	hostname        string
+	httpClient      *http.Client
+	keyProvider     KeyProvider
+	installer       CertificateInstaller
 }
 
 func NewRunner(config RunnerConfig) (*Runner, error) {
@@ -88,12 +90,13 @@ func NewRunner(config RunnerConfig) (*Runner, error) {
 		installer = NoopCertificateInstaller{}
 	}
 	return &Runner{
-		cloudURL:    cloudURL,
-		caFile:      strings.TrimSpace(config.CAFile),
-		hostname:    strings.TrimSpace(config.Hostname),
-		httpClient:  config.HTTPClient,
-		keyProvider: config.KeyProvider,
-		installer:   installer,
+		cloudURL:        cloudURL,
+		caFile:          strings.TrimSpace(config.CAFile),
+		cloudCertSHA256: strings.TrimSpace(config.CloudCertSHA256),
+		hostname:        strings.TrimSpace(config.Hostname),
+		httpClient:      config.HTTPClient,
+		keyProvider:     config.KeyProvider,
+		installer:       installer,
 	}, nil
 }
 
@@ -130,14 +133,21 @@ func (runner *Runner) Enroll(ctx context.Context, input RunnerInput) (*RunnerRes
 	if err != nil {
 		return nil, fmt.Errorf("compute key fingerprint: %w", err)
 	}
+	keyProof, err := ComputeKeyProof(signer, input.DeviceID, fingerprint)
+	if err != nil {
+		// Non-fatal: enrollment proceeds without TPM proof-of-possession.
+		fmt.Printf("WARNING: failed to compute TPM key proof: %v\n", err)
+	}
 	estResult, err := SimpleEnrollWithToken(ctx, TokenEnrollmentConfig{
-		CloudURL:   runner.cloudURL,
-		CAFile:     runner.caFile,
-		Token:      input.Token,
-		Nonce:      input.Nonce,
-		DeviceID:   input.DeviceID,
-		Hostname:   hostname,
-		HTTPClient: runner.httpClient,
+		CloudURL:        runner.cloudURL,
+		CAFile:          runner.caFile,
+		CloudCertSHA256: runner.cloudCertSHA256,
+		Token:           input.Token,
+		Nonce:           input.Nonce,
+		DeviceID:        input.DeviceID,
+		Hostname:        hostname,
+		KeyProof:        keyProof,
+		HTTPClient:      runner.httpClient,
 	}, csrPEM, fingerprint)
 	if err != nil {
 		return nil, err
@@ -192,6 +202,7 @@ func (runner *Runner) Renew(ctx context.Context, input RenewalInput) (*RunnerRes
 	renewalResult, err := RenewWithMTLS(ctx, RenewalConfig{
 		CloudURL:             runner.cloudURL,
 		CAFile:               runner.caFile,
+		CloudCertSHA256:      runner.cloudCertSHA256,
 		DeviceID:             input.DeviceID,
 		Hostname:             hostname,
 		CSRPEM:               csrPEM,

@@ -262,3 +262,40 @@ export async function revokeSession(id) {
 export async function getAuditLog(limit = 100) {
   return apiFetch(`/admin/audit?limit=${limit}`);
 }
+
+// ─── Identity Providers (per Tenant) ────────
+
+export async function getIdPs(tenantId) {
+  return apiFetch(`/admin/tenants/idps?tenant_id=${encodeURIComponent(tenantId)}`);
+}
+
+export async function createIdP(tenantId, data) {
+  return apiFetch(`/admin/tenants/idps?tenant_id=${encodeURIComponent(tenantId)}`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getIdP(id) {
+  return apiFetch(`/admin/tenants/idps/${id}`);
+}
+
+export async function updateIdP(id, data) {
+  return apiFetch(`/admin/tenants/idps/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteIdP(id) {
+  return apiFetch(`/admin/tenants/idps/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function discoverIdP(issuer) {
+  return apiFetch(`/admin/tenants/idps/discover`, {
+    method: 'POST',
+    body: JSON.stringify({ issuer }),
+  });
+}

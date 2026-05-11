@@ -134,22 +134,26 @@ func (s *Server) authenticateGatewayCertificate(peerCert *x509.Certificate) (*mo
 	if peerCert == nil {
 		return nil, 401, "client certificate required for gateway authentication"
 	}
-	cn := strings.TrimSpace(peerCert.Subject.CommonName)
-	if cn == "" {
-		return nil, 401, "client certificate has no CommonName"
+	tenantID, gatewayID, ok := pagateway.GatewayCertificateIdentity(peerCert)
+	if !ok {
+		return nil, 401, "client certificate has no gateway URI SAN identity"
 	}
-	gateway, found := s.pa.Store.GetGatewayByFQDN(cn)
+	gateway, found := s.pa.Store.GetGateway(gatewayID)
 	if !found || gateway.Status != "enrolled" {
-		log.Printf("[AUTH] Rejected gateway request: CN=%q not found or not enrolled", cn)
-		return nil, 403, "gateway not enrolled or certificate CN not recognized"
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q not found or not enrolled", gatewayID)
+		return nil, 403, "gateway not enrolled or certificate identity not recognized"
+	}
+	if strings.TrimSpace(gateway.TenantID) != tenantID {
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q tenant mismatch cert=%q store=%q", gatewayID, tenantID, gateway.TenantID)
+		return nil, 403, "gateway certificate tenant does not match enrollment record"
 	}
 	if strings.TrimSpace(gateway.CertFingerprint) == "" {
-		log.Printf("[AUTH] Rejected gateway request: CN=%q enrolled but has no certificate fingerprint on record", cn)
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q enrolled but has no certificate fingerprint on record", gatewayID)
 		return nil, 403, "gateway enrollment record is incomplete (missing certificate fingerprint)"
 	}
 	fingerprint := clientCertificateFingerprint(peerCert)
 	if subtle.ConstantTimeCompare([]byte(fingerprint), []byte(gateway.CertFingerprint)) != 1 {
-		log.Printf("[AUTH] Rejected gateway request: CN=%q fingerprint mismatch", cn)
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q fingerprint mismatch", gatewayID)
 		return nil, 403, "certificate fingerprint does not match enrollment record"
 	}
 	return gateway, 0, ""

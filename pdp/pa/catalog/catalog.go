@@ -53,6 +53,20 @@ func (service *Service) BuildForRole(role string) Snapshot {
 	return newSnapshot(suffixes, entries)
 }
 
+func (service *Service) BuildForTenantRole(tenantID, role string) Snapshot {
+	if service == nil || service.store == nil {
+		return EmptySnapshot()
+	}
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return service.BuildForRole(role)
+	}
+	resources := service.store.ListResourcesByTenant(tenantID)
+	suffixes := buildSuffixes(resources, role)
+	entries := buildResources(resources, role)
+	return newSnapshot(suffixes, entries)
+}
+
 func ResourceVisibleForRole(resource *models.Resource, role string) bool {
 	if resource == nil {
 		return false
@@ -74,7 +88,7 @@ func ResourceProtocol(resource *models.Resource) string {
 		return "tcp"
 	}
 	protocol := strings.ToLower(strings.TrimSpace(resource.Type))
-	if protocol == "" || protocol == "gateway" {
+	if protocol == "" {
 		protocol = "tcp"
 	}
 	if protocol == "web" {

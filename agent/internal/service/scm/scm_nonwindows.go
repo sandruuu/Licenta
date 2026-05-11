@@ -16,6 +16,7 @@ type Config struct {
 	AuthorizedUserSID string
 	CloudIssuer       string
 	CloudURL          string
+	CloudCertSHA256   string
 	JWKSURL           string
 	CAFile            string
 	DNSServer         string

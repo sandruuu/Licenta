@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -62,6 +63,7 @@ type RenewalResult struct {
 }
 
 type CreateGatewayRequest struct {
+	TenantID          string                   `json:"tenant_id"`
 	Name              string                   `json:"name"`
 	FQDN              string                   `json:"fqdn,omitempty"`
 	AssignedResources []string                 `json:"assigned_resources,omitempty"`
@@ -75,6 +77,7 @@ type CreateGatewayResult struct {
 }
 
 type UpdateGatewayRequest struct {
+	TenantID          string                   `json:"tenant_id,omitempty"`
 	Name              string                   `json:"name,omitempty"`
 	FQDN              string                   `json:"fqdn,omitempty"`
 	AssignedResources []string                 `json:"assigned_resources,omitempty"`
@@ -90,6 +93,7 @@ type RegenerateTokenResult struct {
 
 type GatewayListItem struct {
 	ID                string                   `json:"id"`
+	TenantID          string                   `json:"tenant_id"`
 	Name              string                   `json:"name"`
 	FQDN              string                   `json:"fqdn"`
 	Status            string                   `json:"status"`
@@ -145,6 +149,13 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	if name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidRequest)
 	}
+	tenantID, err := s.validateTenant(req.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateAssignedResourcesTenant(tenantID, req.AssignedResources); err != nil {
+		return nil, err
+	}
 	authMode := strings.TrimSpace(req.AuthMode)
 	if authMode == "" {
 		authMode = defaultGatewayAuthMode
@@ -176,11 +187,15 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	}
 
 	now := s.clock()
+	tokenHashRaw := sha256.Sum256([]byte(enrollmentToken))
+	tokenHash := hex.EncodeToString(tokenHashRaw[:])
 	gateway := &models.Gateway{
 		ID:                gatewayID,
+		TenantID:          tenantID,
+		TenantIDs:         []string{tenantID},
 		Name:              name,
 		FQDN:              strings.TrimSpace(req.FQDN),
-		EnrollmentToken:   enrollmentToken,
+		EnrollmentToken:   tokenHash,
 		TokenExpiresAt:    now.Add(gatewayEnrollmentTokenTTL).Format(time.RFC3339),
 		Status:            "pending",
 		AssignedResources: append([]string(nil), req.AssignedResources...),
@@ -214,8 +229,30 @@ func (s *Service) UpdateGateway(id string, req UpdateGatewayRequest) (*models.Ga
 	if req.FQDN != "" {
 		gateway.FQDN = req.FQDN
 	}
+	targetTenantID := gateway.TenantID
+	if strings.TrimSpace(req.TenantID) != "" && !strings.EqualFold(req.TenantID, gateway.TenantID) {
+		if gateway.Status == "enrolled" {
+			return nil, fmt.Errorf("%w: enrolled gateways cannot be moved between tenants", ErrInvalidRequest)
+		}
+		tenantID, err := s.validateTenant(req.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		targetTenantID = tenantID
+	}
+	targetResources := gateway.AssignedResources
 	if req.AssignedResources != nil {
-		gateway.AssignedResources = append([]string(nil), req.AssignedResources...)
+		targetResources = append([]string(nil), req.AssignedResources...)
+	}
+	if err := s.validateAssignedResourcesTenant(targetTenantID, targetResources); err != nil {
+		return nil, err
+	}
+	if !strings.EqualFold(targetTenantID, gateway.TenantID) {
+		gateway.TenantID = targetTenantID
+		gateway.TenantIDs = []string{targetTenantID}
+	}
+	if req.AssignedResources != nil {
+		gateway.AssignedResources = targetResources
 	}
 	if req.AuthMode == defaultGatewayAuthMode || req.AuthMode == federatedGatewayAuthMode {
 		gateway.AuthMode = req.AuthMode
@@ -259,7 +296,9 @@ func (s *Service) RegenerateEnrollmentToken(id string) (*RegenerateTokenResult, 
 		return nil, fmt.Errorf("%w: generate enrollment token: %v", ErrGatewayTokenGeneration, err)
 	}
 	now := s.clock()
-	gateway.EnrollmentToken = enrollmentToken
+	tokenHashRaw := sha256.Sum256([]byte(enrollmentToken))
+	tokenHash := hex.EncodeToString(tokenHashRaw[:])
+	gateway.EnrollmentToken = tokenHash
 	gateway.TokenExpiresAt = now.Add(gatewayEnrollmentTokenTTL).Format(time.RFC3339)
 	gateway.Status = "pending"
 	gateway.UpdatedAt = now
@@ -303,18 +342,44 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	if gateway.Status == "enrolled" {
 		return nil, ErrGatewayAlreadyEnrolled
 	}
+	if gateway.Status == "revoked" {
+		return nil, fmt.Errorf("%w: revoked gateways cannot be enrolled", ErrForbidden)
+	}
+	if strings.TrimSpace(gateway.TenantID) == "" {
+		return nil, fmt.Errorf("%w: gateway tenant_id is required before enrollment", ErrInvalidRequest)
+	}
+	if requestGatewayID := strings.TrimSpace(req.GatewayID); requestGatewayID != "" && requestGatewayID != gateway.ID {
+		return nil, fmt.Errorf("%w: enrollment gateway_id does not match token gateway", ErrForbidden)
+	}
+	if requestTenantID := strings.TrimSpace(req.TenantID); requestTenantID != "" && requestTenantID != gateway.TenantID {
+		return nil, fmt.Errorf("%w: enrollment tenant_id does not match token tenant", ErrForbidden)
+	}
+
+	csr, err := parseGatewayCSR(req.CSRPEM)
+	if err != nil {
+		return nil, err
+	}
+	fqdn := strings.TrimSpace(req.FQDN)
+	if fqdn == "" {
+		fqdn = strings.TrimSpace(gateway.FQDN)
+	}
+	if err := validateGatewayCSRIdentity(csr, gateway, fqdn); err != nil {
+		return nil, err
+	}
+	if !s.store.ConsumeGatewayEnrollmentToken(gateway.ID, req.Token, s.clock()) {
+		return nil, ErrInvalidEnrollmentToken
+	}
 
 	certPEM, err := s.signer([]byte(req.CSRPEM), gatewayCertificateValidityDays, s.pkiRole)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
+	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
+		return nil, err
+	}
 	certFingerprint, certSerial := certificateIdentity(certPEM)
 
 	now := s.clock()
-	fqdn := strings.TrimSpace(req.FQDN)
-	if fqdn == "" {
-		fqdn = gateway.FQDN
-	}
 	gateway.Status = "enrolled"
 	gateway.EnrollmentToken = ""
 	gateway.TokenExpiresAt = ""
@@ -352,8 +417,8 @@ func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string
 	if err != nil {
 		return nil, err
 	}
-	if csr.Subject.CommonName != gateway.FQDN {
-		return nil, fmt.Errorf("%w: CSR CommonName does not match authenticated gateway FQDN", ErrForbidden)
+	if err := validateGatewayCSRIdentity(csr, gateway, strings.TrimSpace(gateway.FQDN)); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForbidden, err)
 	}
 
 	oldSerial := gateway.CertSerial
@@ -366,6 +431,9 @@ func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string
 	certPEM, err := s.signer([]byte(csrPEM), gatewayCertificateValidityDays, s.pkiRole)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
+	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
+		return nil, err
 	}
 	certFingerprint, certSerial := certificateIdentity(certPEM)
 	now := s.clock()
@@ -416,6 +484,36 @@ func (s *Service) readyStore() error {
 	return nil
 }
 
+func (s *Service) validateTenant(tenantID string) (string, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return "", fmt.Errorf("%w: tenant_id is required", ErrInvalidRequest)
+	}
+	tenant, found := s.store.GetTenant(tenantID)
+	if !found || tenant == nil || !tenant.Enabled {
+		return "", fmt.Errorf("%w: tenant not found or disabled", ErrInvalidRequest)
+	}
+	return tenantID, nil
+}
+
+func (s *Service) validateAssignedResourcesTenant(tenantID string, resourceIDs []string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	for _, resourceID := range resourceIDs {
+		resourceID = strings.TrimSpace(resourceID)
+		if resourceID == "" {
+			continue
+		}
+		resource, found := s.store.GetResource(resourceID)
+		if !found || resource == nil {
+			return fmt.Errorf("%w: assigned resource %s not found", ErrInvalidRequest, resourceID)
+		}
+		if strings.TrimSpace(resource.TenantID) != "" && !strings.EqualFold(resource.TenantID, tenantID) {
+			return fmt.Errorf("%w: assigned resource %s belongs to a different tenant", ErrInvalidRequest, resourceID)
+		}
+	}
+	return nil
+}
+
 func (s *Service) clock() time.Time {
 	if s != nil && s.now != nil {
 		return s.now()
@@ -444,7 +542,90 @@ func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("%w: CSR signature invalid: %v", ErrInvalidCSR, err)
+	}
 	return csr, nil
+}
+
+func validateGatewayCSRIdentity(csr *x509.CertificateRequest, gateway *models.Gateway, fqdn string) error {
+	if csr == nil || gateway == nil {
+		return fmt.Errorf("%w: CSR and gateway identity are required", ErrInvalidCSR)
+	}
+	tenantID := strings.TrimSpace(gateway.TenantID)
+	gatewayID := strings.TrimSpace(gateway.ID)
+	if tenantID == "" || gatewayID == "" {
+		return fmt.Errorf("%w: gateway tenant_id and gateway_id are required", ErrInvalidCSR)
+	}
+	if !csrHasGatewayIdentity(csr, tenantID, gatewayID) {
+		return fmt.Errorf("%w: CSR must include URI SAN %q", ErrInvalidCSR, GatewayIdentityURI(tenantID, gatewayID))
+	}
+	if fqdn = strings.TrimSpace(fqdn); fqdn != "" && !stringSliceContainsFold(csr.DNSNames, fqdn) {
+		return fmt.Errorf("%w: CSR DNS SAN must include gateway FQDN %q", ErrInvalidCSR, fqdn)
+	}
+	return nil
+}
+
+func validateGatewayCertificate(certPEM []byte, csr *x509.CertificateRequest, gateway *models.Gateway) error {
+	cert, err := parseLeafCertificate(certPEM)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
+	if cert.IsCA {
+		return fmt.Errorf("%w: issued gateway certificate must not be a CA", ErrInvalidCSR)
+	}
+	if !certificateHasGatewayIdentity(cert, gateway.TenantID, gateway.ID) {
+		return fmt.Errorf("%w: issued certificate does not contain expected gateway URI SAN", ErrInvalidCSR)
+	}
+	if !publicKeysEqual(cert.PublicKey, csr.PublicKey) {
+		return fmt.Errorf("%w: issued certificate public key does not match CSR", ErrInvalidCSR)
+	}
+	if !extKeyUsageContains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
+		return fmt.Errorf("%w: issued gateway certificate must allow client authentication", ErrInvalidCSR)
+	}
+	return nil
+}
+
+func parseLeafCertificate(certPEM []byte) (*x509.Certificate, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("certificate PEM is invalid")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+func publicKeysEqual(left, right interface{}) bool {
+	leftDER, err := x509.MarshalPKIXPublicKey(left)
+	if err != nil {
+		return false
+	}
+	rightDER, err := x509.MarshalPKIXPublicKey(right)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(leftDER, rightDER)
+}
+
+func extKeyUsageContains(usages []x509.ExtKeyUsage, expected x509.ExtKeyUsage) bool {
+	for _, usage := range usages {
+		if usage == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func stringSliceContainsFold(values []string, expected string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), expected) {
+			return true
+		}
+	}
+	return false
 }
 
 func certificateIdentity(certPEM []byte) (string, string) {
@@ -474,13 +655,14 @@ func randomHex(bytesLen int) (string, error) {
 func gatewayListItem(gateway *models.Gateway) GatewayListItem {
 	return GatewayListItem{
 		ID:                gateway.ID,
+		TenantID:          gateway.TenantID,
 		Name:              gateway.Name,
 		FQDN:              gateway.FQDN,
 		Status:            gateway.Status,
 		ListenAddr:        gateway.ListenAddr,
 		PublicIP:          gateway.PublicIP,
 		OIDCClientID:      gateway.OIDCClientID,
-		EnrollmentToken:   gateway.EnrollmentToken,
+		EnrollmentToken:   "", // Never expose token hash — admin gets plaintext at creation only
 		TokenExpiresAt:    gateway.TokenExpiresAt,
 		CertExpiresAt:     gateway.CertExpiresAt,
 		AssignedResources: append([]string(nil), gateway.AssignedResources...),
@@ -498,6 +680,8 @@ func sanitizeGatewayForAdmin(gateway *models.Gateway) *models.Gateway {
 	}
 	copy := *gateway
 	copy.AssignedResources = append([]string(nil), gateway.AssignedResources...)
+	copy.TenantIDs = append([]string(nil), gateway.TenantIDs...)
+	copy.EnrollmentToken = "" // Never expose token hash — defense in depth
 	copy.OIDCClientSecret = ""
 	copy.CertPEM = ""
 	copy.FederationConfig = sanitizeFederationConfig(gateway.FederationConfig)

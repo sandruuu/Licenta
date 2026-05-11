@@ -48,6 +48,7 @@ type Options struct {
 	AuthorizedUserSID          string
 	CloudIssuer                string
 	CloudURL                   string
+	CloudCertSHA256            string
 	JWKSURL                    string
 	CAFile                     string
 	Logger                     *slog.Logger
@@ -329,10 +330,11 @@ func New(options Options) *Service {
 	enrollmentRunner := options.EnrollmentRunner
 	if enrollmentRunner == nil && strings.TrimSpace(options.CloudURL) != "" {
 		runner, err := enrollment.NewRunner(enrollment.RunnerConfig{
-			CloudURL:    options.CloudURL,
-			CAFile:      options.CAFile,
-			KeyProvider: deviceidentity.NewKeyStore(),
-			Installer:   enrollment.NewDefaultCertificateInstaller(),
+			CloudURL:        options.CloudURL,
+			CAFile:          options.CAFile,
+			CloudCertSHA256: options.CloudCertSHA256,
+			KeyProvider:     deviceidentity.NewKeyStore(),
+			Installer:       enrollment.NewDefaultCertificateInstaller(),
 		})
 		if err == nil {
 			enrollmentRunner = runner

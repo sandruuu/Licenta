@@ -91,8 +91,12 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	if strings.TrimSpace(resource.Name) == "" || strings.TrimSpace(resource.Type) == "" {
 		return nil, fmt.Errorf("%w: name and type are required", ErrInvalidRequest)
 	}
+	resource.Type = normalizeResourceType(resource.Type)
 	if !validResourceType(resource.Type) {
-		return nil, fmt.Errorf("%w: type must be ssh, rdp, web, or gateway", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
+	}
+	if err := service.validateResourceScope(&resource); err != nil {
+		return nil, err
 	}
 
 	now := service.clock()
@@ -151,6 +155,7 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyStringField(fields, "name", &updated.Name)
 	applyStringField(fields, "description", &updated.Description)
 	applyStringField(fields, "type", &updated.Type)
+	updated.Type = normalizeResourceType(updated.Type)
 	applyStringField(fields, "host", &updated.Host)
 	applyIntField(fields, "port", &updated.Port)
 	applyStringField(fields, "external_url", &updated.ExternalURL)
@@ -164,6 +169,15 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyStringField(fields, "key_pem", &updated.KeyPEM)
 	applyStringField(fields, "cert_expiry", &updated.CertExpiry)
 	applyStringField(fields, "cert_domain", &updated.CertDomain)
+	applyStringField(fields, "tenant_id", &updated.TenantID)
+	applyStringField(fields, "gateway_id", &updated.GatewayID)
+
+	if !validResourceType(updated.Type) {
+		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
+	}
+	if err := service.validateResourceScope(&updated); err != nil {
+		return nil, err
+	}
 
 	service.store.SaveResource(&updated)
 	service.publishResourceEvent(updated.ID, "updated", "resource_updated")
@@ -293,13 +307,45 @@ func (service *Service) publishResourceEvent(resourceID, action, reason string) 
 	})
 }
 
+func (service *Service) validateResourceScope(resource *models.Resource) error {
+	if resource == nil {
+		return fmt.Errorf("%w: resource is required", ErrInvalidRequest)
+	}
+	tenantID := strings.TrimSpace(resource.TenantID)
+	gatewayID := strings.TrimSpace(resource.GatewayID)
+	if tenantID == "" {
+		return fmt.Errorf("%w: tenant_id is required", ErrInvalidRequest)
+	}
+	if gatewayID == "" {
+		return fmt.Errorf("%w: gateway_id is required", ErrInvalidRequest)
+	}
+	tenant, ok := service.store.GetTenant(tenantID)
+	if !ok || tenant == nil || !tenant.Enabled {
+		return fmt.Errorf("%w: tenant not found or disabled", ErrInvalidRequest)
+	}
+	gateway, ok := service.store.GetGateway(gatewayID)
+	if !ok || gateway == nil {
+		return fmt.Errorf("%w: gateway not found", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, tenantID) {
+		return fmt.Errorf("%w: gateway does not belong to tenant", ErrInvalidRequest)
+	}
+	resource.TenantID = tenantID
+	resource.GatewayID = gatewayID
+	return nil
+}
+
 func validResourceType(resourceType string) bool {
-	switch resourceType {
-	case "ssh", "rdp", "web", "gateway":
+	switch normalizeResourceType(resourceType) {
+	case "ssh", "rdp", "web":
 		return true
 	default:
 		return false
 	}
+}
+
+func normalizeResourceType(resourceType string) string {
+	return strings.ToLower(strings.TrimSpace(resourceType))
 }
 
 func generateClientCredentials() (string, string, error) {

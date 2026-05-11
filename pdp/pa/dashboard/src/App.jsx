@@ -14,11 +14,9 @@ import Gateways from './pages/Gateways';
 import './App.css';
 
 function PrivateRoute({ children }) {
-  // Dev bypass: allow UI debugging without backend
   const token = localStorage.getItem('admin_token');
   if (!token) {
-    // Set a fake token so pages render (API calls will fail gracefully without redirect loop)
-    localStorage.setItem('admin_token', 'debug-bypass-token');
+    return <Navigate to="/dashboard/login" replace />;
   }
   return children;
 }

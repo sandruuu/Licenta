@@ -130,6 +130,9 @@ func (s *Store) createTables() error {
 			priority INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER DEFAULT 1,
 			tenant_id TEXT DEFAULT '',
+			scope TEXT DEFAULT 'global',
+			gateway_id TEXT DEFAULT '',
+			resource_id TEXT DEFAULT '',
 			conditions_json TEXT DEFAULT '{}',
 			action TEXT NOT NULL,
 			created_at TEXT DEFAULT '',
@@ -142,6 +145,7 @@ func (s *Store) createTables() error {
 			device_id TEXT DEFAULT '',
 			source_ip TEXT DEFAULT '',
 			resource TEXT DEFAULT '',
+			gateway_id TEXT DEFAULT '',
 			protocol TEXT DEFAULT '',
 			risk_score INTEGER DEFAULT 0,
 			tenant_id TEXT DEFAULT '',
@@ -254,6 +258,7 @@ func (s *Store) createTables() error {
 			name TEXT NOT NULL,
 			fqdn TEXT DEFAULT '',
 			tenant_id TEXT DEFAULT '',
+			tenant_ids_json TEXT DEFAULT '[]',
 			enrollment_token TEXT DEFAULT '',
 			token_expires_at TEXT DEFAULT '',
 			status TEXT DEFAULT 'pending',
@@ -304,6 +309,12 @@ func (s *Store) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_push_device ON push_challenges(device_id, status)`,
 		`CREATE INDEX IF NOT EXISTS idx_push_user ON push_challenges(user_id, status)`,
+		`CREATE TABLE IF NOT EXISTS rate_limits (
+			ip TEXT NOT NULL,
+			window_start TEXT NOT NULL,
+			request_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (ip, window_start)
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
@@ -311,6 +322,26 @@ func (s *Store) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_gateways_token ON gateways(enrollment_token)`,
 		`CREATE INDEX IF NOT EXISTS idx_gateways_oidc_client ON gateways(oidc_client_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_login_locations_user ON login_locations(user_id, timestamp)`,
+
+		// Identity Provider Configuration (per Tenant)
+		`CREATE TABLE IF NOT EXISTS identity_provider_configs (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			name TEXT DEFAULT '',
+			type TEXT DEFAULT 'oidc',
+			enabled INTEGER DEFAULT 1,
+			domains_json TEXT DEFAULT '[]',
+			issuer TEXT DEFAULT '',
+			client_id TEXT DEFAULT '',
+			client_secret TEXT DEFAULT '',
+			scopes TEXT DEFAULT 'openid profile email',
+			auto_discovery INTEGER DEFAULT 1,
+			claim_mapping_json TEXT DEFAULT '{}',
+			group_role_mapping_json TEXT DEFAULT '[]',
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_idp_tenant ON identity_provider_configs(tenant_id)`,
 	}
 
 	for _, stmt := range stmts {
@@ -330,7 +361,11 @@ func (s *Store) createTables() error {
 		// Multi-tenant: add tenant_id to existing tables
 		`ALTER TABLE users ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE policy_rules ADD COLUMN tenant_id TEXT DEFAULT ''`,
+		`ALTER TABLE policy_rules ADD COLUMN scope TEXT DEFAULT 'global'`,
+		`ALTER TABLE policy_rules ADD COLUMN gateway_id TEXT DEFAULT ''`,
+		`ALTER TABLE policy_rules ADD COLUMN resource_id TEXT DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN tenant_id TEXT DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE resources ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE resources ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE audit_log ADD COLUMN tenant_id TEXT DEFAULT ''`,
@@ -338,6 +373,11 @@ func (s *Store) createTables() error {
 		`ALTER TABLE device_posture ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE device_enrollments ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE gateways ADD COLUMN tenant_id TEXT DEFAULT ''`,
+		// Tenant HRD fields
+		`ALTER TABLE tenants ADD COLUMN default_idp_id TEXT DEFAULT ''`,
+		`ALTER TABLE tenants ADD COLUMN domains_json TEXT DEFAULT '[]'`,
+		// Gateway multi-tenant field
+		`ALTER TABLE gateways ADD COLUMN tenant_ids_json TEXT DEFAULT '[]'`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore "duplicate column" errors
@@ -415,13 +455,13 @@ func fromJSONPtr[T any](s string) *T {
 
 func (s *Store) GetUser(id string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE id = ?`, id)
+		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE id = ?`, id)
 	return s.scanUser(row)
 }
 
 func (s *Store) GetUserByUsername(username string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE username = ?`, username)
+		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE username = ?`, username)
 	return s.scanUser(row)
 }
 
@@ -431,7 +471,7 @@ func (s *Store) scanUser(row *sql.Row) (*models.User, bool) {
 	var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-		&mfaMethodsJSON, &u.Role, &disabled, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
+		&mfaMethodsJSON, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
 	if err != nil {
 		return nil, false
 	}
@@ -454,11 +494,11 @@ func (s *Store) SaveUser(user *models.User) {
 	}
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO users
 		(id, username, email, password_hash, totp_secret, mfa_methods_json, role, disabled,
-		 external_subject, auth_source, created_at, updated_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		user.ID, user.Username, user.Email, user.PasswordHash, user.TOTPSecret,
 		toJSON(methods), user.Role, b2i(user.Disabled),
-		user.ExternalSubject, user.AuthSource,
+		user.TenantID, user.ExternalSubject, user.AuthSource,
 		fmtTime(user.CreatedAt), fmtTime(user.UpdatedAt), fmtTime(user.LastLoginAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save user %s: %v", user.ID, err)
@@ -467,7 +507,7 @@ func (s *Store) SaveUser(user *models.User) {
 
 func (s *Store) ListUsers() []*models.User {
 	rows, err := s.db.Query(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, external_subject, auth_source, created_at, updated_at, last_login_at FROM users`)
+		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list users: %v", err)
 		return nil
@@ -481,7 +521,7 @@ func (s *Store) ListUsers() []*models.User {
 		var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-			&mfaMethodsJSON, &u.Role, &disabled, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
+			&mfaMethodsJSON, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
 			continue
 		}
 
@@ -555,14 +595,16 @@ func (s *Store) GetFailedAttempts(username string) int {
 // ─────────────────────────────────────────────
 
 func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
-	row := s.db.QueryRow(`SELECT id, name, description, priority, enabled, conditions_json,
+	row := s.db.QueryRow(`SELECT id, name, description, priority, enabled, tenant_id,
+		scope, gateway_id, resource_id, conditions_json,
 		action, created_at, updated_at FROM policy_rules WHERE id = ?`, id)
 
 	r := &models.PolicyRule{}
 	var enabled int
 	var condJSON, createdAt, updatedAt string
 
-	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled, &condJSON,
+	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled,
+		&r.TenantID, &r.Scope, &r.GatewayID, &r.ResourceID, &condJSON,
 		&r.Action, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
@@ -577,9 +619,11 @@ func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
 
 func (s *Store) SavePolicyRule(rule *models.PolicyRule) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO policy_rules
-		(id, name, description, priority, enabled, conditions_json, action, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, name, description, priority, enabled, tenant_id, scope, gateway_id, resource_id,
+		 conditions_json, action, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rule.ID, rule.Name, rule.Description, rule.Priority, b2i(rule.Enabled),
+		rule.TenantID, normalizedRuleScope(rule.Scope), rule.GatewayID, rule.ResourceID,
 		toJSON(rule.Conditions), rule.Action, fmtTime(rule.CreatedAt), fmtTime(rule.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save policy rule %s: %v", rule.ID, err)
@@ -587,32 +631,70 @@ func (s *Store) SavePolicyRule(rule *models.PolicyRule) {
 }
 
 func (s *Store) ListPolicyRules() []*models.PolicyRule {
-	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, conditions_json,
+	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, tenant_id,
+		scope, gateway_id, resource_id, conditions_json,
 		action, created_at, updated_at FROM policy_rules ORDER BY priority ASC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy rules: %v", err)
 		return nil
 	}
 	defer rows.Close()
+	return scanPolicyRules(rows)
+}
 
+func (s *Store) ListPolicyRulesForAccess(tenantID, gatewayID, resourceID string) []*models.PolicyRule {
+	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, tenant_id,
+		scope, gateway_id, resource_id, conditions_json,
+		action, created_at, updated_at FROM policy_rules
+		WHERE (tenant_id = ? OR tenant_id = '')
+		  AND (
+			(COALESCE(NULLIF(scope, ''), 'global') = 'resource' AND resource_id = ?)
+			OR (COALESCE(NULLIF(scope, ''), 'global') = 'gateway' AND gateway_id = ?)
+			OR COALESCE(NULLIF(scope, ''), 'global') = 'global'
+		  )
+		ORDER BY
+		  CASE COALESCE(NULLIF(scope, ''), 'global')
+			WHEN 'resource' THEN 1
+			WHEN 'gateway' THEN 2
+			ELSE 3
+		  END,
+		  priority ASC`, tenantID, resourceID, gatewayID)
+	if err != nil {
+		log.Printf("[STORE] Failed to list scoped policy rules: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	return scanPolicyRules(rows)
+}
+
+func scanPolicyRules(rows *sql.Rows) []*models.PolicyRule {
 	var rules []*models.PolicyRule
 	for rows.Next() {
 		r := &models.PolicyRule{}
 		var enabled int
 		var condJSON, createdAt, updatedAt string
-
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled, &condJSON,
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled,
+			&r.TenantID, &r.Scope, &r.GatewayID, &r.ResourceID, &condJSON,
 			&r.Action, &createdAt, &updatedAt); err != nil {
 			continue
 		}
-
 		r.Enabled = i2b(enabled)
+		r.Scope = normalizedRuleScope(r.Scope)
 		r.Conditions = fromJSON[models.RuleConditions](condJSON)
 		r.CreatedAt = parseTime(createdAt)
 		r.UpdatedAt = parseTime(updatedAt)
 		rules = append(rules, r)
 	}
 	return rules
+}
+
+func normalizedRuleScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "resource", "gateway":
+		return strings.ToLower(strings.TrimSpace(scope))
+	default:
+		return "global"
+	}
 }
 
 func (s *Store) DeletePolicyRule(id string) {
@@ -625,7 +707,7 @@ func (s *Store) DeletePolicyRule(id string) {
 
 func (s *Store) GetSession(id string) (*models.Session, bool) {
 	row := s.db.QueryRow(`SELECT id, user_id, username, device_id, source_ip, resource,
-		protocol, risk_score, created_at, expires_at, last_activity, revoked
+		gateway_id, protocol, risk_score, tenant_id, created_at, expires_at, last_activity, revoked
 		FROM sessions WHERE id = ?`, id)
 
 	sess := &models.Session{}
@@ -633,7 +715,7 @@ func (s *Store) GetSession(id string) (*models.Session, bool) {
 	var createdAt, expiresAt, lastActivity string
 
 	err := row.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-		&sess.Resource, &sess.Protocol, &sess.RiskScore, &createdAt, &expiresAt, &lastActivity, &revoked)
+		&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.TenantID, &createdAt, &expiresAt, &lastActivity, &revoked)
 	if err != nil {
 		return nil, false
 	}
@@ -647,11 +729,11 @@ func (s *Store) GetSession(id string) (*models.Session, bool) {
 
 func (s *Store) SaveSession(session *models.Session) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO sessions
-		(id, user_id, username, device_id, source_ip, resource, protocol, risk_score,
-		 created_at, expires_at, last_activity, revoked)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, user_id, username, device_id, source_ip, resource, gateway_id, protocol, risk_score,
+		 tenant_id, created_at, expires_at, last_activity, revoked)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.UserID, session.Username, session.DeviceID, session.SourceIP,
-		session.Resource, session.Protocol, session.RiskScore,
+		session.Resource, session.GatewayID, session.Protocol, session.RiskScore, session.TenantID,
 		fmtTime(session.CreatedAt), fmtTime(session.ExpiresAt),
 		fmtTime(session.LastActivity), b2i(session.Revoked))
 	if err != nil {
@@ -661,7 +743,7 @@ func (s *Store) SaveSession(session *models.Session) {
 
 func (s *Store) ListSessions() []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		protocol, risk_score, created_at, expires_at, last_activity, revoked
+		gateway_id, protocol, risk_score, tenant_id, created_at, expires_at, last_activity, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at > ?`, fmtTime(time.Now()))
 	if err != nil {
 		return nil
@@ -672,7 +754,7 @@ func (s *Store) ListSessions() []*models.Session {
 
 func (s *Store) ListUserSessions(userID string) []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		protocol, risk_score, created_at, expires_at, last_activity, revoked
+		gateway_id, protocol, risk_score, tenant_id, created_at, expires_at, last_activity, revoked
 		FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ?`, userID, fmtTime(time.Now()))
 	if err != nil {
 		return nil
@@ -689,7 +771,7 @@ func (s *Store) scanSessions(rows *sql.Rows) []*models.Session {
 		var createdAt, expiresAt, lastActivity string
 
 		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-			&sess.Resource, &sess.Protocol, &sess.RiskScore, &createdAt, &expiresAt, &lastActivity, &revoked); err != nil {
+			&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.TenantID, &createdAt, &expiresAt, &lastActivity, &revoked); err != nil {
 			continue
 		}
 
@@ -724,7 +806,7 @@ func (s *Store) CleanExpiredSessionsWithSnapshot(now time.Time) ([]*models.Sessi
 	defer tx.Rollback()
 
 	rows, err := tx.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		protocol, risk_score, created_at, expires_at, last_activity, revoked
+		gateway_id, protocol, risk_score, tenant_id, created_at, expires_at, last_activity, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at < ?`, fmtTime(now))
 	if err != nil {
 		return nil, 0
@@ -924,8 +1006,8 @@ func (s *Store) SaveDeviceHealth(report *models.DeviceHealthReport) {
 
 // TouchDeviceHealth bumps the reported_at timestamp for an existing device
 // health record without rewriting the (potentially large) checks_json
-// payload. Used by the lightweight /api/device/heartbeat endpoint to
-// keep posture freshness without resending every collector result.
+// payload. Kept for legacy health records; current agent telemetry uses
+// the gRPC device posture heartbeat path.
 //
 // Returns true if a row was updated, false if the device has no prior
 // health report on file (in which case the caller should treat this as
@@ -1045,7 +1127,7 @@ func (s *Store) ListDevicePosture() []*models.DevicePostureReport {
 
 func (s *Store) GetResource(id string) (*models.Resource, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, client_id, client_secret,
+		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
 		cert_mode, cert_pem, key_pem, cert_expiry, cert_domain,
 		allowed_roles_json, require_mfa, created_at, updated_at
 		FROM resources WHERE id = ?`, id)
@@ -1058,7 +1140,7 @@ func (s *Store) scanResource(row *sql.Row) (*models.Resource, bool) {
 	var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
 
 	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
-		&enabled, &tagsJSON, &metaJSON, &r.ClientID, &r.ClientSecret,
+		&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
 		&r.CertMode, &r.CertPEM, &r.KeyPEM, &r.CertExpiry,
 		&r.CertDomain, &rolesJSON, &requireMFA, &createdAt, &updatedAt)
 	if err != nil {
@@ -1091,12 +1173,12 @@ func (s *Store) SaveResource(res *models.Resource) {
 
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO resources
 		(id, name, description, type, host, port, external_url, enabled,
-		 tags_json, metadata_json, client_id, client_secret,
+		 tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
 		 cert_mode, cert_pem, key_pem, cert_expiry, cert_domain,
 		 allowed_roles_json, require_mfa, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		res.ID, res.Name, res.Description, res.Type, res.Host, res.Port, res.ExternalURL,
-		b2i(res.Enabled), toJSON(tags), toJSON(meta), res.ClientID, res.ClientSecret,
+		b2i(res.Enabled), toJSON(tags), toJSON(meta), res.TenantID, res.GatewayID, res.ClientID, res.ClientSecret,
 		res.CertMode, res.CertPEM, res.KeyPEM,
 		res.CertExpiry, res.CertDomain, toJSON(roles), b2i(res.RequireMFA),
 		fmtTime(res.CreatedAt), fmtTime(res.UpdatedAt))
@@ -1107,7 +1189,7 @@ func (s *Store) SaveResource(res *models.Resource) {
 
 func (s *Store) ListResources() []*models.Resource {
 	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, client_id, client_secret,
+		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
 		cert_mode, cert_pem, key_pem, cert_expiry, cert_domain,
 		allowed_roles_json, require_mfa, created_at, updated_at FROM resources`)
 	if err != nil {
@@ -1122,7 +1204,7 @@ func (s *Store) ListResources() []*models.Resource {
 		var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
 
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
-			&enabled, &tagsJSON, &metaJSON, &r.ClientID, &r.ClientSecret,
+			&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
 			&r.CertMode, &r.CertPEM, &r.KeyPEM, &r.CertExpiry,
 			&r.CertDomain, &rolesJSON, &requireMFA, &createdAt, &updatedAt); err != nil {
 			continue
@@ -1140,10 +1222,47 @@ func (s *Store) ListResources() []*models.Resource {
 	return resources
 }
 
+func (s *Store) ListResourcesByTenant(tenantID string) []*models.Resource {
+	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
+		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
+		cert_mode, cert_pem, key_pem, cert_expiry, cert_domain,
+		allowed_roles_json, require_mfa, created_at, updated_at FROM resources
+		WHERE tenant_id = ?`, tenantID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	return s.scanResources(rows)
+}
+
+func (s *Store) scanResources(rows *sql.Rows) []*models.Resource {
+	var resources []*models.Resource
+	for rows.Next() {
+		r := &models.Resource{}
+		var enabled, requireMFA int
+		var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
+			&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
+			&r.CertMode, &r.CertPEM, &r.KeyPEM, &r.CertExpiry,
+			&r.CertDomain, &rolesJSON, &requireMFA, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		r.Enabled = i2b(enabled)
+		r.RequireMFA = i2b(requireMFA)
+		r.Tags = fromJSON[[]string](tagsJSON)
+		r.Metadata = fromJSON[map[string]string](metaJSON)
+		r.AllowedRoles = fromJSON[[]string](rolesJSON)
+		r.CreatedAt = parseTime(createdAt)
+		r.UpdatedAt = parseTime(updatedAt)
+		resources = append(resources, r)
+	}
+	return resources
+}
+
 // GetResourceByClientID finds a resource by its per-app ClientID.
 func (s *Store) GetResourceByClientID(clientID string) (*models.Resource, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, client_id, client_secret,
+		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
 		cert_mode, cert_pem, key_pem, cert_expiry, cert_domain,
 		allowed_roles_json, require_mfa, created_at, updated_at
 		FROM resources WHERE client_id = ?`, clientID)
@@ -1313,6 +1432,64 @@ func (s *Store) CleanExpiredRevokedTokens() {
 }
 
 // ─────────────────────────────────────────────
+// Rate Limiting (persistent, SQLite-backed)
+// ─────────────────────────────────────────────
+
+const enrollRateLimitWindow = time.Minute
+const enrollRateLimitMax = 5
+
+// CheckEnrollRateLimit returns true if the IP is within the rate limit for
+// the current window. The limit is persisted in SQLite so it survives PDP
+// restarts and is shared across processes that use the same database.
+func (s *Store) CheckEnrollRateLimit(ip string) (bool, error) {
+	if ip == "" {
+		return false, fmt.Errorf("ip is required")
+	}
+	if s.db == nil {
+		return false, fmt.Errorf("database not initialized")
+	}
+
+	now := time.Now().UTC()
+	windowStart := now.Truncate(enrollRateLimitWindow)
+
+	// Increment the count for this (ip, window) atomically.
+	_, err := s.db.Exec(`INSERT INTO rate_limits (ip, window_start, request_count)
+		VALUES (?, ?, 1)
+		ON CONFLICT(ip, window_start) DO UPDATE SET request_count = request_count + 1`,
+		ip, fmtTime(windowStart))
+	if err != nil {
+		log.Printf("[STORE] Rate limit check failed for IP %s: %v", ip, err)
+		return false, err
+	}
+
+	var count int
+	err = s.db.QueryRow("SELECT request_count FROM rate_limits WHERE ip = ? AND window_start = ?",
+		ip, fmtTime(windowStart)).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+
+	return count <= enrollRateLimitMax, nil
+}
+
+// CleanExpiredRateLimits removes rate limit entries older than the given
+// age. Call this periodically (e.g., every 5 minutes) to keep the table small.
+func (s *Store) CleanExpiredRateLimits(maxAge time.Duration) {
+	if s.db == nil {
+		return
+	}
+	cutoff := fmtTime(time.Now().UTC().Add(-maxAge))
+	result, err := s.db.Exec("DELETE FROM rate_limits WHERE window_start < ?", cutoff)
+	if err != nil {
+		log.Printf("[STORE] Failed to clean expired rate limits: %v", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n > 0 {
+		log.Printf("[STORE] Cleaned %d expired rate limit entries", n)
+	}
+}
+
+// ─────────────────────────────────────────────
 // Device Enrollment
 // ─────────────────────────────────────────────
 
@@ -1442,10 +1619,15 @@ func (s *Store) SaveDeviceUser(du *models.DeviceUser) {
 // ─────────────────────────────────────────────
 
 func (s *Store) SaveTenant(t *models.Tenant) {
+	domains := t.Domains
+	if domains == nil {
+		domains = []string{}
+	}
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO tenants
-		(id, name, domain, description, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		(id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.Name, t.Domain, t.Description, b2i(t.Enabled),
+		t.DefaultIdPID, toJSON(domains),
 		fmtTime(t.CreatedAt), fmtTime(t.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save tenant %s: %v", t.ID, err)
@@ -1453,13 +1635,13 @@ func (s *Store) SaveTenant(t *models.Tenant) {
 }
 
 func (s *Store) GetTenant(id string) (*models.Tenant, bool) {
-	row := s.db.QueryRow(`SELECT id, name, domain, description, enabled, created_at, updated_at
+	row := s.db.QueryRow(`SELECT id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at
 		FROM tenants WHERE id = ?`, id)
 	return s.scanTenant(row)
 }
 
 func (s *Store) ListTenants() []*models.Tenant {
-	rows, err := s.db.Query(`SELECT id, name, domain, description, enabled, created_at, updated_at
+	rows, err := s.db.Query(`SELECT id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at
 		FROM tenants ORDER BY created_at DESC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list tenants: %v", err)
@@ -1470,12 +1652,16 @@ func (s *Store) ListTenants() []*models.Tenant {
 	var tenants []*models.Tenant
 	for rows.Next() {
 		t := &models.Tenant{}
-		var createdAt, updatedAt string
+		var createdAt, updatedAt, domainsJSON string
 		var enabled int
-		if err := rows.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &t.DefaultIdPID, &domainsJSON, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		t.Enabled = i2b(enabled)
+		t.Domains = fromJSON[[]string](domainsJSON)
+		if t.Domains == nil {
+			t.Domains = []string{}
+		}
 		t.CreatedAt = parseTime(createdAt)
 		t.UpdatedAt = parseTime(updatedAt)
 		tenants = append(tenants, t)
@@ -1492,15 +1678,167 @@ func (s *Store) DeleteTenant(id string) bool {
 	return n > 0
 }
 
+// ─────────────────────────────────────────────
+// Identity Provider Config operations
+// ─────────────────────────────────────────────
+
+func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
+	domains := cfg.Domains
+	if domains == nil {
+		domains = []string{}
+	}
+	claimMapping := cfg.ClaimMapping
+	if claimMapping == nil {
+		claimMapping = map[string]string{}
+	}
+	groupRoleMapping := cfg.GroupRoleMapping
+	if groupRoleMapping == nil {
+		groupRoleMapping = []models.GroupRoleRule{}
+	}
+
+	_, err := s.db.Exec(`INSERT OR REPLACE INTO identity_provider_configs
+		(id, tenant_id, name, type, enabled, domains_json, issuer, client_id, client_secret,
+		 scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		cfg.ID, cfg.TenantID, cfg.Name, cfg.Type, b2i(cfg.Enabled),
+		toJSON(domains), cfg.Issuer, cfg.ClientID, cfg.ClientSecret,
+		cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
+		fmtTime(cfg.CreatedAt), fmtTime(cfg.UpdatedAt))
+	if err != nil {
+		log.Printf("[STORE] Failed to save IdP config %s: %v", cfg.ID, err)
+	}
+}
+
+func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderConfig, bool) {
+	row := s.db.QueryRow(`SELECT id, tenant_id, name, type, enabled, domains_json,
+		issuer, client_id, client_secret, scopes, auto_discovery,
+		claim_mapping_json, group_role_mapping_json, created_at, updated_at
+		FROM identity_provider_configs WHERE id = ?`, id)
+	return s.scanIdentityProviderConfig(row)
+}
+
+func (s *Store) ListIdentityProviderConfigsForTenant(tenantID string) []*models.IdentityProviderConfig {
+	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
+		issuer, client_id, client_secret, scopes, auto_discovery,
+		claim_mapping_json, group_role_mapping_json, created_at, updated_at
+		FROM identity_provider_configs WHERE tenant_id = ? ORDER BY created_at ASC`, tenantID)
+	if err != nil {
+		log.Printf("[STORE] Failed to list IdP configs for tenant %s: %v", tenantID, err)
+		return nil
+	}
+	defer rows.Close()
+
+	return s.scanIdentityProviderConfigs(rows)
+}
+
+// FindIdentityProviderByDomain searches for an IdP whose domains list contains
+// the given email domain. Used by Home Realm Discovery (HRD).
+func (s *Store) FindIdentityProviderByDomain(domain string) (*models.IdentityProviderConfig, bool) {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+	if domain == "" {
+		return nil, false
+	}
+
+	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
+		issuer, client_id, client_secret, scopes, auto_discovery,
+		claim_mapping_json, group_role_mapping_json, created_at, updated_at
+		FROM identity_provider_configs WHERE enabled = 1`)
+	if err != nil {
+		log.Printf("[STORE] Failed to query IdP configs for domain search: %v", err)
+		return nil, false
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		cfg, ok := s.scanIdentityProviderConfig(rows)
+		if !ok || cfg == nil {
+			continue
+		}
+		for _, d := range cfg.Domains {
+			if strings.EqualFold(d, domain) {
+				return cfg, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// GetDefaultIdentityProviderForTenant returns the default IdP for a tenant,
+// by looking up the tenant's DefaultIdPID field. Returns nil if not set.
+func (s *Store) GetDefaultIdentityProviderForTenant(tenantID string) (*models.IdentityProviderConfig, bool) {
+	tenant, found := s.GetTenant(tenantID)
+	if !found || tenant.DefaultIdPID == "" {
+		return nil, false
+	}
+	return s.GetIdentityProviderConfig(tenant.DefaultIdPID)
+}
+
+func (s *Store) DeleteIdentityProviderConfig(id string) bool {
+	result, err := s.db.Exec("DELETE FROM identity_provider_configs WHERE id = ?", id)
+	if err != nil {
+		return false
+	}
+	n, _ := result.RowsAffected()
+	return n > 0
+}
+
+func (s *Store) scanIdentityProviderConfig(row interface {
+	Scan(dest ...interface{}) error
+}) (*models.IdentityProviderConfig, bool) {
+	cfg := &models.IdentityProviderConfig{}
+	var enabled, autoDiscovery int
+	var domainsJSON, claimMappingJSON, groupRoleMappingJSON, createdAt, updatedAt string
+
+	err := row.Scan(&cfg.ID, &cfg.TenantID, &cfg.Name, &cfg.Type, &enabled,
+		&domainsJSON, &cfg.Issuer, &cfg.ClientID, &cfg.ClientSecret,
+		&cfg.Scopes, &autoDiscovery, &claimMappingJSON, &groupRoleMappingJSON,
+		&createdAt, &updatedAt)
+	if err != nil {
+		return nil, false
+	}
+
+	cfg.Enabled = i2b(enabled)
+	cfg.AutoDiscovery = i2b(autoDiscovery)
+	cfg.Domains = fromJSON[[]string](domainsJSON)
+	if cfg.Domains == nil {
+		cfg.Domains = []string{}
+	}
+	cfg.ClaimMapping = fromJSON[map[string]string](claimMappingJSON)
+	if cfg.ClaimMapping == nil {
+		cfg.ClaimMapping = map[string]string{}
+	}
+	cfg.GroupRoleMapping = fromJSON[[]models.GroupRoleRule](groupRoleMappingJSON)
+	if cfg.GroupRoleMapping == nil {
+		cfg.GroupRoleMapping = []models.GroupRoleRule{}
+	}
+	cfg.CreatedAt = parseTime(createdAt)
+	cfg.UpdatedAt = parseTime(updatedAt)
+	return cfg, true
+}
+
+func (s *Store) scanIdentityProviderConfigs(rows *sql.Rows) []*models.IdentityProviderConfig {
+	var configs []*models.IdentityProviderConfig
+	for rows.Next() {
+		if cfg, ok := s.scanIdentityProviderConfig(rows); ok {
+			configs = append(configs, cfg)
+		}
+	}
+	return configs
+}
+
 func (s *Store) scanTenant(row *sql.Row) (*models.Tenant, bool) {
 	t := &models.Tenant{}
-	var createdAt, updatedAt string
+	var createdAt, updatedAt, domainsJSON string
 	var enabled int
-	err := row.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &createdAt, &updatedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &t.DefaultIdPID, &domainsJSON, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
 	}
 	t.Enabled = i2b(enabled)
+	t.Domains = fromJSON[[]string](domainsJSON)
+	if t.Domains == nil {
+		t.Domains = []string{}
+	}
 	t.CreatedAt = parseTime(createdAt)
 	t.UpdatedAt = parseTime(updatedAt)
 	return t, true
@@ -1515,6 +1853,13 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 	if resources == nil {
 		resources = []string{}
 	}
+	tenantIDs := gw.TenantIDs
+	if tenantIDs == nil {
+		tenantIDs = []string{}
+	}
+	if gw.TenantID != "" && len(tenantIDs) == 0 {
+		tenantIDs = []string{gw.TenantID}
+	}
 	authMode := gw.AuthMode
 	if authMode == "" {
 		authMode = "builtin"
@@ -1525,13 +1870,14 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 	}
 
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO gateways
-		(id, name, fqdn, enrollment_token, token_expires_at, status,
+		(id, name, fqdn, tenant_id, tenant_ids_json, enrollment_token, token_expires_at, status,
 		 cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		 oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		 assigned_resources_json, auth_mode, federation_config_json,
 		 created_at, updated_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		gw.ID, gw.Name, gw.FQDN, gw.EnrollmentToken, gw.TokenExpiresAt, gw.Status,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		gw.ID, gw.Name, gw.FQDN, gw.TenantID, toJSON(tenantIDs),
+		gw.EnrollmentToken, gw.TokenExpiresAt, gw.Status,
 		gw.CertPEM, gw.CertFingerprint, gw.CertSerial, gw.CertExpiresAt,
 		gw.OIDCClientID, gw.OIDCClientSecret, gw.ListenAddr, gw.PublicIP,
 		toJSON(resources), authMode, fedConfigJSON,
@@ -1542,7 +1888,8 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 }
 
 func (s *Store) GetGateway(id string) (*models.Gateway, bool) {
-	row := s.db.QueryRow(`SELECT id, name, fqdn, enrollment_token, token_expires_at, status,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		assigned_resources_json, auth_mode, federation_config_json,
@@ -1555,20 +1902,57 @@ func (s *Store) GetGatewayByToken(token string) (*models.Gateway, bool) {
 	if token == "" {
 		return nil, false
 	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, enrollment_token, token_expires_at, status,
+	tokenHash := sha256Hex(token)
+	return s.GetGatewayByTokenHash(tokenHash)
+}
+
+func (s *Store) GetGatewayByTokenHash(tokenHash string) (*models.Gateway, bool) {
+	if tokenHash == "" {
+		return nil, false
+	}
+	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		assigned_resources_json, auth_mode, federation_config_json,
 		created_at, updated_at, last_seen_at
-		FROM gateways WHERE enrollment_token = ?`, token)
+		FROM gateways WHERE enrollment_token = ?`, tokenHash)
 	return s.scanGateway(row)
+}
+
+// ConsumeGatewayEnrollmentToken atomically consumes a pending gateway
+// enrollment token. The service performs semantic validation before this call;
+// the conditional update prevents concurrent replay from minting multiple
+// certificates with the same token.
+func (s *Store) ConsumeGatewayEnrollmentToken(gatewayID, token string, now time.Time) bool {
+	gatewayID = strings.TrimSpace(gatewayID)
+	token = strings.TrimSpace(token)
+	if gatewayID == "" || token == "" {
+		return false
+	}
+	result, err := s.db.Exec(`UPDATE gateways
+		SET enrollment_token = '', token_expires_at = '', status = 'enrolling', updated_at = ?
+		WHERE id = ? AND enrollment_token = ? AND status = 'pending'`,
+		fmtTime(now), gatewayID, sha256Hex(token))
+	if err != nil {
+		log.Printf("[STORE] Failed to consume gateway enrollment token for %s: %v", gatewayID, err)
+		return false
+	}
+	affected, err := result.RowsAffected()
+	return err == nil && affected == 1
+}
+
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) GetGatewayByFQDN(fqdn string) (*models.Gateway, bool) {
 	if fqdn == "" {
 		return nil, false
 	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, enrollment_token, token_expires_at, status,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		assigned_resources_json, auth_mode, federation_config_json,
@@ -1578,7 +1962,8 @@ func (s *Store) GetGatewayByFQDN(fqdn string) (*models.Gateway, bool) {
 }
 
 func (s *Store) ListGateways() []*models.Gateway {
-	rows, err := s.db.Query(`SELECT id, name, fqdn, enrollment_token, token_expires_at, status,
+	rows, err := s.db.Query(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		assigned_resources_json, auth_mode, federation_config_json,
@@ -1593,12 +1978,20 @@ func (s *Store) ListGateways() []*models.Gateway {
 	var gateways []*models.Gateway
 	for rows.Next() {
 		gw := &models.Gateway{}
-		var resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
-		if err := rows.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
+		var tenantIDsJSON, resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
+		if err := rows.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.TenantID, &tenantIDsJSON,
+			&gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
 			&gw.CertPEM, &gw.CertFingerprint, &gw.CertSerial, &gw.CertExpiresAt,
 			&gw.OIDCClientID, &gw.OIDCClientSecret, &gw.ListenAddr, &gw.PublicIP,
 			&resourcesJSON, &gw.AuthMode, &fedConfigJSON, &createdAt, &updatedAt, &lastSeenAt); err != nil {
 			continue
+		}
+		gw.TenantIDs = fromJSON[[]string](tenantIDsJSON)
+		if gw.TenantIDs == nil {
+			gw.TenantIDs = []string{}
+		}
+		if gw.TenantID == "" && len(gw.TenantIDs) == 1 {
+			gw.TenantID = gw.TenantIDs[0]
 		}
 		gw.AssignedResources = fromJSON[[]string](resourcesJSON)
 		if fedConfigJSON != "" {
@@ -1615,6 +2008,20 @@ func (s *Store) ListGateways() []*models.Gateway {
 	return gateways
 }
 
+func (s *Store) ListGatewaysByTenant(tenantID string) []*models.Gateway {
+	gateways := s.ListGateways()
+	filtered := make([]*models.Gateway, 0, len(gateways))
+	for _, gateway := range gateways {
+		if gateway == nil {
+			continue
+		}
+		if strings.TrimSpace(gateway.TenantID) == strings.TrimSpace(tenantID) {
+			filtered = append(filtered, gateway)
+		}
+	}
+	return filtered
+}
+
 func (s *Store) DeleteGateway(id string) bool {
 	result, err := s.db.Exec("DELETE FROM gateways WHERE id = ?", id)
 	if err != nil {
@@ -1626,13 +2033,21 @@ func (s *Store) DeleteGateway(id string) bool {
 
 func (s *Store) scanGateway(row *sql.Row) (*models.Gateway, bool) {
 	gw := &models.Gateway{}
-	var resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
-	err := row.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
+	var tenantIDsJSON, resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
+	err := row.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.TenantID, &tenantIDsJSON,
+		&gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
 		&gw.CertPEM, &gw.CertFingerprint, &gw.CertSerial, &gw.CertExpiresAt,
 		&gw.OIDCClientID, &gw.OIDCClientSecret, &gw.ListenAddr, &gw.PublicIP,
 		&resourcesJSON, &gw.AuthMode, &fedConfigJSON, &createdAt, &updatedAt, &lastSeenAt)
 	if err != nil {
 		return nil, false
+	}
+	gw.TenantIDs = fromJSON[[]string](tenantIDsJSON)
+	if gw.TenantIDs == nil {
+		gw.TenantIDs = []string{}
+	}
+	if gw.TenantID == "" && len(gw.TenantIDs) == 1 {
+		gw.TenantID = gw.TenantIDs[0]
 	}
 	gw.AssignedResources = fromJSON[[]string](resourcesJSON)
 	if fedConfigJSON != "" {
@@ -1652,7 +2067,8 @@ func (s *Store) GetGatewayByOIDCClientID(clientID string) (*models.Gateway, bool
 	if clientID == "" {
 		return nil, false
 	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, enrollment_token, token_expires_at, status,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
 		assigned_resources_json, auth_mode, federation_config_json,
@@ -1664,8 +2080,16 @@ func (s *Store) GetGatewayByOIDCClientID(clientID string) (*models.Gateway, bool
 // GetUserByExternalSubject finds a federated user by their external IdP subject+source.
 func (s *Store) GetUserByExternalSubject(externalSubject, authSource string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, external_subject, auth_source, created_at, updated_at, last_login_at
+		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at
 		FROM users WHERE external_subject = ? AND auth_source = ?`, externalSubject, authSource)
+	return s.scanUser(row)
+}
+
+func (s *Store) GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID string) (*models.User, bool) {
+	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
+		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at
+		FROM users WHERE external_subject = ? AND auth_source = ? AND tenant_id = ?`,
+		externalSubject, authSource, tenantID)
 	return s.scanUser(row)
 }
 

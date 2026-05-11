@@ -143,12 +143,74 @@ func validateRule(rule *models.PolicyRule) error {
 	if rule.Priority < 0 {
 		return fmt.Errorf("priority must be >= 0")
 	}
+	scope := normalizeScope(rule.Scope)
+	switch scope {
+	case "gateway":
+		if strings.TrimSpace(rule.GatewayID) == "" {
+			return fmt.Errorf("gateway_id is required for gateway-scoped policies")
+		}
+	case "resource":
+		if strings.TrimSpace(rule.ResourceID) == "" {
+			return fmt.Errorf("resource_id is required for resource-scoped policies")
+		}
+	}
+	rule.Scope = scope
+	return nil
+}
+
+func normalizeScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "gateway", "resource":
+		return strings.ToLower(strings.TrimSpace(scope))
+	default:
+		return "global"
+	}
+}
+
+func (rm *RuleManager) validateScopeBindings(rule *models.PolicyRule) error {
+	if rm == nil || rm.store == nil || rule == nil {
+		return nil
+	}
+	tenantID := strings.TrimSpace(rule.TenantID)
+	if tenantID != "" {
+		tenant, ok := rm.store.GetTenant(tenantID)
+		if !ok || tenant == nil || !tenant.Enabled {
+			return fmt.Errorf("tenant not found or disabled: %s", tenantID)
+		}
+	}
+	switch rule.Scope {
+	case "gateway":
+		gateway, ok := rm.store.GetGateway(rule.GatewayID)
+		if !ok || gateway == nil {
+			return fmt.Errorf("gateway not found: %s", rule.GatewayID)
+		}
+		if tenantID != "" && gateway.TenantID != tenantID {
+			return fmt.Errorf("gateway %s does not belong to tenant %s", rule.GatewayID, tenantID)
+		}
+	case "resource":
+		resource, ok := rm.store.GetResource(rule.ResourceID)
+		if !ok || resource == nil {
+			return fmt.Errorf("resource not found: %s", rule.ResourceID)
+		}
+		if tenantID != "" && resource.TenantID != tenantID {
+			return fmt.Errorf("resource %s does not belong to tenant %s", rule.ResourceID, tenantID)
+		}
+		if strings.TrimSpace(rule.GatewayID) == "" {
+			rule.GatewayID = resource.GatewayID
+		}
+		if strings.TrimSpace(rule.GatewayID) != "" && strings.TrimSpace(resource.GatewayID) != "" && rule.GatewayID != resource.GatewayID {
+			return fmt.Errorf("resource %s is not assigned to gateway %s", rule.ResourceID, rule.GatewayID)
+		}
+	}
 	return nil
 }
 
 // CreateRule adds a new policy rule
 func (rm *RuleManager) CreateRule(rule *models.PolicyRule) error {
 	if err := validateRule(rule); err != nil {
+		return err
+	}
+	if err := rm.validateScopeBindings(rule); err != nil {
 		return err
 	}
 	if rule.ID == "" {
@@ -168,6 +230,9 @@ func (rm *RuleManager) CreateRule(rule *models.PolicyRule) error {
 // UpdateRule modifies an existing policy rule
 func (rm *RuleManager) UpdateRule(rule *models.PolicyRule) error {
 	if err := validateRule(rule); err != nil {
+		return err
+	}
+	if err := rm.validateScopeBindings(rule); err != nil {
 		return err
 	}
 	existing, ok := rm.store.GetPolicyRule(rule.ID)

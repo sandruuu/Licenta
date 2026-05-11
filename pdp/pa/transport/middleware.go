@@ -127,8 +127,8 @@ func (s *Server) requireClientCert(next http.Handler) http.Handler {
 }
 
 // gatewayAuthMiddleware verifies that the calling gateway is enrolled by
-// matching the mTLS client certificate's CN (FQDN) against the gateway
-// database and checking the certificate fingerprint matches the enrollment record.
+// matching the mTLS client certificate's tenant/gateway URI SAN against the
+// gateway database and checking the certificate fingerprint matches the record.
 // On success, the authenticated gateway is stored in the request context
 // and can be retrieved with gatewayFromContext(r).
 func (s *Server) gatewayAuthMiddleware(next http.Handler) http.Handler {

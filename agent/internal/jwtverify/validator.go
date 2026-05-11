@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,14 +28,15 @@ const (
 )
 
 type Options struct {
-	Issuer     string
-	Audience   string
-	Purpose    string
-	JWKSURL    string
-	CAFile     string
-	HTTPClient *http.Client
-	Clock      func() time.Time
-	Skew       time.Duration
+	Issuer          string
+	Audience        string
+	Purpose         string
+	JWKSURL         string
+	CAFile          string
+	CloudCertSHA256 string // optional: SHA-256 hex of the PDP TLS cert for pinning (N1 fix)
+	HTTPClient      *http.Client
+	Clock           func() time.Time
+	Skew            time.Duration
 }
 
 type Validator struct {
@@ -125,7 +127,7 @@ func New(options Options) (*Validator, error) {
 	}
 	httpClient := options.HTTPClient
 	if httpClient == nil {
-		client, err := buildHTTPClient(options.CAFile)
+		client, err := buildHTTPClient(options.CAFile, options.CloudCertSHA256)
 		if err != nil {
 			return nil, err
 		}
@@ -364,22 +366,48 @@ func decodeSegment(segment string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(segment)
 }
 
-func buildHTTPClient(caFile string) (*http.Client, error) {
-	if strings.TrimSpace(caFile) == "" {
+// buildHTTPClient creates an HTTP client for JWKS fetching with optional CA
+// file and certificate pinning (N1 fix). When neither CA file nor pinning
+// hash is provided, the system trust store is used as fallback — this is
+// acceptable only for the first enrollment before a CA file exists locally.
+func buildHTTPClient(caFile, cloudCertSHA256 string) (*http.Client, error) {
+	if strings.TrimSpace(caFile) == "" && strings.TrimSpace(cloudCertSHA256) == "" {
 		return http.DefaultClient, nil
 	}
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
+	if strings.TrimSpace(caFile) != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		data, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA file: %w", err)
+		}
+		if !pool.AppendCertsFromPEM(data) {
+			return nil, errors.New("CA file does not contain PEM certificates")
+		}
+		tlsConfig.RootCAs = pool
 	}
-	data, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read CA file: %w", err)
+	// Apply certificate pinning if a hash was provided (N1 fix).
+	if pinnedSHA256 := strings.TrimSpace(cloudCertSHA256); pinnedSHA256 != "" {
+		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			if len(rawCerts) == 0 {
+				return fmt.Errorf("no server certificate presented")
+			}
+			cert, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("parse server certificate: %w", err)
+			}
+			h := sha256.Sum256(cert.Raw)
+			actual := hex.EncodeToString(h[:])
+			if !strings.EqualFold(actual, pinnedSHA256) {
+				return fmt.Errorf("JWKS server certificate SHA-256 %q does not match pinned %q", actual, pinnedSHA256)
+			}
+			return nil
+		}
 	}
-	if !pool.AppendCertsFromPEM(data) {
-		return nil, errors.New("CA file does not contain PEM certificates")
-	}
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}}}, nil
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConfig}}, nil
 }
 
 func contains(values []string, target string) bool {

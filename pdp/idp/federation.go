@@ -46,6 +46,8 @@ type FederationSession struct {
 	ID            string    `json:"id"`
 	OIDCSessionID string    `json:"oidc_session_id"` // the PDP OIDC session this federation belongs to
 	GatewayID     string    `json:"gateway_id"`
+	TenantID      string    `json:"tenant_id"`     // which tenant's IdP is being used
+	IdPID         string    `json:"idp_config_id"` // which IdentityProviderConfig
 	Issuer        string    `json:"issuer"`
 	PKCEVerifier  string    `json:"pkce_verifier"`
 	Nonce         string    `json:"nonce"`
@@ -65,9 +67,10 @@ type FederatedTokenResponse struct {
 
 // FederatedClaims are the identity claims extracted from the external id_token.
 type FederatedClaims struct {
-	Subject  string `json:"sub"`
-	Username string `json:"username"`
-	Email    string `json:"email"`
+	Subject  string   `json:"sub"`
+	Username string   `json:"username"`
+	Email    string   `json:"email"`
+	Groups   []string `json:"groups"` // external IdP group memberships
 }
 
 // NewFederationProvider creates a new provider with an empty discovery cache.
@@ -230,6 +233,7 @@ func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map
 	mapping := map[string]string{
 		"username": "preferred_username",
 		"email":    "email",
+		"groups":   "groups", // default OIDC groups claim
 	}
 	// Override with user-configured mappings
 	for k, v := range claimMapping {
@@ -266,8 +270,74 @@ func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map
 		}
 	}
 
-	log.Printf("[FEDERATION] Mapped external claims: sub=%s username=%s email=%s",
-		claims.Subject, claims.Username, claims.Email)
+	// Map groups — supports both []string and comma-separated string
+	if key, ok := mapping["groups"]; ok {
+		claims.Groups = extractGroups(mapClaims, key)
+	}
+
+	log.Printf("[FEDERATION] Mapped external claims: sub=%s username=%s email=%s groups=%v",
+		claims.Subject, claims.Username, claims.Email, claims.Groups)
 
 	return claims, nil
+}
+
+// extractGroups extracts group names from a JWT claim value. Handles both
+// []interface{} (JSON array) and string (comma-separated) formats.
+func extractGroups(mapClaims jwt.MapClaims, key string) []string {
+	raw, ok := mapClaims[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case []interface{}:
+		groups := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				groups = append(groups, strings.TrimSpace(s))
+			}
+		}
+		return groups
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		parts := strings.Split(v, ",")
+		groups := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				groups = append(groups, trimmed)
+			}
+		}
+		return groups
+	default:
+		return nil
+	}
+}
+
+// MapGroupsToRole applies a list of GroupRoleRules to external group names
+// and returns the highest-priority internal role. Priority order:
+// admin > operator > auditor > user. If no rule matches, "user" is returned.
+func MapGroupsToRole(groups []string, mapping []models.GroupRoleRule) string {
+	if len(groups) == 0 || len(mapping) == 0 {
+		return "user"
+	}
+
+	// Priority-ordered lookup: admin first, then operator, auditor, user
+	priorityOrder := []string{"admin", "operator", "auditor", "user"}
+
+	for _, targetRole := range priorityOrder {
+		for _, rule := range mapping {
+			if rule.Role != targetRole {
+				continue
+			}
+			for _, g := range groups {
+				if strings.EqualFold(g, rule.GroupName) {
+					return targetRole
+				}
+			}
+		}
+	}
+
+	return "user"
 }

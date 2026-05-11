@@ -19,6 +19,7 @@ import (
 
 func TestServiceCreateResourceGeneratesCredentialsCertificateAndPublishesEvent(t *testing.T) {
 	dataStore := newResourceTestStore(t)
+	seedResourceScope(dataStore)
 	signer := newResourceTestSigner(t)
 	publisher := &testResourcePublisher{}
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -28,11 +29,13 @@ func TestServiceCreateResourceGeneratesCredentialsCertificateAndPublishesEvent(t
 	service.now = func() time.Time { return fixedNow }
 
 	resource, err := service.CreateResource(models.Resource{
-		Name:     "SSH Admin",
-		Type:     "ssh",
-		Host:     "ssh.internal.test",
-		Port:     22,
-		CertMode: "vault-signed",
+		TenantID:  testTenantID,
+		GatewayID: testGatewayID,
+		Name:      "SSH Admin",
+		Type:      "ssh",
+		Host:      "ssh.internal.test",
+		Port:      22,
+		CertMode:  "vault-signed",
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
@@ -62,7 +65,9 @@ func TestServiceCreateResourceGeneratesCredentialsCertificateAndPublishesEvent(t
 }
 
 func TestServiceCreateResourceValidatesRequest(t *testing.T) {
-	service := NewService(newResourceTestStore(t), "resource-role")
+	dataStore := newResourceTestStore(t)
+	seedResourceScope(dataStore)
+	service := NewService(dataStore, "resource-role")
 
 	_, err := service.CreateResource(models.Resource{Name: "Missing Type"})
 	if !errors.Is(err, ErrInvalidRequest) {
@@ -73,16 +78,22 @@ func TestServiceCreateResourceValidatesRequest(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("invalid type error = %v, want ErrInvalidRequest", err)
 	}
+
+	_, err = service.CreateResource(models.Resource{Name: "No Scope", Type: "ssh"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("missing scope error = %v, want ErrInvalidRequest", err)
+	}
 }
 
 func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	dataStore := newResourceTestStore(t)
+	seedResourceScope(dataStore)
 	publisher := &testResourcePublisher{}
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "resource-role")
 	service.SetEventPublisher(publisher)
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", Name: "Old", Type: "ssh", Host: "old.internal", Port: 22, Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: testTenantID, GatewayID: testGatewayID, Name: "Old", Type: "ssh", Host: "old.internal", Port: 22, Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
 
 	fields := map[string]json.RawMessage{
 		"name":          json.RawMessage(`"New"`),
@@ -162,6 +173,33 @@ func newResourceTestStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = dataStore.Close() })
 	return dataStore
+}
+
+const (
+	testTenantID  = "tenant-1"
+	testGatewayID = "gw-1"
+)
+
+func seedResourceScope(dataStore *store.Store) {
+	now := time.Now()
+	dataStore.SaveTenant(&models.Tenant{
+		ID:        testTenantID,
+		Name:      "Test Tenant",
+		Domain:    "example.test",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SaveGateway(&models.Gateway{
+		ID:        testGatewayID,
+		TenantID:  testTenantID,
+		TenantIDs: []string{testTenantID},
+		Name:      "Test Gateway",
+		FQDN:      "gateway.example.test",
+		Status:    "enrolled",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 }
 
 type testResourcePublisher struct {

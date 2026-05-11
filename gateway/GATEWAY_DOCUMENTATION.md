@@ -25,7 +25,7 @@ Removed legacy surfaces: Gateway Admin UI, SessionStore microservice, Syslog ser
 ## Runtime Flow
 
 1. Gateway starts from `cmd/gateway` with `gateway-config.json`.
-2. If `enrollment_token` is set and the mTLS cert/key are missing, `internal/enrollment` generates an ECDSA P-256 key, creates a CSR, posts it to Cloud `/api/gateway/enroll`, writes the signed Gateway mTLS certificate and CA, clears the token, and saves the config.
+2. If `enrollment_token` is set and the mTLS cert/key are missing, `internal/enrollment` generates an ECDSA P-256 key, creates a scoped CSR, calls Cloud `ztna.gateway.v1.GatewayEnrollmentService/Enroll` over gRPC, writes the signed Gateway mTLS certificate and CA, clears the token, and saves the config.
 3. `internal/auth.CloudClient` starts with TLS 1.3 and Gateway mTLS for PDP/PKI calls.
 4. If `control_plane.enabled=true`, `internal/controlplane` opens `ztna.gateway.v1.GatewayControlService/ControlStream` over HTTP/2 gRPC with mTLS, sends `gateway_hello`, and receives PA commands.
 5. `provision_session` commands are stored in `internal/provisioning` with SHA-256 token hashes.
@@ -83,19 +83,19 @@ PDP/PA remains authoritative for authentication, MFA/step-up orchestration, poli
 Gateway enrollment is non-interactive and does not require a local Admin UI:
 
 1. Cloud admin creates a one-time Gateway enrollment token.
-2. Gateway receives it through `enrollment_token` or `GATEWAY_ENROLLMENT_TOKEN`.
-3. Gateway generates an ECDSA P-256 key and CSR locally.
-4. Gateway calls `POST /api/gateway/enroll` with token, CSR, FQDN, and name.
+2. Gateway receives it through `enrollment_token` or `GATEWAY_ENROLLMENT_TOKEN` and is configured with `tenant_id` plus `control_plane.gateway_id`.
+3. Gateway generates an ECDSA P-256 key and CSR locally. The CSR includes a URI SAN in the form `spiffe://ztna.local/tenant/{tenant_id}/gateway/{gateway_id}`; FQDN is kept only as a DNS SAN/network attribute.
+4. Gateway calls the gRPC method `ztna.gateway.v1.GatewayEnrollmentService/Enroll` with token, CSR, FQDN, name, tenant ID, and gateway ID.
 5. Cloud signs the CSR through the configured PKI role and returns the Gateway mTLS certificate plus CA bundle.
 6. Gateway writes `mtls_cert`, `mtls_key`, `mtls_csr`, and `cloud_ca`, then clears the token.
 
-Certificate renewal uses `POST /api/gateway/renew-cert` over existing Gateway mTLS. Revoked certificate serials are synchronized from Vault CRL first, with Cloud revoked-serial feed fallback.
+Certificate renewal uses `ztna.gateway.v1.GatewayEnrollmentService/RenewCertificate` over existing Gateway mTLS. PDP authenticates the current certificate through the tenant/gateway URI SAN and stored fingerprint, then validates the renewed CSR has the same scoped identity. Revoked certificate serials are synchronized from Vault CRL first, with Cloud revoked-serial feed fallback.
 
 ## Configuration
 
 Primary JSON fields:
 
-- `listen_addr`, `fqdn`
+- `listen_addr`, `fqdn`, `tenant_id`
 - `tls_cert`, `tls_key`, `tls_ca`, `client_ca`, `cloud_ca`, `require_client_cert`
 - `mtls_cert`, `mtls_key`, `mtls_csr`
 - `cloud_url`, `cloud_cert_sha256`, `enrollment_token`

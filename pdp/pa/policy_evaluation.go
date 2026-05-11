@@ -19,13 +19,39 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 		}
 	}
 
+	if pa.Store != nil {
+		if user, ok := pa.Store.GetUser(req.UserID); ok && user != nil {
+			if req.TenantID == "" {
+				req.TenantID = user.TenantID
+			} else if user.TenantID != "" && !strings.EqualFold(req.TenantID, user.TenantID) {
+				return denyTenantMismatch("user does not belong to requested tenant")
+			}
+		}
+		if resource, ok := pa.Store.GetResource(req.Resource); ok && resource != nil {
+			if req.TenantID == "" {
+				req.TenantID = resource.TenantID
+			} else if resource.TenantID != "" && !strings.EqualFold(req.TenantID, resource.TenantID) {
+				return denyTenantMismatch("resource does not belong to requested tenant")
+			}
+			if req.GatewayID == "" {
+				req.GatewayID = resource.GatewayID
+			} else if resource.GatewayID != "" && !strings.EqualFold(req.GatewayID, resource.GatewayID) {
+				return denyTenantMismatch("resource is not assigned to requested gateway")
+			}
+		}
+	}
+
 	ctx := evaluation.AccessContext{
 		Request: req,
 		Now:     time.Now(),
 	}
 
 	if pa.Store != nil {
-		ctx.Rules = pa.Store.ListPolicyRules()
+		if strings.TrimSpace(req.TenantID) != "" || strings.TrimSpace(req.GatewayID) != "" || strings.TrimSpace(req.Resource) != "" {
+			ctx.Rules = pa.Store.ListPolicyRulesForAccess(req.TenantID, req.GatewayID, req.Resource)
+		} else {
+			ctx.Rules = pa.Store.ListPolicyRules()
+		}
 		ctx.FailedAttempts = pa.Store.GetFailedAttempts(req.Username)
 		if user, ok := pa.Store.GetUser(req.UserID); ok && user != nil {
 			ctx.UserRole = user.Role
@@ -39,4 +65,12 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 	}
 
 	return pa.Engine.Evaluate(ctx)
+}
+
+func denyTenantMismatch(reason string) *models.AccessDecision {
+	return &models.AccessDecision{
+		Decision:  "deny",
+		Reason:    reason,
+		RiskScore: 100,
+	}
 }

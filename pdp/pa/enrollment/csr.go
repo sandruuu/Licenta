@@ -1,12 +1,15 @@
 package enrollment
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -103,4 +106,35 @@ func ShortFingerprint(value string) string {
 		return value
 	}
 	return value[:16]
+}
+
+// ValidateKeyProof verifies a TPM-signed key proof (N3 fix). The proof is
+// an ECDSA signature over a deterministic challenge built from device_id and
+// public_key_fingerprint. The signature is verified against the public key
+// extracted from the CSR, so the fingerprint cannot be spoofed.
+func ValidateKeyProof(csr *x509.CertificateRequest, deviceID, fingerprint, keyProof string) error {
+	keyProof = strings.TrimSpace(keyProof)
+	if keyProof == "" {
+		// Key proof is optional: enrollment proceeds without it but logs a warning.
+		return nil
+	}
+	pub, ok := csr.PublicKey.(*ecdsa.PublicKey)
+	if !ok || pub == nil {
+		return fmt.Errorf("CSR public key is not ECDSA")
+	}
+	if pub.Curve != elliptic.P256() {
+		return fmt.Errorf("CSR public key is not P-256")
+	}
+	signature, err := hex.DecodeString(keyProof)
+	if err != nil || len(signature) < 60 {
+		return fmt.Errorf("invalid key proof format")
+	}
+	challenge := fmt.Sprintf("ztna-est-enrollment:%s:%s", deviceID, fingerprint)
+	hash := sha256.Sum256([]byte(challenge))
+	r := new(big.Int).SetBytes(signature[:len(signature)/2])
+	s := new(big.Int).SetBytes(signature[len(signature)/2:])
+	if !ecdsa.Verify(pub, hash[:], r, s) {
+		return fmt.Errorf("key proof signature verification failed")
+	}
+	return nil
 }

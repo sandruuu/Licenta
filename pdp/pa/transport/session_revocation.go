@@ -24,6 +24,8 @@ func (s *Server) wireSessionDeleteSink() {
 			fields["user_id"] = session.UserID
 			fields["device_id"] = session.DeviceID
 			fields["resource_id"] = session.Resource
+			fields["tenant_id"] = session.TenantID
+			fields["gateway_id"] = session.GatewayID
 		}
 		s.publishCAEPEvent(events.TopicSessionDeleted, fields)
 		s.revokeProvisionedGatewaySession(session, reason)
@@ -107,6 +109,9 @@ func (s *Server) gatewayIDsForSessionRevocation(session *models.Session) []strin
 	if gatewayID, ok := s.gatewaySessionBinding(session.ID); ok {
 		return []string{gatewayID}
 	}
+	if gatewayID := strings.TrimSpace(session.GatewayID); gatewayID != "" {
+		return []string{gatewayID}
+	}
 	if s.pa == nil || s.pa.Store == nil || s.gatewayControl == nil {
 		return nil
 	}
@@ -119,6 +124,13 @@ func (s *Server) gatewayIDsForSessionRevocation(session *models.Session) []strin
 	}
 	gatewayIDs := make([]string, 0, len(connected))
 	seen := make(map[string]struct{}, len(connected))
+	if resource, found := s.pa.Store.GetResource(session.Resource); found && resource != nil {
+		if gatewayID := strings.TrimSpace(resource.GatewayID); gatewayID != "" {
+			if _, ok := connected[gatewayID]; ok {
+				return []string{gatewayID}
+			}
+		}
+	}
 	for _, gateway := range s.pa.Store.ListGateways() {
 		if gateway == nil || gateway.Status != "enrolled" {
 			continue

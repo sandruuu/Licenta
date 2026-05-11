@@ -25,6 +25,10 @@ import (
 	"time"
 
 	"gateway/internal/config"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // CloudClient handles communication with the Cloud control plane.
@@ -595,32 +599,115 @@ func dedupeStrings(values []string) []string {
 	return result
 }
 
-// CertRenewalResponse is the response from POST /api/gateway/renew-cert
+// CertRenewalResponse is the response from the gateway enrollment gRPC service.
 type CertRenewalResponse struct {
-	Status  string `json:"status"`
-	CertPEM string `json:"cert_pem"`
-	CAPEM   string `json:"ca_pem"`
-	Message string `json:"message"`
+	GatewayID string `json:"gateway_id,omitempty"`
+	TenantID  string `json:"tenant_id,omitempty"`
+	Status    string `json:"status"`
+	CertPEM   string `json:"cert_pem"`
+	CAPEM     string `json:"ca_pem"`
+	Message   string `json:"message"`
 }
 
+const gatewayEnrollmentGRPCRenewCert = "/ztna.gateway.v1.GatewayEnrollmentService/RenewCertificate"
+
 // RenewCert sends a CSR to the cloud and receives a fresh signed certificate.
-// The mTLS identity is verified server-side — no gateway_id is needed in the body.
+// The mTLS identity is verified server-side, so no gateway_id is needed in the body.
 func (c *CloudClient) RenewCert(csrPEM string) (*CertRenewalResponse, error) {
-	resp, err := c.cloudPost("/api/gateway/renew-cert", map[string]string{
-		"csr_pem": csrPEM,
+	var response *structpb.Struct
+	_, err := c.breaker.Execute(func() ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		request, buildErr := structpb.NewStruct(map[string]interface{}{"csr_pem": csrPEM})
+		if buildErr != nil {
+			return nil, fmt.Errorf("build renewal request: %w", buildErr)
+		}
+		var invokeErr error
+		response, invokeErr = c.invokeGatewayEnrollmentGRPC(ctx, gatewayEnrollmentGRPCRenewCert, request)
+		if invokeErr != nil {
+			return nil, invokeErr
+		}
+		return []byte("ok"), nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("renew cert: %w", err)
 	}
 
-	var result CertRenewalResponse
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse renewal response: %w", err)
+	result := CertRenewalResponse{
+		GatewayID: structFieldString(response, "gateway_id"),
+		TenantID:  structFieldString(response, "tenant_id"),
+		Status:    structFieldString(response, "status"),
+		CertPEM:   structFieldString(response, "cert_pem"),
+		CAPEM:     structFieldString(response, "ca_pem"),
+		Message:   structFieldString(response, "message"),
 	}
 	if result.Status != "renewed" {
 		return nil, fmt.Errorf("renewal failed: %s", result.Message)
 	}
 	return &result, nil
+}
+
+func (c *CloudClient) invokeGatewayEnrollmentGRPC(ctx context.Context, method string, request *structpb.Struct) (*structpb.Struct, error) {
+	target, serverName, err := grpcTargetFromCloudURL(c.cloudURL)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig, err := c.grpcTLSConfig(serverName)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := grpc.DialContext(ctx, target, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
+	if err != nil {
+		return nil, fmt.Errorf("dial gateway enrollment service: %w", err)
+	}
+	defer conn.Close()
+	response := &structpb.Struct{}
+	if err := conn.Invoke(ctx, method, request, response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (c *CloudClient) grpcTLSConfig(defaultServerName string) (*tls.Config, error) {
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil {
+		return nil, fmt.Errorf("cloud client transport does not expose a TLS configuration")
+	}
+	tlsConfig := transport.TLSClientConfig.Clone()
+	if tlsConfig.ServerName == "" {
+		tlsConfig.ServerName = strings.TrimSpace(defaultServerName)
+	}
+	return tlsConfig, nil
+}
+
+func grpcTargetFromCloudURL(rawURL string) (string, string, error) {
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", "", fmt.Errorf("parse cloud_url: %w", err)
+	}
+	if !strings.EqualFold(parsedURL.Scheme, "https") {
+		return "", "", fmt.Errorf("cloud_url must use https for gateway gRPC")
+	}
+	host := strings.TrimSpace(parsedURL.Host)
+	serverName := strings.TrimSpace(parsedURL.Hostname())
+	if host == "" || serverName == "" {
+		return "", "", fmt.Errorf("cloud_url must include a host")
+	}
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		host = net.JoinHostPort(serverName, "443")
+	}
+	return host, serverName, nil
+}
+
+func structFieldString(value *structpb.Struct, key string) string {
+	if value == nil {
+		return ""
+	}
+	field, ok := value.GetFields()[key]
+	if !ok || field == nil {
+		return ""
+	}
+	return strings.TrimSpace(field.GetStringValue())
 }
 
 // ReloadTLSCert reloads the mTLS client certificate from disk.

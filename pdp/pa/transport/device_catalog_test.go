@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"net/http"
@@ -30,146 +29,6 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestDeviceCatalogRequiresEnrolledMTLSIdentity(t *testing.T) {
-	server, dataStore := newDeviceAPITestServer(t)
-	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
-	accessToken := newDeviceCatalogAccessToken(t, server, dataStore, "device-1", "admin")
-	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
-		ID:              "enroll-1",
-		DeviceID:        "device-1",
-		Component:       "endpoint",
-		Status:          "approved",
-		CertPEM:         string(certPEM),
-		CertFingerprint: clientCertificateFingerprint(cert),
-		EnrolledAt:      time.Now().Add(-time.Minute),
-		ExpiresAt:       time.Now().Add(time.Hour),
-	})
-	dataStore.SaveResource(&models.Resource{
-		ID:           "res-1",
-		Name:         "Admin Portal",
-		Type:         "web",
-		ExternalURL:  "https://admin.example.test/app",
-		Port:         443,
-		Enabled:      true,
-		AllowedRoles: []string{"admin"},
-		Metadata:     map[string]string{"dns_suffix": "example.test"},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	})
-
-	handler := server.requireClientCert(server.deviceAuthMiddleware(http.HandlerFunc(server.handleDeviceCatalog)))
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/device/catalog", strings.NewReader(`{}`))
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{cert},
-		VerifiedChains:   [][]*x509.Certificate{{cert}},
-	}
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
-	var response map[string]any
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
-		t.Fatalf("decode catalog response: %v", err)
-	}
-	version, _ := response["version"].(string)
-	if version == "" || int(response["ttl_seconds"].(float64)) != 300 || response["not_modified"].(bool) {
-		t.Fatalf("catalog metadata = %+v", response)
-	}
-	for _, forbidden := range []string{"fqdn", "resource_id", "protocol", "port"} {
-		if _, ok := response[forbidden]; ok {
-			t.Fatalf("catalog response leaked top-level %s: %+v", forbidden, response)
-		}
-	}
-	suffixValues, ok := response["dns_suffixes"].([]any)
-	if !ok || len(suffixValues) != 1 || suffixValues[0].(string) != "example.test" {
-		t.Fatalf("dns_suffixes = %+v", response["dns_suffixes"])
-	}
-	resources, ok := response["resources"].([]any)
-	if !ok || len(resources) != 1 {
-		t.Fatalf("resources = %+v", response["resources"])
-	}
-	resource, ok := resources[0].(map[string]any)
-	if !ok || resource["fqdn"] != "admin.example.test" || resource["resource_id"] != "res-1" || resource["protocol"] != "https" || int(resource["port"].(float64)) != 443 {
-		t.Fatalf("resource = %+v", resources[0])
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/device/catalog", strings.NewReader(`{"current_version":"`+version+`"}`))
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{cert},
-		VerifiedChains:   [][]*x509.Certificate{{cert}},
-	}
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusNotModified {
-		t.Fatalf("status = %d, want 304", recorder.Code)
-	}
-}
-
-func TestDeviceCatalogFiltersSuffixesByAuthenticatedUserRole(t *testing.T) {
-	server, dataStore := newDeviceAPITestServer(t)
-	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
-	accessToken := newDeviceCatalogAccessToken(t, server, dataStore, "device-1", "user")
-	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
-		ID:              "enroll-1",
-		DeviceID:        "device-1",
-		Component:       "endpoint",
-		Status:          "approved",
-		CertPEM:         string(certPEM),
-		CertFingerprint: clientCertificateFingerprint(cert),
-		EnrolledAt:      time.Now().Add(-time.Minute),
-		ExpiresAt:       time.Now().Add(time.Hour),
-	})
-	dataStore.SaveResource(&models.Resource{
-		ID:           "res-admin",
-		Name:         "Admin",
-		Type:         "web",
-		ExternalURL:  "https://admin.example.test",
-		Enabled:      true,
-		AllowedRoles: []string{"admin"},
-		Metadata:     map[string]string{"dns_suffix": "admin.example.test"},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	})
-	dataStore.SaveResource(&models.Resource{
-		ID:           "res-user",
-		Name:         "User",
-		Type:         "web",
-		ExternalURL:  "https://user.example.test",
-		Enabled:      true,
-		AllowedRoles: []string{"user"},
-		Metadata:     map[string]string{"dns_suffix": "user.example.test"},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
-	})
-
-	handler := server.requireClientCert(server.deviceAuthMiddleware(http.HandlerFunc(server.handleDeviceCatalog)))
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/device/catalog", strings.NewReader(`{}`))
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.TLS = &tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{cert},
-		VerifiedChains:   [][]*x509.Certificate{{cert}},
-	}
-	handler.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
-	var response struct {
-		DNSSuffixes []string `json:"dns_suffixes"`
-	}
-	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
-		t.Fatalf("decode catalog response: %v", err)
-	}
-	if len(response.DNSSuffixes) != 1 || response.DNSSuffixes[0] != "user.example.test" {
-		t.Fatalf("dns_suffixes = %+v", response.DNSSuffixes)
-	}
-}
-
 func TestDeviceAuthMiddlewareRejectsFingerprintMismatch(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	_, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
@@ -187,7 +46,7 @@ func TestDeviceAuthMiddlewareRejectsFingerprintMismatch(t *testing.T) {
 		t.Fatalf("handler should not be reached")
 	})))
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/device/catalog", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/test-device-auth", strings.NewReader(`{}`))
 	request.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{cert},
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
@@ -390,6 +249,8 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 	})
 	dataStore.SaveResource(&models.Resource{
 		ID:           "res-1",
+		TenantID:     transportTestTenantID,
+		GatewayID:    "gw-1",
 		Name:         "Admin Portal",
 		Type:         "web",
 		ExternalURL:  "https://admin.example.test/app",
@@ -483,6 +344,7 @@ func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.
 	t.Helper()
 	dataStore.SaveUser(&models.User{
 		ID:        "user-1",
+		TenantID:  transportTestTenantID,
 		Username:  "alice@example.test",
 		Email:     "alice@example.test",
 		Role:      role,
@@ -502,6 +364,14 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 	if err := dataStore.InitDB(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
+	dataStore.SaveTenant(&models.Tenant{
+		ID:        transportTestTenantID,
+		Name:      "Test Tenant",
+		Domain:    "example.test",
+		Enabled:   true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
 	t.Cleanup(func() { _ = dataStore.Close() })
 	cfg := config.DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -510,6 +380,8 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 	server.wireSessionDeleteSink()
 	return server, dataStore
 }
+
+const transportTestTenantID = "tenant-1"
 
 func newDeviceAPICertificate(t *testing.T, commonName string, notAfter time.Time) ([]byte, *x509.Certificate) {
 	t.Helper()

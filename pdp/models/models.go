@@ -98,15 +98,70 @@ type RegisterRequest struct {
 // ─────────────────────────────────────────────
 
 // Tenant represents an organization with complete isolation of identity,
-// gateways, resources, and policies.
+// gateways, resources, and policies. Each tenant can configure zero, one,
+// or multiple external Identity Providers for federated authentication.
 type Tenant struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`   // e.g. "Company HQ"
-	Domain      string    `json:"domain"` // e.g. "company.com" (used for HRD later)
-	Description string    `json:"description,omitempty"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`              // e.g. "Company HQ"
+	Domain      string   `json:"domain"`            // primary domain, e.g. "company.com" (also used for HRD)
+	Domains     []string `json:"domains,omitempty"` // additional verified domains for HRD
+	Description string   `json:"description,omitempty"`
+	Enabled     bool     `json:"enabled"`
+
+	// Identity Provider reference — points to the default IdentityProviderConfig
+	// for this tenant. When empty, PDP uses built-in authentication for users
+	// whose User.AuthSource is "builtin".
+	DefaultIdPID string `json:"default_idp_id,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ─────────────────────────────────────────────
+// Identity Provider Configuration (per Tenant)
+// ─────────────────────────────────────────────
+
+// IdentityProviderConfig defines an external OIDC Identity Provider trusted
+// by a tenant. This replaces the legacy Gateway-scoped FederationConfig so
+// that identity configuration belongs to the organization, not the network
+// infrastructure. A tenant has a single active IdP configuration.
+type IdentityProviderConfig struct {
+	ID       string `json:"id"`
+	TenantID string `json:"tenant_id"`
+	Name     string `json:"name"` // display name, e.g. "Company Entra ID"
+	Type     string `json:"type"` // "oidc" (future: "saml", "ldap")
+	Enabled  bool   `json:"enabled"`
+
+	// HRD: which email domains route to this IdP. When a user's email domain
+	// matches one of these, the PDP can perform direct Home Realm Discovery
+	// without showing a tenant/IdP picker page.
+	Domains []string `json:"domains,omitempty"` // e.g. ["company.com", "subsidiary.com"]
+
+	// OIDC configuration (identical to FederationConfig, moved to the tenant level)
+	Issuer        string `json:"issuer"`                  // e.g. "https://login.microsoftonline.com/{tenant}/v2.0"
+	ClientID      string `json:"client_id"`               // OIDC client registered in external IdP
+	ClientSecret  string `json:"client_secret,omitempty"` // optional for public clients using PKCE
+	Scopes        string `json:"scopes"`                  // default "openid profile email"
+	AutoDiscovery bool   `json:"auto_discovery"`          // use .well-known/openid-configuration
+
+	// Advanced claim mapping. Keys are our internal field names; values are the
+	// external IdP claim names. Supported keys: "username", "email", "groups".
+	// Default if unset: {"username": "preferred_username", "email": "email", "groups": "groups"}
+	ClaimMapping map[string]string `json:"claim_mapping,omitempty"`
+
+	// Group → Role mapping rules. External IdP group names are mapped to internal
+	// roles with a fixed priority order: admin > operator > auditor > user.
+	// The first matching rule wins; if no rule matches, "user" is the default.
+	GroupRoleMapping []GroupRoleRule `json:"group_role_mapping,omitempty"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GroupRoleRule maps an external IdP group name to an internal PDP role.
+type GroupRoleRule struct {
+	GroupName string `json:"group_name"` // external group name/ID from the IdP token
+	Role      string `json:"role"`       // internal role: "admin", "operator", "auditor", "user"
 }
 
 // ─────────────────────────────────────────────
@@ -154,6 +209,9 @@ type PolicyRule struct {
 	Priority    int            `json:"priority"` // lower = higher priority
 	Enabled     bool           `json:"enabled"`
 	TenantID    string         `json:"tenant_id,omitempty"` // multi-tenant isolation
+	Scope       string         `json:"scope,omitempty"`     // "global", "gateway", or "resource"
+	GatewayID   string         `json:"gateway_id,omitempty"`
+	ResourceID  string         `json:"resource_id,omitempty"`
 	Conditions  RuleConditions `json:"conditions"`
 	Action      string         `json:"action"` // "allow", "deny", "mfa_required", "restrict"
 	CreatedAt   time.Time      `json:"created_at"`
@@ -217,6 +275,8 @@ type AccessRequest struct {
 	DeviceID     string              `json:"device_id"`
 	SourceIP     string              `json:"source_ip"`
 	Resource     string              `json:"resource"` // target resource identifier
+	TenantID     string              `json:"tenant_id,omitempty"`
+	GatewayID    string              `json:"gateway_id,omitempty"`
 	ResourcePort int                 `json:"resource_port"`
 	Protocol     string              `json:"protocol"`         // "rdp", "ssh", "https"
 	AuthToken    string              `json:"auth_token"`       // JWT token
@@ -315,6 +375,7 @@ type Session struct {
 	DeviceID     string    `json:"device_id"`
 	SourceIP     string    `json:"source_ip"`
 	Resource     string    `json:"resource"`
+	GatewayID    string    `json:"gateway_id,omitempty"`
 	Protocol     string    `json:"protocol"`
 	RiskScore    int       `json:"risk_score"`
 	TenantID     string    `json:"tenant_id,omitempty"` // multi-tenant isolation
@@ -358,7 +419,7 @@ type Resource struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description,omitempty"`
-	Type        string            `json:"type"`                   // "ssh", "rdp", "web", "gateway"
+	Type        string            `json:"type"`                   // "ssh", "rdp", "web"
 	Host        string            `json:"host"`                   // internal hostname or IP
 	Port        int               `json:"port"`                   // service port
 	ExternalURL string            `json:"external_url,omitempty"` // public-facing URL (for web)
@@ -488,6 +549,7 @@ type EnrollmentRequest struct {
 	Hostname             string `json:"hostname"`
 	CSRPEM               string `json:"csr_pem"`
 	PublicKeyFingerprint string `json:"public_key_fingerprint"` // SHA-256 of device public key
+	KeyProof             string `json:"key_proof,omitempty"`    // TPM-signed challenge proof-of-possession (N3)
 }
 
 // EnrollmentResponse is returned after enrollment request or approval
@@ -542,7 +604,10 @@ type Gateway struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`                // human-readable name, e.g. "HQ Gateway"
 	FQDN     string `json:"fqdn"`                // public FQDN, e.g. "gateway.company.com"
-	TenantID string `json:"tenant_id,omitempty"` // multi-tenant isolation
+	TenantID string `json:"tenant_id,omitempty"` // multi-tenant isolation (legacy single-tenant)
+	// TenantIDs is kept for backward compatibility with older multi-tenant
+	// gateway experiments. New gateways use TenantID and serve exactly one tenant.
+	TenantIDs []string `json:"tenant_ids,omitempty"`
 
 	// Enrollment
 	EnrollmentToken string `json:"enrollment_token,omitempty"` // one-time token (hex, 32 bytes)
@@ -566,7 +631,12 @@ type Gateway struct {
 	// Assigned resources (IDs of resources this gateway serves)
 	AssignedResources []string `json:"assigned_resources,omitempty"`
 
-	// Identity Broker: per-gateway authentication mode
+	// Identity Broker: per-gateway authentication mode.
+	// DEPRECATED: AuthMode and FederationConfig are kept for backward
+	// compatibility. New deployments should configure IdP per Tenant via
+	// IdentityProviderConfig. When both gateway FederationConfig and
+	// tenant IdentityProviderConfig are configured, the tenant-level
+	// config takes precedence.
 	AuthMode         string            `json:"auth_mode"`                   // "builtin" (default) or "federated"
 	FederationConfig *FederationConfig `json:"federation_config,omitempty"` // nil when AuthMode="builtin"
 
@@ -576,8 +646,8 @@ type Gateway struct {
 }
 
 // FederationConfig holds the external OIDC IdP configuration for a gateway.
-// When a gateway uses "federated" auth mode, PDP redirects users to this
-// external IdP instead of showing the built-in login form.
+// DEPRECATED: use IdentityProviderConfig per Tenant instead.
+// Kept for backward compatibility during migration.
 type FederationConfig struct {
 	Issuer        string            `json:"issuer"`                  // e.g. "https://keycloak.company.com/realms/master"
 	ClientID      string            `json:"client_id"`               // OIDC client registered in external IdP
@@ -589,16 +659,19 @@ type FederationConfig struct {
 
 // GatewayEnrollRequest is sent by the gateway during enrollment.
 type GatewayEnrollRequest struct {
-	Token  string `json:"token"`   // one-time enrollment token
-	CSRPEM string `json:"csr_pem"` // PEM-encoded CSR for mTLS cert
-	FQDN   string `json:"fqdn"`    // gateway's public FQDN
-	Name   string `json:"name,omitempty"`
+	Token     string `json:"token"`   // one-time enrollment token
+	CSRPEM    string `json:"csr_pem"` // PEM-encoded CSR for mTLS cert
+	FQDN      string `json:"fqdn"`    // gateway's public FQDN
+	Name      string `json:"name,omitempty"`
+	GatewayID string `json:"gateway_id,omitempty"` // expected gateway identity from PA
+	TenantID  string `json:"tenant_id,omitempty"`  // tenant scope for certificate identity
 }
 
 // GatewayEnrollResponse is returned after successful enrollment.
 type GatewayEnrollResponse struct {
 	Status    string `json:"status"` // "enrolled"
 	GatewayID string `json:"gateway_id"`
+	TenantID  string `json:"tenant_id,omitempty"`
 	CertPEM   string `json:"cert_pem"` // Gateway mTLS certificate
 	CAPEM     string `json:"ca_pem"`   // CA certificate for verifying PDP
 	Message   string `json:"message,omitempty"`

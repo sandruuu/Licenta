@@ -2,11 +2,7 @@ package transport
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"pdp/models"
@@ -36,34 +32,6 @@ type agentAuthorizeResponse struct {
 	ExpiresAt       string   `json:"expires_at,omitempty"`
 }
 
-func (s *Server) handleAgentAuthorize(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	enrollment, ok := deviceEnrollmentFromContext(r)
-	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "device identity not found in request context"})
-		return
-	}
-	token, err := bearerToken(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authorization bearer token required"})
-		return
-	}
-	var req agentAuthorizeRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-	response, statusCode, err := s.authorizeAgentResource(r.Context(), enrollment, token, req, sourceIPForPolicy(r))
-	if err != nil {
-		writeJSON(w, statusCode, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, response)
-}
-
 func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.DeviceEnrollment, token string, req agentAuthorizeRequest, sourceIP string) (agentAuthorizeResponse, int, error) {
 	if s == nil || s.pa == nil {
 		return agentAuthorizeResponse{}, http.StatusServiceUnavailable, newAccessErrorForTransport("policy administrator is not available")
@@ -88,17 +56,6 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 		s.rememberGatewaySession(result.SessionID, result.GatewayID)
 	}
 	return agentAuthorizeResponseFromPA(result), http.StatusOK, nil
-}
-
-func sourceIPForPolicy(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		return strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
-	}
-	return r.RemoteAddr
 }
 
 func agentAuthorizeResponseFromPA(response pa.AgentAuthorizationResponse) agentAuthorizeResponse {

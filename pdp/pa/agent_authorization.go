@@ -50,6 +50,7 @@ type AgentGatewayProvisioner interface {
 
 type resolvedAgentAuthorization struct {
 	resource *models.Resource
+	gateway  *models.Gateway
 	protocol string
 	port     int
 }
@@ -74,6 +75,8 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		DeviceID:     deviceID,
 		SourceIP:     strings.TrimSpace(req.SourceIP),
 		Resource:     resolved.resource.ID,
+		TenantID:     resolved.resource.TenantID,
+		GatewayID:    resolved.gateway.ID,
 		ResourcePort: resolved.port,
 		Protocol:     resolved.protocol,
 		AuthToken:    strings.TrimSpace(req.UserToken),
@@ -95,7 +98,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		return agentAuthorizationResponseFromDecision(decision), nil
 	}
 
-	gateway, endpoint, err := pa.connectedGatewayForResource(resolved.resource.ID, provisioner)
+	gateway, endpoint, err := pa.connectedGatewayForResource(resolved.resource, provisioner)
 	if err != nil {
 		return AgentAuthorizationResponse{}, err
 	}
@@ -187,6 +190,26 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if !ok || resource == nil || !resource.Enabled {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorNotFound, "resource not found or disabled", nil)
 	}
+	if strings.TrimSpace(resource.TenantID) == "" {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource has no tenant assignment", nil)
+	}
+	if strings.TrimSpace(resource.GatewayID) == "" {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource has no gateway assignment", nil)
+	}
+	gateway, ok := pa.Store.GetGateway(resource.GatewayID)
+	if !ok || gateway == nil {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource gateway not found", nil)
+	}
+	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, resource.TenantID) {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource gateway belongs to a different tenant", nil)
+	}
+	user, ok := pa.Store.GetUser(claims.UserID)
+	if !ok || user == nil || user.Disabled {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "user is not allowed to access resources", nil)
+	}
+	if strings.TrimSpace(user.TenantID) == "" || !strings.EqualFold(user.TenantID, resource.TenantID) {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is outside the user's tenant", nil)
+	}
 	if !ResourceVisibleForRole(resource, claims.Role) {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is not available to this user", nil)
 	}
@@ -207,34 +230,35 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if port <= 0 || resourcePort <= 0 || port != resourcePort {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorInvalidRequest, fmt.Sprintf("port must be %d", resourcePort), nil)
 	}
-	return resolvedAgentAuthorization{resource: resource, protocol: protocol, port: port}, nil
+	return resolvedAgentAuthorization{resource: resource, gateway: gateway, protocol: protocol, port: port}, nil
 }
 
-func (pa *PolicyAdministrator) connectedGatewayForResource(resourceID string, provisioner AgentGatewayProvisioner) (*models.Gateway, string, error) {
+func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Resource, provisioner AgentGatewayProvisioner) (*models.Gateway, string, error) {
 	if pa == nil || pa.Store == nil || provisioner == nil {
 		return nil, "", newAccessError(AccessErrorConflict, "gateway control plane is not available", nil)
+	}
+	if resource == nil || strings.TrimSpace(resource.GatewayID) == "" {
+		return nil, "", newAccessError(AccessErrorConflict, "resource has no gateway assignment", nil)
 	}
 	connected := make(map[string]struct{})
 	for _, gatewayID := range provisioner.ConnectedGatewayIDs() {
 		connected[strings.TrimSpace(gatewayID)] = struct{}{}
 	}
-	for _, gateway := range pa.Store.ListGateways() {
-		if gateway == nil || gateway.Status != "enrolled" {
-			continue
-		}
-		if !GatewayServesResource(gateway, resourceID) {
-			continue
-		}
-		if _, ok := connected[gateway.ID]; !ok {
-			continue
-		}
-		endpoint := firstNonEmptyString(gateway.ListenAddr, gateway.FQDN)
-		if endpoint == "" {
-			return nil, "", newAccessError(AccessErrorConflict, fmt.Sprintf("connected gateway %s has no endpoint", gateway.ID), nil)
-		}
-		return gateway, endpoint, nil
+	gateway, found := pa.Store.GetGateway(resource.GatewayID)
+	if !found || gateway == nil || gateway.Status != "enrolled" {
+		return nil, "", newAccessError(AccessErrorConflict, "resource gateway is not enrolled", nil)
 	}
-	return nil, "", newAccessError(AccessErrorConflict, "no connected gateway is assigned to the requested resource", nil)
+	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, resource.TenantID) {
+		return nil, "", newAccessError(AccessErrorConflict, "resource gateway tenant mismatch", nil)
+	}
+	if _, ok := connected[gateway.ID]; !ok {
+		return nil, "", newAccessError(AccessErrorConflict, "assigned gateway is not connected", nil)
+	}
+	endpoint := firstNonEmptyString(gateway.ListenAddr, gateway.FQDN)
+	if endpoint == "" {
+		return nil, "", newAccessError(AccessErrorConflict, fmt.Sprintf("connected gateway %s has no endpoint", gateway.ID), nil)
+	}
+	return gateway, endpoint, nil
 }
 
 func ResourceVisibleForRole(resource *models.Resource, role string) bool {
@@ -254,7 +278,7 @@ func GatewayServesResource(gateway *models.Gateway, resourceID string) bool {
 		return false
 	}
 	if len(gateway.AssignedResources) == 0 {
-		return true
+		return false
 	}
 	for _, assigned := range gateway.AssignedResources {
 		if strings.TrimSpace(assigned) == strings.TrimSpace(resourceID) {

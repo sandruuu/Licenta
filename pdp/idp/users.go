@@ -228,12 +228,22 @@ func (um *UserManager) AddMFAMethod(userID, method string) {
 }
 
 // FindOrCreateFederatedUser looks up a user by external subject + auth source.
-// If found, it updates the last login time. If not found, it provisions a new
-// user with no password (federated users authenticate via external IdP only).
-func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, username, email string) (*models.User, error) {
+// If found, it updates the last login time and role (roles may change based on
+// group membership re-evaluation at each login). If not found, it provisions a
+// new user with no password (federated users authenticate via external IdP only).
+// The role parameter is determined by group-to-role mapping in MapGroupsToRole.
+func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, username, email, role, tenantID string) (*models.User, error) {
+	// Normalize role — default to "user" if empty or invalid
+	if role == "" {
+		role = "user"
+	}
+
 	// Look up by externalSubject + authSource
-	user, exists := um.store.GetUserByExternalSubject(externalSubject, authSource)
+	user, exists := um.store.GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID)
 	if exists {
+		if user.TenantID == "" {
+			user.TenantID = tenantID
+		}
 		user.LastLoginAt = time.Now()
 		if username != "" && user.Username != username {
 			user.Username = username
@@ -241,9 +251,14 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		if email != "" && user.Email != email {
 			user.Email = email
 		}
+		// Re-evaluate role at each login — group membership may have changed
+		if role != user.Role {
+			log.Printf("[IDP] Federated user role changed: %s %s → %s (source=%s)", user.Username, user.Role, role, authSource)
+			user.Role = role
+		}
 		user.UpdatedAt = time.Now()
 		um.store.SaveUser(user)
-		log.Printf("[IDP] Federated user found: %s (source=%s, sub=%s)", user.Username, authSource, externalSubject)
+		log.Printf("[IDP] Federated user found: %s (source=%s, sub=%s, role=%s)", user.Username, authSource, externalSubject, user.Role)
 		return user, nil
 	}
 
@@ -256,6 +271,9 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		// Same user, update
 		existing.LastLoginAt = time.Now()
 		existing.UpdatedAt = time.Now()
+		if role != existing.Role {
+			existing.Role = role
+		}
 		um.store.SaveUser(existing)
 		return existing, nil
 	}
@@ -273,7 +291,8 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		Email:           email,
 		PasswordHash:    "", // no password for federated users
 		MFAMethods:      []string{},
-		Role:            "user",
+		Role:            role,
+		TenantID:        tenantID,
 		ExternalSubject: externalSubject,
 		AuthSource:      authSource,
 		CreatedAt:       now,
@@ -282,6 +301,6 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 	}
 
 	um.store.SaveUser(user)
-	log.Printf("[IDP] Federated user provisioned: %s (source=%s, sub=%s, id=%s)", username, authSource, externalSubject, userID)
+	log.Printf("[IDP] Federated user provisioned: %s (source=%s, sub=%s, role=%s, id=%s)", username, authSource, externalSubject, role, userID)
 	return user, nil
 }

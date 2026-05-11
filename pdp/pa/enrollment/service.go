@@ -388,6 +388,18 @@ func (s *Service) CompleteESTEnrollment(req models.EnrollmentRequest, identity E
 	if err := ValidateCSREmailIdentity(csr, username); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
+	// Verify TPM key proof-of-possession if provided (N3 fix).
+	if req.KeyProof != "" {
+		csrFingerprint, err := ComputeCSRFingerprint(csrPEM)
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to compute CSR fingerprint for key proof: %v", ErrInvalidCSR, err)
+		}
+		if err := ValidateKeyProof(csr, deviceID, csrFingerprint, req.KeyProof); err != nil {
+			log.Printf("[ENROLL] TPM key proof rejected for device %s: %v", deviceID, err)
+			return nil, fmt.Errorf("%w: key proof verification failed", ErrForbidden)
+		}
+		log.Printf("[ENROLL] TPM key proof verified for device %s", deviceID)
+	}
 	if err := s.ConsumeEnrollmentToken(identity.TokenID, identity.TokenExpiresAt); err != nil {
 		return nil, err
 	}

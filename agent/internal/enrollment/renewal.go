@@ -14,6 +14,7 @@ import (
 type RenewalConfig struct {
 	CloudURL             string
 	CAFile               string
+	CloudCertSHA256      string
 	DeviceID             string
 	Hostname             string
 	CSRPEM               []byte
@@ -34,7 +35,7 @@ func RenewWithMTLS(ctx context.Context, config RenewalConfig) (*ESTResult, error
 	if strings.TrimSpace(string(config.CSRPEM)) == "" {
 		return nil, fmt.Errorf("CSR is required")
 	}
-	client, err := buildHTTPClientWithCertificate(config.CAFile, config.CurrentCertificate)
+	client, err := buildHTTPClientWithCertificate(config.CAFile, config.CloudCertSHA256, config.CurrentCertificate)
 	if err != nil {
 		return nil, err
 	}

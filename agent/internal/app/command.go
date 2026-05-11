@@ -33,6 +33,7 @@ type Options struct {
 	AuthorizedUserSID string
 	CloudIssuer       string
 	CloudURL          string
+	CloudCertSHA256   string
 	JWKSURL           string
 	CAFile            string
 	DNSServer         string
@@ -117,6 +118,7 @@ func parseBootstrap(args []string, options Options) (Options, error) {
 	flagSet.StringVar(&options.ACRValues, "acr-values", options.ACRValues, "OIDC acr_values requested by the tray")
 	flagSet.StringVar(&options.CloudIssuer, "cloud-issuer", options.CloudIssuer, "expected Cloud JWT issuer for enrollment tokens")
 	flagSet.StringVar(&options.JWKSURL, "jwks-url", options.JWKSURL, "Cloud JWKS URL used by the service for enrollment token verification")
+	flagSet.StringVar(&options.CloudCertSHA256, "cloud-cert-sha256", options.CloudCertSHA256, "SHA-256 hex fingerprint of the PDP TLS certificate for pinning")
 	flagSet.StringVar(&options.CAFile, "ca-file", options.CAFile, "PEM CA bundle used by the service when fetching JWKS")
 	flagSet.StringVar(&options.DNSServer, "dns-server", options.DNSServer, "DNS server IP used in NRPT rules")
 	flagSet.DurationVar(&options.CatalogInterval, "catalog-interval", options.CatalogInterval, "Cloud catalog refresh interval")
@@ -172,6 +174,7 @@ func parseAuthorizedSID(args []string, options Options, name string) (Options, e
 	flagSet.StringVar(&options.AuthorizedUserSID, "authorized-user-sid", options.AuthorizedUserSID, "interactive user SID allowed to access the pipe")
 	flagSet.StringVar(&options.CloudIssuer, "cloud-issuer", options.CloudIssuer, "expected Cloud JWT issuer for enrollment tokens")
 	flagSet.StringVar(&options.CloudURL, "cloud-url", options.CloudURL, "Cloud base URL used by the service for EST simpleenroll")
+	flagSet.StringVar(&options.CloudCertSHA256, "cloud-cert-sha256", options.CloudCertSHA256, "SHA-256 hex fingerprint of the PDP TLS certificate for pinning")
 	flagSet.StringVar(&options.JWKSURL, "jwks-url", options.JWKSURL, "Cloud JWKS URL used by the service for enrollment token verification")
 	flagSet.StringVar(&options.CAFile, "ca-file", options.CAFile, "PEM CA bundle used by the service when fetching JWKS")
 	flagSet.StringVar(&options.DNSServer, "dns-server", options.DNSServer, "DNS server IP used in NRPT rules")
@@ -209,10 +212,11 @@ func PrintUsage(writer io.Writer) {
 	fmt.Fprintln(writer, "  tray            Run the user-context Wails tray GUI")
 	fmt.Fprintln(writer, "")
 	fmt.Fprintln(writer, "Enrollment verification flags for bootstrap/service/install-service/run-service:")
-	fmt.Fprintln(writer, "  --cloud-issuer  Expected Cloud JWT issuer")
-	fmt.Fprintln(writer, "  --cloud-url     Cloud base URL used for service EST simpleenroll")
-	fmt.Fprintln(writer, "  --jwks-url      Cloud JWKS URL used by the service")
-	fmt.Fprintln(writer, "  --ca-file       PEM CA bundle for JWKS TLS validation")
+	fmt.Fprintln(writer, "  --cloud-issuer        Expected Cloud JWT issuer")
+	fmt.Fprintln(writer, "  --cloud-url           Cloud base URL used for service EST simpleenroll")
+	fmt.Fprintln(writer, "  --cloud-cert-sha256   SHA-256 hex fingerprint of the PDP TLS certificate for pinning")
+	fmt.Fprintln(writer, "  --jwks-url            Cloud JWKS URL used by the service")
+	fmt.Fprintln(writer, "  --ca-file             PEM CA bundle for JWKS TLS validation")
 	fmt.Fprintln(writer, "  --tun           Enable service-owned TUN adapter and CGNAT route management")
 	fmt.Fprintln(writer, "  --gateway-tunnel Enable service-owned Gateway mTLS/yamux tunnel")
 	fmt.Fprintln(writer, "  --gateway-address Gateway host:port used by the service tunnel")

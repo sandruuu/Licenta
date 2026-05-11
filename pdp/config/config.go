@@ -10,16 +10,18 @@ import (
 // Config holds all PDP service configuration
 type Config struct {
 	// Server settings
-	ListenAddr string `json:"listen_addr"` // e.g. ":8443"
-	TLSCert    string `json:"tls_cert"`
-	TLSKey     string `json:"tls_key"`
-	MTLSCA     string `json:"mtls_ca,omitempty"` // CA for verifying mTLS client certs (gateway/device)
+	ListenAddr string `json:"listen_addr"`        // e.g. ":8443"
+	PDPFQDN    string `json:"pdp_fqdn,omitempty"` // FQDN for self-enrollment CSR (e.g. "pdp.ztna.local")
+	TLSCert    string `json:"tls_cert,omitempty"` // Path to TLS cert (populated dynamically)
+	TLSKey     string `json:"tls_key,omitempty"`  // Path to TLS key (populated dynamically)
+	MTLSCA     string `json:"mtls_ca,omitempty"`  // CA for verifying mTLS client certs (populated dynamically)
 
 	// Vault PKI settings (certificate signing backend)
 	PKIURL          string        `json:"pki_url,omitempty"`           // Vault base URL (e.g. "https://vault:8200")
-	PKIToken        string        `json:"pki_token,omitempty"`         // Vault token used by PDP for signing/revocation operations
+	PKIToken        string        `json:"pki_token,omitempty"`         // Vault token used by PDP for signing/revocation
 	PKIPath         string        `json:"pki_path,omitempty"`          // Vault PKI mount path (e.g. "pki_int")
-	PKIRoleDevice   string        `json:"pki_role_device,omitempty"`   // Vault role for unified endpoint device certificates
+	PKIRolePDP      string        `json:"pki_role_pdp,omitempty"`      // Vault role for PDP self-enrollment TLS cert
+	PKIRoleDevice   string        `json:"pki_role_device,omitempty"`   // Vault role for device certificates
 	PKIRoleGateway  string        `json:"pki_role_gateway,omitempty"`  // Vault role for gateway mTLS certificates
 	PKIRoleResource string        `json:"pki_role_resource,omitempty"` // Vault role for backend resource TLS certificates
 	PKICAFile       string        `json:"pki_ca_file,omitempty"`       // Optional CA file for Vault server TLS verification
@@ -43,7 +45,7 @@ type Config struct {
 	LockoutDuration  time.Duration `json:"lockout_duration"`   // lockout period
 
 	// Data persistence
-	DataDir string `json:"data_dir"` // directory for JSON data files
+	DataDir string `json:"data_dir"` // directory for data files and Vault Transit encrypted key
 
 	// Database settings
 	DatabasePath string `json:"database_path"` // SQLite database path (default: <data_dir>/ztna.db)
@@ -64,6 +66,7 @@ func DefaultConfig() *Config {
 		JWTExpiry:        1 * time.Hour,
 		MFATokenExpiry:   5 * time.Minute,
 		PKIPath:          "pki_int",
+		PKIRolePDP:       "ztna-pdp",
 		PKIRoleDevice:    "ztna-device",
 		PKIRoleGateway:   "ztna-gateway",
 		PKIRoleResource:  "ztna-resource",
@@ -95,18 +98,19 @@ func LoadFromFile(path string) (*Config, error) {
 }
 
 // ApplyEnvOverrides overrides config values with environment variables when set.
-// Supported: JWT_SECRET, DATA_DIR, LISTEN_ADDR, TLS_CERT, TLS_KEY
 func (c *Config) ApplyEnvOverrides() {
 	overrides := map[string]*string{
 		"JWT_SECRET":        &c.JWTSecret,
 		"DATA_DIR":          &c.DataDir,
 		"LISTEN_ADDR":       &c.ListenAddr,
+		"PDP_FQDN":          &c.PDPFQDN,
 		"TLS_CERT":          &c.TLSCert,
 		"TLS_KEY":           &c.TLSKey,
 		"MTLS_CA":           &c.MTLSCA,
 		"PKI_URL":           &c.PKIURL,
 		"PKI_TOKEN":         &c.PKIToken,
 		"PKI_PATH":          &c.PKIPath,
+		"PKI_ROLE_PDP":      &c.PKIRolePDP,
 		"PKI_ROLE_DEVICE":   &c.PKIRoleDevice,
 		"PKI_ROLE_GATEWAY":  &c.PKIRoleGateway,
 		"PKI_ROLE_RESOURCE": &c.PKIRoleResource,

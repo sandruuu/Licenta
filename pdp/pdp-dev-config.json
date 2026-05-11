@@ -1,0 +1,14 @@
+{
+  "listen_addr": ":8443",
+  "jwt_secret": "ztna-dev-jwt-secret-change-in-production-2024",
+  "jwt_expiry": 3600000000000,
+  "mfa_token_expiry": 300000000000,
+  "totp_issuer": "ZTNA-PDP",
+  "session_expiry": 28800000000000,
+  "max_sessions": 5,
+  "max_login_attempts": 5,
+  "lockout_duration": 900000000000,
+  "data_dir": "./data",
+  "webauthn_rp_id": "localhost",
+  "webauthn_rp_name": "ZTNA PDP"
+}

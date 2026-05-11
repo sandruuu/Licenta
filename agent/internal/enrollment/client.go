@@ -3,8 +3,10 @@ package enrollment
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,9 +23,10 @@ type Client struct {
 }
 
 type Config struct {
-	CloudURL   string
-	CAFile     string
-	HTTPClient *http.Client
+	CloudURL        string
+	CAFile          string
+	CloudCertSHA256 string
+	HTTPClient      *http.Client
 }
 
 type TokenRequest struct {
@@ -51,7 +54,7 @@ func NewClient(config Config) (*Client, error) {
 	}
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		client, err := buildHTTPClient(config.CAFile)
+		client, err := buildHTTPClient(config.CAFile, config.CloudCertSHA256)
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +153,7 @@ type tokenResponse struct {
 	UserEmail       string `json:"user_email"`
 }
 
-func buildHTTPClient(caFile string) (*http.Client, error) {
+func buildHTTPClient(caFile, cloudCertSHA256 string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13}
 	if strings.TrimSpace(caFile) != "" {
@@ -160,10 +163,11 @@ func buildHTTPClient(caFile string) (*http.Client, error) {
 		}
 		transport.TLSClientConfig.RootCAs = pool
 	}
+	setCertPinning(transport.TLSClientConfig, cloudCertSHA256)
 	return &http.Client{Timeout: 30 * time.Second, Transport: transport}, nil
 }
 
-func buildHTTPClientWithCertificate(caFile string, certificate tls.Certificate) (*http.Client, error) {
+func buildHTTPClientWithCertificate(caFile, cloudCertSHA256 string, certificate tls.Certificate) (*http.Client, error) {
 	if len(certificate.Certificate) == 0 {
 		return nil, errors.New("client certificate leaf is required")
 	}
@@ -179,8 +183,35 @@ func buildHTTPClientWithCertificate(caFile string, certificate tls.Certificate) 
 		}
 		tlsConfig.RootCAs = pool
 	}
+	setCertPinning(tlsConfig, cloudCertSHA256)
 	transport.TLSClientConfig = tlsConfig
 	return &http.Client{Timeout: 30 * time.Second, Transport: transport}, nil
+}
+
+func setCertPinning(tlsConfig *tls.Config, cloudCertSHA256 string) {
+	pinned := strings.TrimSpace(cloudCertSHA256)
+	if pinned == "" {
+		return
+	}
+	tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("no server certificate presented")
+		}
+		cert, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("parse server certificate: %w", err)
+		}
+		actual := sha256HexBytes(cert.Raw)
+		if !strings.EqualFold(actual, pinned) {
+			return fmt.Errorf("server certificate SHA-256 %q does not match pinned %q", actual, pinned)
+		}
+		return nil
+	}
+}
+
+func sha256HexBytes(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
 }
 
 func enrollmentRootCAPool(caFile string) (*x509.CertPool, error) {

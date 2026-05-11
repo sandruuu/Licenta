@@ -133,25 +133,30 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	s.mtlsCAPool = pool
 	log.Printf("[API] mTLS client cert verification enabled (CA: %s)", mtlsCAPath)
 
-	vaultClient, err := pki.NewVaultClient(pki.VaultConfig{
-		URL:        policyAdmin.Cfg.PKIURL,
-		Token:      policyAdmin.Cfg.PKIToken,
-		PKIPath:    policyAdmin.Cfg.PKIPath,
-		CAFile:     policyAdmin.Cfg.PKICAFile,
-		ServerName: policyAdmin.Cfg.PKIServerName,
-		Timeout:    policyAdmin.Cfg.PKITimeout,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("initialize Vault PKI client: %w", err)
-	}
+	if policyAdmin.Cfg.PKIURL != "" {
+		vaultClient, err := pki.NewVaultClient(pki.VaultConfig{
+			URL:        policyAdmin.Cfg.PKIURL,
+			Token:      policyAdmin.Cfg.PKIToken,
+			PKIPath:    policyAdmin.Cfg.PKIPath,
+			CAFile:     policyAdmin.Cfg.PKICAFile,
+			ServerName: policyAdmin.Cfg.PKIServerName,
+			Timeout:    policyAdmin.Cfg.PKITimeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("initialize Vault PKI client: %w", err)
+		}
 
-	caPEM, err := vaultClient.GetCAPEM()
-	if err != nil {
-		return nil, fmt.Errorf("fetch Vault PKI CA certificate: %w", err)
-	}
+		caPEM, err := vaultClient.GetCAPEM()
+		if err != nil {
+			return nil, fmt.Errorf("fetch Vault PKI CA certificate: %w", err)
+		}
 
-	s.externalPKI = vaultClient
-	s.externalCAPEM = caPEM
+		s.externalPKI = vaultClient
+		s.externalCAPEM = caPEM
+		log.Printf("[API] PKI provider: vault (url=%s path=%s)", policyAdmin.Cfg.PKIURL, policyAdmin.Cfg.PKIPath)
+	} else {
+		log.Printf("[API] PKI provider: none (dev mode, no Vault configured)")
+	}
 	if policyAdmin.Enrollment != nil {
 		policyAdmin.Enrollment.SetCertificateAuthority(s.signCSR, s.revokeCertificate, s.deviceRole)
 		if policyAdmin.IdP != nil && policyAdmin.IdP.JWT != nil {
@@ -230,14 +235,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/.well-known/openid-configuration", s.handleOIDCDiscovery) // OIDC discovery doc
 
 	// ─────────────────────────────────────────────
-	// Device health endpoint (called directly by device-health-app)
-	// The device-health-app sends health reports directly to the PDP.
-	// This data is NOT sent via connect-app.
 	// ─────────────────────────────────────────────
-	s.mux.Handle("/api/device/health-report", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleDirectDeviceHealthReport))))
-	s.mux.Handle("/api/device/heartbeat", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleDeviceHeartbeat))))
-	s.mux.Handle("/api/device/catalog", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleDeviceCatalog))))
-	s.mux.Handle("/api/agent/authorize", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleAgentAuthorize))))
 
 	// ─────────────────────────────────────────────
 	// Device push MFA endpoints (called by device-health-app, mTLS required)
@@ -310,12 +308,16 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Gateway enrollment & lifecycle endpoints
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/api/gateway/enroll", s.handleGatewayEnroll)                                                                    // One-time token enrollment (no auth)
-	s.mux.Handle("/api/gateway/renew-cert", s.requireClientCert(s.gatewayAuthMiddleware(http.HandlerFunc(s.handleGatewayRenewCert)))) // Cert renewal (mTLS identity)
-
 	// Admin gateway management
 	s.mux.Handle("/api/admin/gateways", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminGateways)))
 	s.mux.Handle("/api/admin/gateways/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminGatewayByID)))
+
+	// ─────────────────────────────────────────────
+	// Admin Identity Provider management (per Tenant)
+	// ─────────────────────────────────────────────
+	s.mux.Handle("/api/admin/tenants/idps/discover", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdPDiscover)))
+	s.mux.Handle("/api/admin/tenants/idps", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviders)))
+	s.mux.Handle("/api/admin/tenants/idps/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviderByID)))
 
 	// ─────────────────────────────────────────────
 	// Dashboard SPA (serve React build)
@@ -1192,45 +1194,6 @@ func (s *Server) findUserDevice(userID string) string {
 	return ""
 }
 
-// handleDirectDeviceHealthReport handles health reports sent directly by the
-// device-health-app. Requires a valid client certificate (mTLS). The device_id
-// in the report body must match the certificate's CN to prevent spoofing.
-//
-// Flow: device-health-app → POST /api/device/health-report → PDP stores health
-func (s *Server) handleDirectDeviceHealthReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	enrollment, ok := deviceEnrollmentFromContext(r)
-	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing client certificate identity"})
-		return
-	}
-	certCN := enrollment.DeviceID
-
-	var report models.DeviceHealthReport
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&report); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	if s == nil || s.pa == nil || s.pa.Devices == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": devices.ErrServiceUnavailable.Error()})
-		return
-	}
-	if _, err := s.pa.Devices.AcceptHealthReport(certCN, report); err != nil {
-		writeJSON(w, statusCodeForDeviceTelemetryError(err), map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, models.APIResponse{
-		Success: true,
-		Message: "Device health report received",
-	})
-}
-
 func statusCodeForDeviceTelemetryError(err error) int {
 	switch {
 	case errors.Is(err, devices.ErrDeviceIDRequired):
@@ -1248,89 +1211,7 @@ func statusCodeForDeviceTelemetryError(err error) int {
 	}
 }
 
-// handleDeviceHeartbeat is a lightweight liveness ping from the
-// device-health-app, intended to be sent every minute. It only updates
-// the reported_at timestamp on the existing health record so the policy
-// engine's posture-staleness check (see pe/risk) can distinguish
-// "device is online and posture has not changed" from "device fell off
-// the network 30 minutes ago and may now be compromised".
-//
 // We deliberately do NOT accept any payload body — heartbeats must be
-// cheap. A full health report (POST /api/device/health-report) is sent
-// less frequently (only on status change or every ~5 minutes).
-func (s *Server) handleDeviceHeartbeat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	enrollment, ok := deviceEnrollmentFromContext(r)
-	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "missing client certificate identity"})
-		return
-	}
-
-	if s == nil || s.pa == nil || s.pa.Devices == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": devices.ErrServiceUnavailable.Error()})
-		return
-	}
-	if _, err := s.pa.Devices.TouchHealthHeartbeat(enrollment.DeviceID); err != nil {
-		message := err.Error()
-		if errors.Is(err, devices.ErrNoPriorHealthReport) {
-			message = "no prior health report on file; submit POST /api/device/health-report first"
-		}
-		writeJSON(w, statusCodeForDeviceTelemetryError(err), map[string]string{"error": message})
-		return
-	}
-	writeJSON(w, http.StatusOK, models.APIResponse{Success: true})
-}
-
-type deviceCatalogRequest struct {
-	CurrentVersion string `json:"current_version,omitempty"`
-}
-
-func (s *Server) handleDeviceCatalog(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	enrollment, ok := deviceEnrollmentFromContext(r)
-	if !ok {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "device identity not found in request context"})
-		return
-	}
-
-	claims, statusCode, err := s.authenticateDeviceCatalogUser(r, enrollment.DeviceID)
-	if err != nil {
-		writeJSON(w, statusCode, map[string]string{"error": err.Error()})
-		return
-	}
-
-	var req deviceCatalogRequest
-	if r.Body != nil {
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil && err != io.EOF {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-			return
-		}
-	}
-
-	snapshot := s.deviceCatalogSnapshot(claims)
-	if strings.TrimSpace(req.CurrentVersion) == snapshot.Version {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, snapshot)
-}
-
-func (s *Server) authenticateDeviceCatalogUser(r *http.Request, deviceID string) (*idp.CustomClaims, int, error) {
-	token, err := bearerToken(r)
-	if err != nil {
-		return nil, http.StatusUnauthorized, fmt.Errorf("authorization bearer token required")
-	}
-	return s.validateDeviceCatalogToken(token, deviceID)
-}
-
 func (s *Server) validateDeviceCatalogToken(token, deviceID string) (*idp.CustomClaims, int, error) {
 	if s == nil || s.pa == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("identity services are not available")
@@ -1346,7 +1227,21 @@ func (s *Server) deviceCatalogSnapshot(claims *idp.CustomClaims) catalog.Snapsho
 	if claims == nil || s == nil || s.pa == nil || s.pa.Catalog == nil {
 		return catalog.EmptySnapshot()
 	}
-	return s.pa.Catalog.BuildForRole(claims.Role)
+	if s.pa.Store == nil {
+		return catalog.EmptySnapshot()
+	}
+	user, ok := s.pa.Store.GetUser(claims.UserID)
+	if !ok || user == nil || strings.TrimSpace(user.TenantID) == "" {
+		return catalog.EmptySnapshot()
+	}
+	if tenant, found := s.pa.Store.GetTenant(user.TenantID); !found || tenant == nil || !tenant.Enabled {
+		return catalog.EmptySnapshot()
+	}
+	role := claims.Role
+	if strings.TrimSpace(user.Role) != "" {
+		role = user.Role
+	}
+	return s.pa.Catalog.BuildForTenantRole(user.TenantID, role)
 }
 
 // handleDevicePushEvents is the device-side equivalent of
@@ -2578,46 +2473,17 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[OIDC] Authorize request: client=%s redirect=%s state=%s session=%s",
 		clientID, redirectURI, state, oidcSession.ID)
 
-	// ── Identity Broker: check if this gateway uses federated auth ──
-	gw, found := s.pa.Store.GetGatewayByOIDCClientID(clientID)
-	if found && gw.AuthMode == "federated" && gw.FederationConfig != nil {
-		// Federated mode: redirect to external IdP instead of login page
-		pkceVerifier, pkceChallenge, err := idp.GeneratePKCE()
-		if err != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
+	// ── Identity Broker: resolve the correct IdP via HRD ──
+	idpCfg, tenant, gw := s.resolveIdentityProvider(r, clientID)
+	if idpCfg != nil {
+		// Tenant-level IdP found: redirect to external IdP
+		s.redirectToExternalIdP(w, r, oidcSession, gw, tenant, idpCfg, nonce)
+		return
+	}
 
-		fedState := oidcSession.ID // use OIDC session ID as the external state
-		fedNonce := nonce
-
-		extAuthURL, err := s.pa.IdP.Federation.GenerateExternalAuthURL(
-			gw.FederationConfig,
-			s.federatedCallbackURL(),
-			fedState, fedNonce, pkceChallenge,
-		)
-		if err != nil {
-			log.Printf("[FEDERATION] Failed to generate external auth URL: %v", err)
-			http.Error(w, "Federation configuration error", http.StatusInternalServerError)
-			return
-		}
-
-		// Store federation session for callback
-		fedSession := &idp.FederationSession{
-			ID:            oidcSession.ID,
-			OIDCSessionID: oidcSession.ID,
-			GatewayID:     gw.ID,
-			Issuer:        gw.FederationConfig.Issuer,
-			PKCEVerifier:  pkceVerifier,
-			Nonce:         fedNonce,
-			State:         fedState,
-			CreatedAt:     time.Now(),
-			ExpiresAt:     time.Now().Add(5 * time.Minute),
-		}
-		s.pa.IdP.OIDC.CreateFederationSession(fedSession)
-
-		log.Printf("[FEDERATION] Redirecting to external IdP: gateway=%s issuer=%s", gw.Name, gw.FederationConfig.Issuer)
-		http.Redirect(w, r, extAuthURL, http.StatusFound)
+	// ── Legacy fallback: gateway-level FederationConfig ──
+	if gw != nil && gw.AuthMode == "federated" && gw.FederationConfig != nil {
+		s.redirectToExternalIdPLegacy(w, r, oidcSession, gw, nonce)
 		return
 	}
 
@@ -2627,6 +2493,227 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		loginURL += "&mfa_step=true"
 	}
 	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Home Realm Discovery (HRD) — Identity Provider Resolution
+// ──────────────────────────────────────────────────────────────────────
+
+// resolveIdentityProvider determines which IdP should authenticate the user.
+// Priority: 1) domain-based HRD via login_hint, 2) gateway tenant context,
+// 3) legacy gateway FederationConfig (caller handles this fallback).
+func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Tenant, *models.Gateway) {
+	gw, _ := s.pa.Store.GetGatewayByOIDCClientID(clientID)
+
+	// Step 1 — Domain-based HRD via login_hint or explicit idp_id
+	if idpID := r.URL.Query().Get("idp_id"); idpID != "" {
+		if idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(idpID); ok && idpCfg.Enabled {
+			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
+			log.Printf("[HRD] Direct IdP selection: idp=%s tenant=%s", idpCfg.Name, idpCfg.TenantID)
+			return idpCfg, tenant, gw
+		}
+	}
+
+	// Step 2 — login_hint domain matching
+	if loginHint := r.URL.Query().Get("login_hint"); loginHint != "" {
+		domain := extractDomainFromHint(loginHint)
+		if idpCfg, ok := s.pa.Store.FindIdentityProviderByDomain(domain); ok && idpCfg.Enabled {
+			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
+			log.Printf("[HRD] Domain-based discovery: domain=%s → idp=%s tenant=%s", domain, idpCfg.Name, idpCfg.TenantID)
+			return idpCfg, tenant, gw
+		}
+		log.Printf("[HRD] No IdP found for domain=%s", domain)
+	}
+
+	// Step 3 — Tenant context from gateway
+	if gw != nil {
+		tenantID := resolveTenantFromGateway(gw)
+		if tenantID != "" {
+			if idpCfg, ok := s.pa.Store.GetDefaultIdentityProviderForTenant(tenantID); ok && idpCfg.Enabled {
+				tenant, _ := s.pa.Store.GetTenant(tenantID)
+				log.Printf("[HRD] Gateway tenant context: gateway=%s → tenant=%s → idp=%s", gw.Name, tenantID, idpCfg.Name)
+				return idpCfg, tenant, gw
+			}
+		}
+	}
+
+	return nil, nil, gw
+}
+
+// resolveTenantFromGateway determines which tenant a gateway serves.
+func resolveTenantFromGateway(gw *models.Gateway) string {
+	if gw.TenantID != "" {
+		return gw.TenantID
+	}
+	if len(gw.TenantIDs) == 1 {
+		return gw.TenantIDs[0]
+	}
+	return ""
+}
+
+// extractDomainFromHint extracts the email domain from a login hint string.
+// For "user@company.com" returns "company.com". For plain domain strings,
+// returns the string as-is.
+func extractDomainFromHint(hint string) string {
+	if idx := strings.LastIndex(hint, "@"); idx >= 0 && idx < len(hint)-1 {
+		return strings.ToLower(strings.TrimSpace(hint[idx+1:]))
+	}
+	return strings.ToLower(strings.TrimSpace(hint))
+}
+
+// redirectToExternalIdP performs the OIDC Authorization Code flow redirect
+// to an external IdP using a tenant-level IdentityProviderConfig.
+func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, oidcSession *idp.OIDCAuthorizeSession, gw *models.Gateway, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig, nonce string) {
+	pkceVerifier, pkceChallenge, err := idp.GeneratePKCE()
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	fedState := oidcSession.ID
+	fedNonce := nonce
+
+	// Build a temporary FederationConfig from the IdentityProviderConfig
+	// so the existing FederationProvider code works unchanged.
+	fedCfg := &models.FederationConfig{
+		Issuer:        idpCfg.Issuer,
+		ClientID:      idpCfg.ClientID,
+		ClientSecret:  idpCfg.ClientSecret,
+		Scopes:        idpCfg.Scopes,
+		AutoDiscovery: idpCfg.AutoDiscovery,
+		ClaimMapping:  idpCfg.ClaimMapping,
+	}
+
+	extAuthURL, err := s.pa.IdP.Federation.GenerateExternalAuthURL(
+		fedCfg, s.federatedCallbackURL(), fedState, fedNonce, pkceChallenge,
+	)
+	if err != nil {
+		log.Printf("[FEDERATION] Failed to generate external auth URL: %v", err)
+		http.Error(w, "Federation configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	gwID := ""
+	if gw != nil {
+		gwID = gw.ID
+	}
+	tenantID := ""
+	if tenant != nil {
+		tenantID = tenant.ID
+	}
+
+	// Store federation session with tenant/IdP context for callback
+	fedSession := &idp.FederationSession{
+		ID:            oidcSession.ID,
+		OIDCSessionID: oidcSession.ID,
+		GatewayID:     gwID,
+		TenantID:      tenantID,
+		IdPID:         idpCfg.ID,
+		Issuer:        idpCfg.Issuer,
+		PKCEVerifier:  pkceVerifier,
+		Nonce:         fedNonce,
+		State:         fedState,
+		CreatedAt:     time.Now(),
+		ExpiresAt:     time.Now().Add(5 * time.Minute),
+	}
+	s.pa.IdP.OIDC.CreateFederationSession(fedSession)
+
+	log.Printf("[FEDERATION] Redirecting to external IdP: tenant=%s idp=%s issuer=%s", tenantID, idpCfg.Name, idpCfg.Issuer)
+	http.Redirect(w, r, extAuthURL, http.StatusFound)
+}
+
+// redirectToExternalIdPLegacy uses the deprecated gateway-level FederationConfig.
+func (s *Server) redirectToExternalIdPLegacy(w http.ResponseWriter, r *http.Request, oidcSession *idp.OIDCAuthorizeSession, gw *models.Gateway, nonce string) {
+	pkceVerifier, pkceChallenge, err := idp.GeneratePKCE()
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	fedState := oidcSession.ID
+	fedNonce := nonce
+
+	extAuthURL, err := s.pa.IdP.Federation.GenerateExternalAuthURL(
+		gw.FederationConfig,
+		s.federatedCallbackURL(),
+		fedState, fedNonce, pkceChallenge,
+	)
+	if err != nil {
+		log.Printf("[FEDERATION] Failed to generate external auth URL: %v", err)
+		http.Error(w, "Federation configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	fedSession := &idp.FederationSession{
+		ID:            oidcSession.ID,
+		OIDCSessionID: oidcSession.ID,
+		GatewayID:     gw.ID,
+		Issuer:        gw.FederationConfig.Issuer,
+		PKCEVerifier:  pkceVerifier,
+		Nonce:         fedNonce,
+		State:         fedState,
+		CreatedAt:     time.Now(),
+		ExpiresAt:     time.Now().Add(5 * time.Minute),
+	}
+	s.pa.IdP.OIDC.CreateFederationSession(fedSession)
+
+	log.Printf("[FEDERATION] Redirecting to external IdP (legacy): gateway=%s issuer=%s", gw.Name, gw.FederationConfig.Issuer)
+	http.Redirect(w, r, extAuthURL, http.StatusFound)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Federation Callback Helpers
+// ──────────────────────────────────────────────────────────────────────
+
+// resolveFederatedConfig determines the issuer, claim mapping, and optional
+// IdentityProviderConfig for the callback. Prefers tenant-level IdP config
+// when the federation session carries TenantID/IdPID.
+func (s *Server) resolveFederatedConfig(fedSession *idp.FederationSession) (authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) {
+	// New path: tenant-level IdentityProviderConfig
+	if fedSession.IdPID != "" {
+		if cfg, ok := s.pa.Store.GetIdentityProviderConfig(fedSession.IdPID); ok && cfg.Enabled {
+			claimMapping := cfg.ClaimMapping
+			if claimMapping == nil {
+				claimMapping = map[string]string{}
+			}
+			return cfg.Issuer, claimMapping, cfg
+		}
+	}
+
+	// Legacy path: gateway-level FederationConfig
+	gw, found := s.pa.Store.GetGateway(fedSession.GatewayID)
+	if found && gw.FederationConfig != nil {
+		claimMapping := gw.FederationConfig.ClaimMapping
+		if claimMapping == nil {
+			claimMapping = map[string]string{}
+		}
+		return gw.FederationConfig.Issuer, claimMapping, nil
+	}
+
+	return "", nil, nil
+}
+
+// buildFederationConfigForExchange constructs a FederationConfig struct for
+// the token exchange call, supporting both legacy gateway-level and new tenant-level IdP configs.
+func (s *Server) buildFederationConfigForExchange(fedSession *idp.FederationSession, authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) *models.FederationConfig {
+	if idpCfg != nil {
+		return &models.FederationConfig{
+			Issuer:        idpCfg.Issuer,
+			ClientID:      idpCfg.ClientID,
+			ClientSecret:  idpCfg.ClientSecret,
+			Scopes:        idpCfg.Scopes,
+			AutoDiscovery: idpCfg.AutoDiscovery,
+			ClaimMapping:  claimMapping,
+		}
+	}
+
+	// Legacy path
+	gw, found := s.pa.Store.GetGateway(fedSession.GatewayID)
+	if found && gw.FederationConfig != nil {
+		return gw.FederationConfig
+	}
+
+	return nil
 }
 
 // federatedCallbackURL returns the PDP's federated callback URL based on request host.
@@ -2677,16 +2764,24 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Look up the gateway to get the federation config
-	gw, found := s.pa.Store.GetGateway(fedSession.GatewayID)
-	if !found || gw.FederationConfig == nil {
-		http.Error(w, "Gateway federation configuration not found", http.StatusInternalServerError)
+	// Resolve the federation config: prefer tenant-level IdentityProviderConfig,
+	// fall back to legacy gateway-level FederationConfig.
+	authSource, claimMapping, idpCfg := s.resolveFederatedConfig(fedSession)
+	if authSource == "" {
+		http.Error(w, "Federation configuration not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Exchange the code at the external IdP's token endpoint
+	// Exchange the code at the external IdP's token endpoint.
+	// Build a FederationConfig for the exchange from whichever source was resolved.
+	fedCfg := s.buildFederationConfigForExchange(fedSession, authSource, claimMapping, idpCfg)
+	if fedCfg == nil {
+		http.Error(w, "Federation configuration invalid", http.StatusInternalServerError)
+		return
+	}
+
 	tokenResp, err := s.pa.IdP.Federation.ExchangeExternalCode(
-		gw.FederationConfig, code,
+		fedCfg, code,
 		s.federatedCallbackURL(),
 		fedSession.PKCEVerifier,
 	)
@@ -2699,7 +2794,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	// Extract identity from the external id_token
 	claims, err := s.pa.IdP.Federation.MapExternalClaims(
 		tokenResp.IDToken,
-		gw.FederationConfig.ClaimMapping,
+		claimMapping,
 	)
 	if err != nil {
 		log.Printf("[FEDERATION] Claim mapping failed: %v", err)
@@ -2707,10 +2802,16 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Auto-provision or find the federated user
-	authSource := gw.FederationConfig.Issuer
+	// Determine role: use group mapping if an IdentityProviderConfig is available,
+	// otherwise default to "user" for legacy gateway FederationConfig.
+	role := "user"
+	if idpCfg != nil && len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
+		role = idp.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
+		log.Printf("[FEDERATION] Group mapping applied: groups=%v → role=%s", claims.Groups, role)
+	}
+
 	user, err := s.pa.IdP.Users.FindOrCreateFederatedUser(
-		claims.Subject, authSource, claims.Username, claims.Email,
+		claims.Subject, authSource, claims.Username, claims.Email, role, fedSession.TenantID,
 	)
 	if err != nil {
 		log.Printf("[FEDERATION] User provisioning failed: %v", err)
@@ -2752,8 +2853,12 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	log.Printf("[FEDERATION] User authenticated via external IdP: user=%s source=%s → redirect to gateway",
 		user.Username, authSource)
 
+	gwName := ""
+	if gw, found := s.pa.Store.GetGateway(fedSession.GatewayID); found {
+		gwName = gw.Name
+	}
 	s.pa.Audit.LogEvent("federated_login", user.ID, user.Username,
-		r.RemoteAddr, "", "", "Federated auth via "+authSource+" for gateway "+gw.Name, true)
+		r.RemoteAddr, "", "", "Federated auth via "+authSource+" (role="+role+") for gateway "+gwName, true)
 
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
@@ -3106,18 +3211,41 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 // checkEnrollRateLimit enforces per-IP rate limiting (5 requests/minute) on enrollment endpoints.
+// Uses an in-memory fast-path cache backed by persistent SQLite storage so limits survive PDP restarts.
 func (s *Server) checkEnrollRateLimit(ip string) bool {
+	// In-memory fast path: skip SQLite round-trip for well-behaved clients.
 	s.enrollLimiterMu.Lock()
-	defer s.enrollLimiterMu.Unlock()
-
 	now := time.Now()
 	entry, ok := s.enrollLimiter[ip]
 	if !ok || now.After(entry.resetAt) {
 		s.enrollLimiter[ip] = &enrollRateEntry{count: 1, resetAt: now.Add(time.Minute)}
+		s.enrollLimiterMu.Unlock()
+		// Update persistent counter in background; failure is non-fatal.
+		if s.pa != nil && s.pa.Store != nil {
+			go func() {
+				if allowed, err := s.pa.Store.CheckEnrollRateLimit(ip); err == nil && !allowed {
+					log.Printf("[ENROLL] Persistent rate limiter denied IP %s (in-memory passed)", ip)
+				}
+			}()
+		}
 		return true
 	}
 	entry.count++
-	return entry.count <= 5
+	if entry.count <= 5 {
+		s.enrollLimiterMu.Unlock()
+		return true
+	}
+	s.enrollLimiterMu.Unlock()
+	// In-memory says denied. Validate against persistent store as defense-in-depth.
+	if s.pa != nil && s.pa.Store != nil {
+		allowed, err := s.pa.Store.CheckEnrollRateLimit(ip)
+		if err != nil {
+			log.Printf("[ENROLL] Persistent rate limit check failed for IP %s: %v", ip, err)
+			return false
+		}
+		return allowed
+	}
+	return false
 }
 
 // canonicalCSRPEM accepts PEM, DER, or base64 DER CSR input and returns a
@@ -3868,139 +3996,6 @@ func (s *Server) handleRevokedSerials(w http.ResponseWriter, r *http.Request) {
 // Gateway Enrollment & Management
 // ═══════════════════════════════════════════════════════════════════════
 
-// handleGatewayEnroll handles POST /api/gateway/enroll — one-time token enrollment.
-// The gateway sends a token + CSR; the PDP validates the token, signs the CSR,
-// and returns the mTLS cert. User authentication is handled by Connect-App as
-// an OIDC public client, so the gateway receives no OIDC client secret.
-func (s *Server) handleGatewayEnroll(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	// Rate limiting
-	ip := strings.SplitN(r.RemoteAddr, ":", 2)[0]
-	if !s.checkEnrollRateLimit(ip) {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many enrollment attempts"})
-		return
-	}
-
-	var req models.GatewayEnrollRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	result, err := s.pa.Gateways.EnrollGateway(req)
-	if err != nil {
-		s.writeGatewayEnrollmentError(w, err)
-		return
-	}
-	caPEM, err := s.getCAPEM()
-	if err != nil {
-		log.Printf("[GATEWAY-ENROLL] Failed to load CA PEM for gateway %s: %v", result.Gateway.ID, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
-		return
-	}
-
-	log.Printf("[GATEWAY-ENROLL] Gateway enrolled: id=%s name=%s fqdn=%s (strict PEP)",
-		result.Gateway.ID, result.Gateway.Name, result.Gateway.FQDN)
-
-	writeJSON(w, http.StatusOK, models.GatewayEnrollResponse{
-		Status:    "enrolled",
-		GatewayID: result.Gateway.ID,
-		CertPEM:   string(result.CertPEM),
-		CAPEM:     string(caPEM),
-		Message:   "Gateway enrolled successfully. Certificate valid for 7 days.",
-	})
-}
-
-func (s *Server) writeGatewayEnrollmentError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, pagateway.ErrInvalidRequest):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": gatewayClientMessage(err)})
-	case errors.Is(err, pagateway.ErrInvalidEnrollmentToken):
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid enrollment token"})
-	case errors.Is(err, pagateway.ErrEnrollmentTokenExpired):
-		writeJSON(w, http.StatusGone, map[string]string{"error": "enrollment token has expired"})
-	case errors.Is(err, pagateway.ErrGatewayAlreadyEnrolled):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "gateway is already enrolled"})
-	case errors.Is(err, pagateway.ErrInvalidCSR):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid CSR"})
-	default:
-		log.Printf("[GATEWAY-ENROLL] Gateway enrollment failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to enroll gateway"})
-	}
-}
-
-// handleGatewayRenewCert handles POST /api/gateway/renew-cert — renew mTLS certificate.
-// The gateway identity is derived from the authenticated mTLS certificate (set by
-// gatewayAuthMiddleware in the request context). The gateway sends a new CSR;
-// the PDP validates that the CSR CN matches the authenticated gateway's FQDN,
-// signs it with 7-day validity, and updates the enrollment record.
-func (s *Server) handleGatewayRenewCert(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	// Extract authenticated gateway from middleware context
-	gw, ok := gatewayFromContext(r)
-	if !ok {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "gateway identity not found in request context"})
-		return
-	}
-
-	var req struct {
-		CSRPEM string `json:"csr_pem"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	result, err := s.pa.Gateways.RenewGatewayCertificate(gw, req.CSRPEM)
-	if err != nil {
-		s.writeGatewayRenewalError(w, gw.ID, err)
-		return
-	}
-	caPEM, err := s.getCAPEM()
-	if err != nil {
-		log.Printf("[GATEWAY] Failed to load CA PEM for renewal (gateway=%s): %v", result.Gateway.ID, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load CA certificate"})
-		return
-	}
-
-	log.Printf("[GATEWAY] Cert renewed for gateway %s (serial=%s)", result.Gateway.ID, result.Gateway.CertSerial)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":   "renewed",
-		"cert_pem": string(result.CertPEM),
-		"ca_pem":   string(caPEM),
-		"message":  "Certificate renewed (7-day validity)",
-	})
-}
-
-func (s *Server) writeGatewayRenewalError(w http.ResponseWriter, gatewayID string, err error) {
-	switch {
-	case errors.Is(err, pagateway.ErrInvalidRequest):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": gatewayClientMessage(err)})
-	case errors.Is(err, pagateway.ErrInvalidCSR):
-		message := gatewayClientMessage(err)
-		if message == "invalid CSR PEM" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
-			return
-		}
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid CSR"})
-	case errors.Is(err, pagateway.ErrForbidden):
-		log.Printf("[GATEWAY] Cert renewal rejected for gateway %s: %v", gatewayID, err)
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": gatewayClientMessage(err)})
-	default:
-		log.Printf("[GATEWAY] Cert renewal failed for gateway %s: %v", gatewayID, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to renew gateway certificate"})
-	}
-}
-
 func gatewayClientMessage(err error) string {
 	message := err.Error()
 	for _, prefix := range []string{
@@ -4060,6 +4055,7 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"id":               result.Gateway.ID,
+			"tenant_id":        result.Gateway.TenantID,
 			"name":             result.Gateway.Name,
 			"auth_mode":        result.Gateway.AuthMode,
 			"enrollment_token": result.EnrollmentToken,
@@ -4135,6 +4131,8 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			log.Printf("[ADMIN] Gateway enrollment token regenerated: id=%s", id)
 
 			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"id":               result.Gateway.ID,
+				"tenant_id":        result.Gateway.TenantID,
 				"enrollment_token": result.EnrollmentToken,
 				"token_expires_at": result.TokenExpiresAt,
 				"message":          "New enrollment token generated (1-hour expiry).",
@@ -4194,4 +4192,265 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Admin Identity Provider Config endpoints (per Tenant)
+// ──────────────────────────────────────────────────────────────────────
+
+// handleAdminIdentityProviders handles GET/POST /api/admin/tenants/idps
+// Query param: tenant_id (required).
+// GET  — list IdP configs for a tenant
+// POST — create a new IdP config
+func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Request) {
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	if tenantID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant_id query parameter is required"})
+		return
+	}
+	tenant, found := s.pa.Store.GetTenant(tenantID)
+	if !found || tenant == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfgs := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID)
+		if cfgs == nil {
+			cfgs = []*models.IdentityProviderConfig{}
+		}
+		// Strip secrets from response
+		safe := make([]map[string]interface{}, 0, len(cfgs))
+		for _, cfg := range cfgs {
+			safe = append(safe, sanitizeIdPConfig(cfg))
+		}
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: safe})
+
+	case http.MethodPost:
+		if existing := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID); len(existing) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "tenant already has an identity provider"})
+			return
+		}
+		var cfg models.IdentityProviderConfig
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&cfg); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		cfg.TenantID = tenantID
+		if cfg.ID == "" {
+			var err error
+			cfg.ID, err = util.GenerateID("idp")
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate ID"})
+				return
+			}
+		}
+		if cfg.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+		if cfg.Issuer == "" || cfg.ClientID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer and client_id are required"})
+			return
+		}
+		if cfg.Type == "" {
+			cfg.Type = "oidc"
+		}
+		if cfg.Scopes == "" {
+			cfg.Scopes = "openid profile email"
+		}
+		cfg.Enabled = true
+		cfg.CreatedAt = time.Now()
+		cfg.UpdatedAt = cfg.CreatedAt
+
+		s.pa.Store.SaveIdentityProviderConfig(&cfg)
+		tenant.DefaultIdPID = cfg.ID
+		tenant.UpdatedAt = time.Now()
+		s.pa.Store.SaveTenant(tenant)
+		log.Printf("[ADMIN] IdP config created: %s (%s) tenant=%s", cfg.ID, cfg.Name, tenantID)
+
+		writeJSON(w, http.StatusCreated, models.APIResponse{
+			Success: true,
+			Message: "Identity Provider configuration created",
+			Data:    sanitizeIdPConfig(&cfg),
+		})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// handleAdminIdentityProviderByID handles GET/PUT/DELETE /api/admin/tenants/idps/{id}
+func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/idps/")
+	id = strings.TrimSpace(id)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "IdP config ID required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg, found := s.pa.Store.GetIdentityProviderConfig(id)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: sanitizeIdPConfig(cfg)})
+
+	case http.MethodPut:
+		existing, found := s.pa.Store.GetIdentityProviderConfig(id)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
+			return
+		}
+
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var update models.IdentityProviderConfig
+		if err := json.Unmarshal(body, &update); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(body, &raw)
+
+		if update.Name != "" {
+			existing.Name = update.Name
+		}
+		if update.Issuer != "" {
+			existing.Issuer = update.Issuer
+		}
+		if update.ClientID != "" {
+			existing.ClientID = update.ClientID
+		}
+		if update.ClientSecret != "" {
+			existing.ClientSecret = update.ClientSecret
+		}
+		if update.Scopes != "" {
+			existing.Scopes = update.Scopes
+		}
+		if update.Domains != nil {
+			existing.Domains = update.Domains
+		}
+		if update.ClaimMapping != nil {
+			existing.ClaimMapping = update.ClaimMapping
+		}
+		if update.GroupRoleMapping != nil {
+			existing.GroupRoleMapping = update.GroupRoleMapping
+		}
+		if _, ok := raw["enabled"]; ok {
+			existing.Enabled = update.Enabled
+		}
+		if _, ok := raw["auto_discovery"]; ok {
+			existing.AutoDiscovery = update.AutoDiscovery
+		}
+		existing.UpdatedAt = time.Now()
+
+		s.pa.Store.SaveIdentityProviderConfig(existing)
+		if tenant, tFound := s.pa.Store.GetTenant(existing.TenantID); tFound && tenant.DefaultIdPID == "" {
+			tenant.DefaultIdPID = existing.ID
+			tenant.UpdatedAt = time.Now()
+			s.pa.Store.SaveTenant(tenant)
+		}
+		log.Printf("[ADMIN] IdP config updated: %s (%s)", existing.ID, existing.Name)
+
+		writeJSON(w, http.StatusOK, models.APIResponse{
+			Success: true,
+			Message: "Identity Provider configuration updated",
+			Data:    sanitizeIdPConfig(existing),
+		})
+
+	case http.MethodDelete:
+		existing, found := s.pa.Store.GetIdentityProviderConfig(id)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
+			return
+		}
+		if !s.pa.Store.DeleteIdentityProviderConfig(id) {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete IdP config"})
+			return
+		}
+		// Clear the tenant's default IdP reference if it pointed to this
+		if tenant, tFound := s.pa.Store.GetTenant(existing.TenantID); tFound && tenant.DefaultIdPID == id {
+			tenant.DefaultIdPID = ""
+			s.pa.Store.SaveTenant(tenant)
+		}
+		log.Printf("[ADMIN] IdP config deleted: %s (%s) tenant=%s", id, existing.Name, existing.TenantID)
+
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Identity Provider configuration deleted"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+// sanitizeIdPConfig returns a safe copy of an IdentityProviderConfig without secrets.
+func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{} {
+	if cfg == nil {
+		return nil
+	}
+	return map[string]interface{}{
+		"id":                 cfg.ID,
+		"tenant_id":          cfg.TenantID,
+		"name":               cfg.Name,
+		"type":               cfg.Type,
+		"enabled":            cfg.Enabled,
+		"domains":            cfg.Domains,
+		"issuer":             cfg.Issuer,
+		"client_id":          cfg.ClientID,
+		"client_secret":      "",
+		"scopes":             cfg.Scopes,
+		"auto_discovery":     cfg.AutoDiscovery,
+		"claim_mapping":      cfg.ClaimMapping,
+		"group_role_mapping": cfg.GroupRoleMapping,
+		"created_at":         cfg.CreatedAt,
+		"updated_at":         cfg.UpdatedAt,
+	}
+}
+
+// handleAdminIdPDiscover tests OIDC discovery for a given issuer URL.
+// POST /api/admin/tenants/idps/discover  { "issuer": "https://..." }
+func (s *Server) handleAdminIdPDiscover(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var body struct {
+		Issuer string `json:"issuer"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	issuer := strings.TrimSpace(body.Issuer)
+	if issuer == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer is required"})
+		return
+	}
+
+	disc, err := s.pa.IdP.Federation.Discover(issuer)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
+			"ok":     false,
+			"issuer": issuer,
+			"error":  err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":                     true,
+		"issuer":                 issuer,
+		"authorization_endpoint": disc.AuthorizationEndpoint,
+		"token_endpoint":         disc.TokenEndpoint,
+		"userinfo_endpoint":      disc.UserinfoEndpoint,
+		"jwks_uri":               disc.JWKSURI,
+	})
 }

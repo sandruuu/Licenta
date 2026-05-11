@@ -22,6 +22,7 @@ services:
       - gateway-certs:/app/certs
     environment:
       - CLOUD_URL=${CLOUD_URL:-https://pdp.ztna.local:8443}
+      - GATEWAY_TENANT_ID=${GATEWAY_TENANT_ID:-tenant-1}
       - GATEWAY_ID=${GATEWAY_ID:-gateway-docker}
       - GATEWAY_ENDPOINT=${GATEWAY_ENDPOINT:-gateway.ztna.local:9443}
       - GATEWAY_ENROLLMENT_TOKEN=${GATEWAY_ENROLLMENT_TOKEN:-}

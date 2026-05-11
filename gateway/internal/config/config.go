@@ -12,6 +12,7 @@ import (
 type Config struct {
 	ListenAddr string `json:"listen_addr"`
 	FQDN       string `json:"fqdn,omitempty"`
+	TenantID   string `json:"tenant_id,omitempty"`
 
 	TLSCert           string `json:"tls_cert,omitempty"`
 	TLSKey            string `json:"tls_key,omitempty"`
@@ -102,6 +103,7 @@ func (cfg *Config) SaveToFile(path string) error {
 func (cfg *Config) ApplyEnvOverrides() {
 	setString(&cfg.ListenAddr, "GATEWAY_LISTEN_ADDR")
 	setString(&cfg.FQDN, "GATEWAY_FQDN")
+	setString(&cfg.TenantID, "GATEWAY_TENANT_ID")
 	setString(&cfg.TLSCert, "GATEWAY_TLS_CERT")
 	setString(&cfg.TLSKey, "GATEWAY_TLS_KEY")
 	setString(&cfg.TLSCA, "GATEWAY_TLS_CA")

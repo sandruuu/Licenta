@@ -2,14 +2,22 @@ package transport
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
+	"math/big"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	"pdp/models"
+	pagateway "pdp/pa/gateway"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -242,10 +250,12 @@ func (stream *testGatewayControlStream) nextSent(t *testing.T) *structpb.Struct 
 func newGatewayControlTestServer(t *testing.T, gatewayID, fqdn string) (*Server, *x509.Certificate) {
 	t.Helper()
 	server, dataStore := newDeviceAPITestServer(t)
-	certPEM, cert := newDeviceAPICertificate(t, fqdn, time.Now().Add(time.Hour))
+	certPEM, cert := newGatewayControlCertificate(t, transportTestTenantID, gatewayID, fqdn, time.Now().Add(time.Hour))
 	server.gatewayControl = NewGatewayControlRegistry()
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              gatewayID,
+		TenantID:        transportTestTenantID,
+		TenantIDs:       []string{transportTestTenantID},
 		Name:            "Test Gateway",
 		FQDN:            fqdn,
 		Status:          "enrolled",
@@ -255,6 +265,38 @@ func newGatewayControlTestServer(t *testing.T, gatewayID, fqdn string) (*Server,
 		UpdatedAt:       time.Now().Add(-time.Hour),
 	})
 	return server, cert
+}
+
+func newGatewayControlCertificate(t *testing.T, tenantID, gatewayID, fqdn string, notAfter time.Time) ([]byte, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate gateway key: %v", err)
+	}
+	identityURI, err := url.Parse(pagateway.GatewayIdentityURI(tenantID, gatewayID))
+	if err != nil {
+		t.Fatalf("parse gateway identity URI: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: gatewayID},
+		DNSNames:     []string{fqdn},
+		URIs:         []*url.URL{identityURI},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create gateway certificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse gateway certificate: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return certPEM, cert
 }
 
 func gatewayControlPeerContext(cert *x509.Certificate) context.Context {

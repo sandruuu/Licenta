@@ -3,11 +3,14 @@ package gateway
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +18,13 @@ import (
 	"pdp/models"
 	"pdp/store"
 )
+
+// gatewayTokenHash returns the SHA-256 hex hash of a token, matching the
+// production encoding used by CreateGateway/GetGatewayByToken.
+func gatewayTokenHash(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
 
 func TestServiceEnrollGatewayConsumesTokenAndPersistsCertificate(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
@@ -26,9 +36,11 @@ func TestServiceEnrollGatewayConsumesTokenAndPersistsCertificate(t *testing.T) {
 
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              "gw-1",
+		TenantID:        gatewayTestTenantID,
+		TenantIDs:       []string{gatewayTestTenantID},
 		Name:            "Old Gateway",
 		FQDN:            "old.example.test",
-		EnrollmentToken: "token-1",
+		EnrollmentToken: gatewayTokenHash("token-1"),
 		TokenExpiresAt:  fixedNow.Add(time.Hour).Format(time.RFC3339),
 		Status:          "pending",
 		CreatedAt:       fixedNow.Add(-time.Hour),
@@ -36,10 +48,12 @@ func TestServiceEnrollGatewayConsumesTokenAndPersistsCertificate(t *testing.T) {
 	})
 
 	result, err := service.EnrollGateway(models.GatewayEnrollRequest{
-		Token:  "token-1",
-		CSRPEM: newGatewayCSR(t, "edge.example.test"),
-		Name:   "Edge Gateway",
-		FQDN:   "edge.example.test",
+		Token:     "token-1",
+		CSRPEM:    newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test"),
+		Name:      "Edge Gateway",
+		FQDN:      "edge.example.test",
+		GatewayID: "gw-1",
+		TenantID:  gatewayTestTenantID,
 	})
 	if err != nil {
 		t.Fatalf("EnrollGateway returned error: %v", err)
@@ -80,7 +94,7 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("invalid token", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "missing", CSRPEM: newGatewayCSR(t, "gw.example.test")})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "missing", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-1", "gw.example.test")})
 		if !errors.Is(err, ErrInvalidEnrollmentToken) {
 			t.Fatalf("error = %v, want ErrInvalidEnrollmentToken", err)
 		}
@@ -89,8 +103,8 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("expired token", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		dataStore.SaveGateway(&models.Gateway{ID: "gw-expired", EnrollmentToken: "expired", TokenExpiresAt: fixedNow.Add(-time.Minute).Format(time.RFC3339), Status: "pending"})
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "expired", CSRPEM: newGatewayCSR(t, "gw.example.test")})
+		dataStore.SaveGateway(&models.Gateway{ID: "gw-expired", TenantID: gatewayTestTenantID, EnrollmentToken: gatewayTokenHash("expired"), TokenExpiresAt: fixedNow.Add(-time.Minute).Format(time.RFC3339), Status: "pending"})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "expired", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-expired", "gw.example.test")})
 		if !errors.Is(err, ErrEnrollmentTokenExpired) {
 			t.Fatalf("error = %v, want ErrEnrollmentTokenExpired", err)
 		}
@@ -99,8 +113,8 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("already enrolled", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		dataStore.SaveGateway(&models.Gateway{ID: "gw-enrolled", EnrollmentToken: "enrolled", TokenExpiresAt: fixedNow.Add(time.Hour).Format(time.RFC3339), Status: "enrolled"})
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "enrolled", CSRPEM: newGatewayCSR(t, "gw.example.test")})
+		dataStore.SaveGateway(&models.Gateway{ID: "gw-enrolled", TenantID: gatewayTestTenantID, EnrollmentToken: gatewayTokenHash("enrolled"), TokenExpiresAt: fixedNow.Add(time.Hour).Format(time.RFC3339), Status: "enrolled"})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "enrolled", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-enrolled", "gw.example.test")})
 		if !errors.Is(err, ErrGatewayAlreadyEnrolled) {
 			t.Fatalf("error = %v, want ErrGatewayAlreadyEnrolled", err)
 		}
@@ -119,13 +133,15 @@ func TestServiceRenewGatewayCertificateUpdatesCertificateAndRevokesOldSerial(t *
 	})
 	service.now = func() time.Time { return fixedNow }
 
-	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, "edge.example.test")), 7, "gateway-role")
+	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test")), 7, "gateway-role")
 	if err != nil {
 		t.Fatalf("sign old certificate: %v", err)
 	}
 	_, oldSerial := certificateIdentity(oldCertPEM)
 	gateway := &models.Gateway{
 		ID:            "gw-1",
+		TenantID:      gatewayTestTenantID,
+		TenantIDs:     []string{gatewayTestTenantID},
 		Name:          "Edge Gateway",
 		FQDN:          "edge.example.test",
 		Status:        "enrolled",
@@ -137,7 +153,7 @@ func TestServiceRenewGatewayCertificateUpdatesCertificateAndRevokesOldSerial(t *
 	}
 	dataStore.SaveGateway(gateway)
 
-	result, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, "edge.example.test"))
+	result, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test"))
 	if err != nil {
 		t.Fatalf("RenewGatewayCertificate returned error: %v", err)
 	}
@@ -156,13 +172,13 @@ func TestServiceRenewGatewayCertificateUpdatesCertificateAndRevokesOldSerial(t *
 	}
 }
 
-func TestServiceRenewGatewayCertificateValidatesCSRCommonName(t *testing.T) {
+func TestServiceRenewGatewayCertificateValidatesCSRIdentity(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := newGatewayTestService(t, dataStore, fixedNow)
-	gateway := &models.Gateway{ID: "gw-1", FQDN: "edge.example.test", Status: "enrolled"}
+	gateway := &models.Gateway{ID: "gw-1", TenantID: gatewayTestTenantID, FQDN: "edge.example.test", Status: "enrolled"}
 
-	_, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, "other.example.test"))
+	_, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestTenantID, "gw-other", "edge.example.test"))
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("error = %v, want ErrForbidden", err)
 	}
@@ -175,11 +191,14 @@ func TestServiceRenewGatewayCertificateValidatesCSRCommonName(t *testing.T) {
 
 func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
+	seedGatewayTenant(dataStore)
+	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: gatewayTestTenantID, Name: "SSH", Type: "ssh", Enabled: true})
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
 
 	result, err := service.CreateGateway(CreateGatewayRequest{
+		TenantID:          gatewayTestTenantID,
 		Name:              "Edge Gateway",
 		FQDN:              "edge.example.test",
 		AssignedResources: []string{"res-1"},
@@ -210,8 +229,10 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if items[0].FederationConfig == nil || items[0].FederationConfig.ClientSecret != "" {
 		t.Fatalf("list did not strip federation secret: %+v", items[0].FederationConfig)
 	}
-	if items[0].EnrollmentToken != result.EnrollmentToken {
-		t.Fatalf("list enrollment token = %q, want %q", items[0].EnrollmentToken, result.EnrollmentToken)
+	// EnrollmentToken is intentionally zeroed in gatewayListItem for defense-in-depth.
+	// The plaintext token is only returned at creation time (CreateGatewayResult).
+	if items[0].EnrollmentToken != "" {
+		t.Fatalf("list enrollment token should be empty (sanitized), got %q", items[0].EnrollmentToken)
 	}
 
 	result.Gateway.CertPEM = "cert-pem"
@@ -228,6 +249,7 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 
 func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
+	seedGatewayTenant(dataStore)
 	service := NewService(dataStore, "gateway-role")
 
 	_, err := service.CreateGateway(CreateGatewayRequest{})
@@ -235,28 +257,38 @@ func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 		t.Fatalf("empty request error = %v, want ErrInvalidRequest", err)
 	}
 
-	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", AuthMode: "unknown"})
+	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", TenantID: gatewayTestTenantID, AuthMode: "unknown"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("invalid auth mode error = %v, want ErrInvalidRequest", err)
 	}
 
-	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", AuthMode: "federated"})
+	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", TenantID: gatewayTestTenantID, AuthMode: "federated"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("missing federation config error = %v, want ErrInvalidRequest", err)
+	}
+
+	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("missing tenant error = %v, want ErrInvalidRequest", err)
 	}
 }
 
 func TestServiceUpdateGatewayPreservesFederationSecretAndCanClearFederation(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
+	seedGatewayTenant(dataStore)
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
+	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: gatewayTestTenantID, Name: "SSH", Type: "ssh", Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-2", TenantID: gatewayTestTenantID, Name: "RDP", Type: "rdp", Enabled: true})
 	dataStore.SaveGateway(&models.Gateway{
-		ID:       "gw-1",
-		Name:     "Old Gateway",
-		FQDN:     "old.example.test",
-		Status:   "pending",
-		AuthMode: "federated",
+		ID:        "gw-1",
+		TenantID:  gatewayTestTenantID,
+		TenantIDs: []string{gatewayTestTenantID},
+		Name:      "Old Gateway",
+		FQDN:      "old.example.test",
+		Status:    "pending",
+		AuthMode:  "federated",
 		FederationConfig: &models.FederationConfig{
 			Issuer:       "https://old-idp.example.test",
 			ClientID:     "old-client",
@@ -304,7 +336,7 @@ func TestServiceRegenerateRevokeAndDeleteGateway(t *testing.T) {
 	})
 	service.now = func() time.Time { return fixedNow }
 
-	dataStore.SaveGateway(&models.Gateway{ID: "gw-1", Name: "Gateway", EnrollmentToken: "old-token", Status: "enrolled", CertSerial: "serial-1", CertPEM: "cert-1"})
+	dataStore.SaveGateway(&models.Gateway{ID: "gw-1", Name: "Gateway", EnrollmentToken: gatewayTokenHash("old-token"), Status: "enrolled", CertSerial: "serial-1", CertPEM: "cert-1"})
 	dataStore.SaveGateway(&models.Gateway{ID: "gw-2", Name: "Delete Gateway", Status: "enrolled", CertSerial: "serial-2", CertPEM: "cert-2"})
 
 	regenerated, err := service.RegenerateEnrollmentToken("gw-1")
@@ -349,6 +381,20 @@ func newGatewayTestStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = dataStore.Close() })
 	return dataStore
+}
+
+const gatewayTestTenantID = "tenant-1"
+
+func seedGatewayTenant(dataStore *store.Store) {
+	now := time.Now()
+	dataStore.SaveTenant(&models.Tenant{
+		ID:        gatewayTestTenantID,
+		Name:      "Test Tenant",
+		Domain:    "example.test",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 }
 
 func newGatewayTestService(t *testing.T, dataStore *store.Store, now time.Time) *Service {
@@ -417,6 +463,7 @@ func (ca *gatewayTestCA) sign(csrPEM []byte, validDays int, role string) ([]byte
 		SerialNumber: big.NewInt(serial),
 		Subject:      csr.Subject,
 		DNSNames:     csr.DNSNames,
+		URIs:         csr.URIs,
 		NotBefore:    now.Add(-time.Minute),
 		NotAfter:     now.Add(time.Duration(validDays) * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -435,13 +482,21 @@ func (ca *gatewayTestCA) lastRole() string {
 	return ca.role
 }
 
-func newGatewayCSR(t *testing.T, commonName string) string {
+func newGatewayCSR(t *testing.T, tenantID, gatewayID, fqdn string) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	template := &x509.CertificateRequest{Subject: pkix.Name{CommonName: commonName}, DNSNames: []string{commonName}}
+	identityURI, err := url.Parse(GatewayIdentityURI(tenantID, gatewayID))
+	if err != nil {
+		t.Fatalf("parse gateway identity URI: %v", err)
+	}
+	template := &x509.CertificateRequest{
+		Subject:  pkix.Name{CommonName: gatewayID},
+		DNSNames: []string{fqdn},
+		URIs:     []*url.URL{identityURI},
+	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, template, key)
 	if err != nil {
 		t.Fatalf("create CSR: %v", err)
