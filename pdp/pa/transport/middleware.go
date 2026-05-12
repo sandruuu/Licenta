@@ -249,7 +249,7 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 		// enforcement is performed by the policy engine at access time, not at the
 		// admin API boundary. This allows freshly-issued login tokens (which always
 		// have MFADone=false) to access the admin dashboard.
-		claims, err := s.pa.IdP.ParseToken(parts[1])
+		claims, err := s.pa.Auth.ParseToken(parts[1])
 		if err != nil {
 			log.Printf("[AUTH] Token validation failed: %v", err)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{

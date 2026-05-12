@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"pdp/idp"
 	"pdp/models"
+	"pdp/pa/auth"
 	"pdp/pa/catalog"
 	pagateway "pdp/pa/gateway"
 )
@@ -150,11 +150,11 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	return response, nil
 }
 
-func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (*idp.CustomClaims, error) {
-	if pa == nil || pa.IdP == nil || pa.IdP.JWT == nil || pa.Store == nil {
+func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (*auth.CustomClaims, error) {
+	if pa == nil || pa.Auth == nil || pa.Auth.JWT == nil || pa.Store == nil {
 		return nil, newAccessError(AccessErrorServiceUnavailable, "identity services are not available", nil)
 	}
-	claims, err := pa.IdP.JWT.ParseAuthTokenForAudience(strings.TrimSpace(token), "ztna-gateway")
+	claims, err := pa.Auth.JWT.ParseAuthTokenForAudience(strings.TrimSpace(token), auth.AgentTokenAudience)
 	if err != nil || claims == nil || claims.Purpose != "" {
 		return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired user token", err)
 	}
@@ -167,7 +167,7 @@ func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (
 	if strings.TrimSpace(deviceID) != "" && claims.DeviceID != strings.TrimSpace(deviceID) {
 		return nil, newAccessError(AccessErrorPermissionDenied, "user token device_id does not match mTLS device identity", nil)
 	}
-	user, exists := pa.IdP.Users.GetUser(claims.UserID)
+	user, exists := pa.Auth.Users.GetUser(claims.UserID)
 	if !exists || user.Disabled {
 		return nil, newAccessError(AccessErrorPermissionDenied, "user is not allowed to request catalog", nil)
 	}
@@ -175,7 +175,7 @@ func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (
 	return claims, nil
 }
 
-func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationRequest, claims *idp.CustomClaims) (resolvedAgentAuthorization, error) {
+func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationRequest, claims *auth.CustomClaims) (resolvedAgentAuthorization, error) {
 	if claims == nil {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorUnauthenticated, "invalid or expired user token", nil)
 	}

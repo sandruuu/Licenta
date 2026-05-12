@@ -1,4 +1,4 @@
-package idp
+package auth
 
 import (
 	"fmt"
@@ -65,7 +65,7 @@ func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error
 	}
 
 	um.store.SaveUser(user)
-	log.Printf("[IDP] User registered: %s (%s)", user.Username, user.ID)
+	log.Printf("[AUTH] User registered: %s (%s)", user.Username, user.ID)
 	return user, nil
 }
 
@@ -113,7 +113,7 @@ func (um *UserManager) EnrollMFA(userID, issuer string) (*models.MFAEnrollRespon
 	// Build the otpauth URI for QR code scanning
 	qrURI := BuildTOTPURI(secret, issuer, user.Username)
 
-	log.Printf("[IDP] MFA enrollment initiated for user: %s", user.Username)
+	log.Printf("[AUTH] MFA enrollment initiated for user: %s", user.Username)
 
 	return &models.MFAEnrollResponse{
 		Secret:    secret,
@@ -149,7 +149,7 @@ func (um *UserManager) ActivateMFA(userID, code string) error {
 	user.UpdatedAt = time.Now()
 	um.store.SaveUser(user)
 
-	log.Printf("[IDP] MFA activated for user: %s", user.Username)
+	log.Printf("[AUTH] MFA activated for user: %s", user.Username)
 	return nil
 }
 
@@ -172,7 +172,7 @@ func (um *UserManager) VerifyMFA(userID, code string) error {
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	log.Printf("[IDP] MFA verified for user: %s", user.Username)
+	log.Printf("[AUTH] MFA verified for user: %s", user.Username)
 	return nil
 }
 
@@ -224,7 +224,7 @@ func (um *UserManager) AddMFAMethod(userID, method string) {
 	user.MFAMethods = append(user.MFAMethods, method)
 	user.UpdatedAt = time.Now()
 	um.store.SaveUser(user)
-	log.Printf("[IDP] MFA method '%s' added for user %s", method, user.Username)
+	log.Printf("[AUTH] MFA method '%s' added for user %s", method, user.Username)
 }
 
 // FindOrCreateFederatedUser looks up a user by external subject + auth source.
@@ -253,12 +253,12 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		}
 		// Re-evaluate role at each login — group membership may have changed
 		if role != user.Role {
-			log.Printf("[IDP] Federated user role changed: %s %s → %s (source=%s)", user.Username, user.Role, role, authSource)
+			log.Printf("[AUTH] Federated user role changed: %s %s → %s (source=%s)", user.Username, user.Role, role, authSource)
 			user.Role = role
 		}
 		user.UpdatedAt = time.Now()
 		um.store.SaveUser(user)
-		log.Printf("[IDP] Federated user found: %s (source=%s, sub=%s, role=%s)", user.Username, authSource, externalSubject, user.Role)
+		log.Printf("[AUTH] Federated user found: %s (source=%s, sub=%s, role=%s)", user.Username, authSource, externalSubject, user.Role)
 		return user, nil
 	}
 
@@ -301,6 +301,6 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 	}
 
 	um.store.SaveUser(user)
-	log.Printf("[IDP] Federated user provisioned: %s (source=%s, sub=%s, role=%s, id=%s)", username, authSource, externalSubject, role, userID)
+	log.Printf("[AUTH] Federated user provisioned: %s (source=%s, sub=%s, role=%s, id=%s)", username, authSource, externalSubject, role, userID)
 	return user, nil
 }

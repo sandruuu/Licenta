@@ -2,9 +2,9 @@ package pa
 
 import (
 	"pdp/config"
-	"pdp/idp"
 	"pdp/models"
 	"pdp/pa/audit"
+	"pdp/pa/auth"
 	"pdp/pa/catalog"
 	"pdp/pa/devices"
 	"pdp/pa/enrollment"
@@ -17,11 +17,11 @@ import (
 )
 
 // PolicyAdministrator (PA) is the central coordinator that ties together
-// the Identity Provider (IdP), Policy Engine (PE), session management, Gateway
-// control, and audit logging. It orchestrates workflows and delegates access
-// decisions to PE through a normalized context.
+// authentication, Policy Engine (PE), session management, Gateway control, and
+// audit logging. It orchestrates workflows and delegates access decisions to PE
+// through a normalized context.
 type PolicyAdministrator struct {
-	IdP        *idp.IdentityProvider
+	Auth       *auth.Service
 	Engine     *evaluation.Engine
 	Geo        *policies.GeoLocator
 	Rules      *policies.RuleManager
@@ -40,7 +40,7 @@ type PolicyAdministrator struct {
 func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministrator {
 	auditLogger := audit.NewAuditLogger(s)
 	pa := &PolicyAdministrator{
-		IdP:        idp.New(cfg, s),
+		Auth:       auth.New(cfg, s),
 		Engine:     evaluation.NewEngine(),
 		Geo:        policies.NewGeoLocator(s),
 		Rules:      policies.NewRuleManager(s),

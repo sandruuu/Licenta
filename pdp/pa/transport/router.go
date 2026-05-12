@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,10 +23,10 @@ import (
 
 	"pdp/certs"
 	"pdp/events"
-	"pdp/idp"
 	"pdp/metrics"
 	"pdp/models"
 	"pdp/pa"
+	"pdp/pa/auth"
 	"pdp/pa/catalog"
 	"pdp/pa/devices"
 	paenrollment "pdp/pa/enrollment"
@@ -106,9 +105,9 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	// Wire mfa.PushProvider's create-hook into the broker so that any
 	// device-health app subscribed via SSE on the per-device topic
 	// receives the challenge immediately. Polling clients are unaffected.
-	if policyAdmin != nil && policyAdmin.IdP != nil && policyAdmin.IdP.Push != nil {
+	if policyAdmin != nil && policyAdmin.Auth != nil && policyAdmin.Auth.Push != nil {
 		broker := s.events
-		policyAdmin.IdP.Push.OnCreate = func(ch *models.PushChallenge) {
+		policyAdmin.Auth.Push.OnCreate = func(ch *models.PushChallenge) {
 			if ch == nil {
 				return
 			}
@@ -159,8 +158,8 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	}
 	if policyAdmin.Enrollment != nil {
 		policyAdmin.Enrollment.SetCertificateAuthority(s.signCSR, s.revokeCertificate, s.deviceRole)
-		if policyAdmin.IdP != nil && policyAdmin.IdP.JWT != nil {
-			policyAdmin.Enrollment.SetEnrollmentTokenIssuer(policyAdmin.IdP.JWT.GenerateEnrollmentTokenForUserSID)
+		if policyAdmin.Auth != nil && policyAdmin.Auth.JWT != nil {
+			policyAdmin.Enrollment.SetEnrollmentTokenIssuer(policyAdmin.Auth.JWT.GenerateEnrollmentTokenForUserSID)
 		}
 	}
 	if policyAdmin.Gateways != nil {
@@ -180,11 +179,11 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 // hydrateOIDCClients registers the native Connect-App OIDC public client.
 // Gateways are no longer OIDC clients; they act only as resource servers/PEPs.
 func (s *Server) hydrateOIDCClients() {
-	if s.pa == nil || s.pa.Store == nil || s.pa.IdP == nil || s.pa.IdP.OIDC == nil {
+	if s.pa == nil || s.pa.Store == nil || s.pa.Auth == nil || s.pa.Auth.OIDC == nil {
 		return
 	}
-	s.pa.IdP.OIDC.RegisterNativeConnectAppClient()
-	s.pa.IdP.OIDC.RegisterNativeAgentClient()
+	s.pa.Auth.OIDC.RegisterNativeConnectAppClient()
+	s.pa.Auth.OIDC.RegisterNativeAgentClient()
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {
@@ -217,7 +216,7 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Browser auth flow endpoints (Duo-like)
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)                   // Serve login HTML page
+	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)                   // Serve React access login page
 	s.mux.HandleFunc("/api/auth/start-session", s.handleStartSession)       // Connect-app creates pending session
 	s.mux.HandleFunc("/api/auth/session-status", s.handleSessionStatus)     // Connect-app polls session status
 	s.mux.HandleFunc("/api/auth/session-info", s.handleSessionInfo)         // Browser gets session device health
@@ -420,12 +419,12 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		checks["ca"] = "not_configured"
 	}
 
-	// Check IdP JWT signing keys
-	if _, err := s.pa.IdP.JWT.GetJWKSJSON(); err != nil {
-		checks["idp"] = "error"
+	// Check PA auth JWT signing keys
+	if _, err := s.pa.Auth.JWT.GetJWKSJSON(); err != nil {
+		checks["auth"] = "error"
 		status = "degraded"
 	} else {
-		checks["idp"] = "ok"
+		checks["auth"] = "ok"
 	}
 
 	httpStatus := http.StatusOK
@@ -446,7 +445,7 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	jwksJSON, err := s.pa.IdP.JWT.GetJWKSJSON()
+	jwksJSON, err := s.pa.Auth.JWT.GetJWKSJSON()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate JWKS"})
 		return
@@ -550,7 +549,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.pa.IdP.Login(req)
+	resp, err := s.pa.Auth.Login(req)
 	if err != nil {
 		log.Printf("[AUTH] Login error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
@@ -589,7 +588,7 @@ func (s *Server) handleVerifyMFA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.pa.IdP.VerifyMFA(req)
+	resp, err := s.pa.Auth.VerifyMFA(req)
 	if err != nil {
 		log.Printf("[AUTH] MFA verify error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "verification failed"})
@@ -637,7 +636,7 @@ func (s *Server) handleMFAStepUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse the auth token WITHOUT requiring MFADone=true
-	claims, err := s.pa.IdP.ParseToken(req.AuthToken)
+	claims, err := s.pa.Auth.ParseToken(req.AuthToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, models.MFAStepUpResponse{
 			Status:  "denied",
@@ -647,7 +646,7 @@ func (s *Server) handleMFAStepUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up user to get configured MFA methods
-	user, exists := s.pa.IdP.Users.GetUser(claims.UserID)
+	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 	if !exists {
 		writeJSON(w, http.StatusUnauthorized, models.MFAStepUpResponse{
 			Status:  "denied",
@@ -665,7 +664,7 @@ func (s *Server) handleMFAStepUp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Issue a temporary MFA token carrying the user's methods
-	mfaToken, err := s.pa.IdP.JWT.GenerateMFAToken(user.ID, user.Username, user.Role, user.MFAMethods)
+	mfaToken, err := s.pa.Auth.JWT.GenerateMFAToken(user.ID, user.Username, user.Role, user.MFAMethods)
 	if err != nil {
 		log.Printf("[AUTH] MFA step-up token error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to issue MFA token"})
@@ -698,7 +697,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.pa.IdP.Users.Register(req)
+	user, err := s.pa.Auth.Users.Register(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "registration failed", err)
 		return
@@ -721,7 +720,7 @@ func (s *Server) handleEnrollMFA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := r.Header.Get("X-User-ID")
-	resp, err := s.pa.IdP.Users.EnrollMFA(userID, s.pa.Cfg.TOTPIssuer)
+	resp, err := s.pa.Auth.Users.EnrollMFA(userID, s.pa.Cfg.TOTPIssuer)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "MFA enrollment failed", err)
 		return
@@ -746,7 +745,7 @@ func (s *Server) handleActivateMFA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.pa.IdP.Users.ActivateMFA(userID, body.Code); err != nil {
+	if err := s.pa.Auth.Users.ActivateMFA(userID, body.Code); err != nil {
 		writeError(w, http.StatusBadRequest, "MFA activation failed", err)
 		return
 	}
@@ -769,13 +768,13 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if s.pa.IdP.WebAuthn == nil {
+	if s.pa.Auth.WebAuthn == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "WebAuthn not configured"})
 		return
 	}
 
 	userID := r.Header.Get("X-User-ID")
-	user, exists := s.pa.IdP.Users.GetUser(userID)
+	user, exists := s.pa.Auth.Users.GetUser(userID)
 	if !exists {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 		return
@@ -788,7 +787,7 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	opts, err := s.pa.IdP.WebAuthn.BeginRegistration(user, existingCreds)
+	opts, err := s.pa.Auth.WebAuthn.BeginRegistration(user, existingCreds)
 	if err != nil {
 		log.Printf("[WEBAUTHN] BeginRegistration error for %s: %v", user.Username, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start registration"})
@@ -808,13 +807,13 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if s.pa.IdP.WebAuthn == nil {
+	if s.pa.Auth.WebAuthn == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "WebAuthn not configured"})
 		return
 	}
 
 	userID := r.Header.Get("X-User-ID")
-	user, exists := s.pa.IdP.Users.GetUser(userID)
+	user, exists := s.pa.Auth.Users.GetUser(userID)
 	if !exists {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 		return
@@ -826,7 +825,7 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	cred, err := s.pa.IdP.WebAuthn.FinishRegistration(user, existingCreds, r)
+	cred, err := s.pa.Auth.WebAuthn.FinishRegistration(user, existingCreds, r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "registration failed", err)
 		return
@@ -858,7 +857,7 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 	}
 
 	// Add "webauthn" to user's MFA methods if not already present
-	s.pa.IdP.Users.AddMFAMethod(userID, "webauthn")
+	s.pa.Auth.Users.AddMFAMethod(userID, "webauthn")
 
 	log.Printf("[WEBAUTHN] Credential registered for user %s (name=%s)", user.Username, credName)
 	writeJSON(w, http.StatusOK, map[string]string{
@@ -876,7 +875,7 @@ func (s *Server) handleWebAuthnAuthenticateBegin(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if s.pa.IdP.WebAuthn == nil {
+	if s.pa.Auth.WebAuthn == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "WebAuthn not configured"})
 		return
 	}
@@ -889,13 +888,13 @@ func (s *Server) handleWebAuthnAuthenticateBegin(w http.ResponseWriter, r *http.
 		return
 	}
 
-	claims, err := s.pa.IdP.JWT.ValidateMFAToken(body.MFAToken)
+	claims, err := s.pa.Auth.JWT.ValidateMFAToken(body.MFAToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid MFA token"})
 		return
 	}
 
-	user, exists := s.pa.IdP.Users.GetUser(claims.UserID)
+	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 	if !exists {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 		return
@@ -907,7 +906,7 @@ func (s *Server) handleWebAuthnAuthenticateBegin(w http.ResponseWriter, r *http.
 		return
 	}
 
-	opts, err := s.pa.IdP.WebAuthn.BeginAuthentication(user, creds)
+	opts, err := s.pa.Auth.WebAuthn.BeginAuthentication(user, creds)
 	if err != nil {
 		log.Printf("[WEBAUTHN] BeginAuthentication error for %s: %v", user.Username, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start authentication"})
@@ -927,7 +926,7 @@ func (s *Server) handleWebAuthnAuthenticateFinish(w http.ResponseWriter, r *http
 		return
 	}
 
-	if s.pa.IdP.WebAuthn == nil {
+	if s.pa.Auth.WebAuthn == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "WebAuthn not configured"})
 		return
 	}
@@ -940,13 +939,13 @@ func (s *Server) handleWebAuthnAuthenticateFinish(w http.ResponseWriter, r *http
 		return
 	}
 
-	claims, err := s.pa.IdP.JWT.ValidateMFAToken(mfaToken)
+	claims, err := s.pa.Auth.JWT.ValidateMFAToken(mfaToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid MFA token"})
 		return
 	}
 
-	user, exists := s.pa.IdP.Users.GetUser(claims.UserID)
+	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 	if !exists {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 		return
@@ -958,7 +957,7 @@ func (s *Server) handleWebAuthnAuthenticateFinish(w http.ResponseWriter, r *http
 		return
 	}
 
-	updatedCred, err := s.pa.IdP.WebAuthn.FinishAuthentication(user, creds, r)
+	updatedCred, err := s.pa.Auth.WebAuthn.FinishAuthentication(user, creds, r)
 	if err != nil {
 		log.Printf("[WEBAUTHN] FinishAuthentication error for %s: %v", user.Username, err)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "WebAuthn verification failed"})
@@ -970,7 +969,7 @@ func (s *Server) handleWebAuthnAuthenticateFinish(w http.ResponseWriter, r *http
 	s.pa.Store.UpdateWebAuthnCredentialJSON(hex.EncodeToString(updatedCred.ID), string(credJSON))
 
 	// Issue full auth token with MFA completed
-	authToken, err := s.pa.IdP.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
+	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
 		return
@@ -1022,7 +1021,7 @@ func (s *Server) handlePushBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := s.pa.IdP.JWT.ValidateMFAToken(body.MFAToken)
+	claims, err := s.pa.Auth.JWT.ValidateMFAToken(body.MFAToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid MFA token"})
 		return
@@ -1043,7 +1042,7 @@ func (s *Server) handlePushBegin(w http.ResponseWriter, r *http.Request) {
 		sourceIP = strings.SplitN(fwd, ",", 2)[0]
 	}
 
-	ch, err := s.pa.IdP.Push.CreateChallenge(claims.UserID, claims.Username, deviceID, sourceIP)
+	ch, err := s.pa.Auth.Push.CreateChallenge(claims.UserID, claims.Username, deviceID, sourceIP)
 	if err != nil {
 		log.Printf("[PUSH] Failed to create challenge: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create push challenge"})
@@ -1073,13 +1072,13 @@ func (s *Server) handlePushStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := s.pa.IdP.JWT.ValidateMFAToken(mfaToken)
+	claims, err := s.pa.Auth.JWT.ValidateMFAToken(mfaToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid MFA token"})
 		return
 	}
 
-	ch, err := s.pa.IdP.Push.GetStatus(challengeID)
+	ch, err := s.pa.Auth.Push.GetStatus(challengeID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "challenge not found"})
 		return
@@ -1098,13 +1097,13 @@ func (s *Server) handlePushStatus(w http.ResponseWriter, r *http.Request) {
 
 	// If approved, issue the full auth token
 	if ch.Status == "approved" {
-		user, exists := s.pa.IdP.Users.GetUser(claims.UserID)
+		user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 		if !exists {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 			return
 		}
 
-		authToken, err := s.pa.IdP.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
+		authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token generation failed"})
 			return
@@ -1130,7 +1129,7 @@ func (s *Server) handleDevicePushChallenges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	challenges := s.pa.IdP.Push.GetPendingForDevice(enrollment.DeviceID)
+	challenges := s.pa.Auth.Push.GetPendingForDevice(enrollment.DeviceID)
 	if challenges == nil {
 		challenges = make([]*models.PushChallenge, 0)
 	}
@@ -1163,7 +1162,7 @@ func (s *Server) handleDevicePushRespond(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Verify the challenge belongs to this device
-	ch, err := s.pa.IdP.Push.GetStatus(body.ChallengeID)
+	ch, err := s.pa.Auth.Push.GetStatus(body.ChallengeID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "challenge not found"})
 		return
@@ -1173,7 +1172,7 @@ func (s *Server) handleDevicePushRespond(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := s.pa.IdP.Push.Respond(body.ChallengeID, body.Decision); err != nil {
+	if err := s.pa.Auth.Push.Respond(body.ChallengeID, body.Decision); err != nil {
 		writeError(w, http.StatusBadRequest, "push response failed", err)
 		return
 	}
@@ -1212,7 +1211,7 @@ func statusCodeForDeviceTelemetryError(err error) int {
 }
 
 // We deliberately do NOT accept any payload body — heartbeats must be
-func (s *Server) validateDeviceCatalogToken(token, deviceID string) (*idp.CustomClaims, int, error) {
+func (s *Server) validateDeviceCatalogToken(token, deviceID string) (*auth.CustomClaims, int, error) {
 	if s == nil || s.pa == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("identity services are not available")
 	}
@@ -1223,7 +1222,7 @@ func (s *Server) validateDeviceCatalogToken(token, deviceID string) (*idp.Custom
 	return claims, 0, nil
 }
 
-func (s *Server) deviceCatalogSnapshot(claims *idp.CustomClaims) catalog.Snapshot {
+func (s *Server) deviceCatalogSnapshot(claims *auth.CustomClaims) catalog.Snapshot {
 	if claims == nil || s == nil || s.pa == nil || s.pa.Catalog == nil {
 		return catalog.EmptySnapshot()
 	}
@@ -1326,7 +1325,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	users := s.pa.IdP.Users.ListUsers()
+	users := s.pa.Auth.Users.ListUsers()
 
 	// Strip sensitive fields
 	type safeUser struct {
@@ -1690,7 +1689,7 @@ func (s *Server) revokeCertificate(serial, certPEM, subjectID string, expiresOn 
 // Browser Auth Flow Handlers (Duo-like)
 // ─────────────────────────────────────────────
 
-// handleWebLoginPage serves the login HTML page with a CSRF token cookie
+// handleWebLoginPage serves the React access login page with a CSRF token cookie.
 func (s *Server) handleWebLoginPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1709,19 +1708,10 @@ func (s *Server) handleWebLoginPage(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   3600,
 	})
 
-	// Find the web/login.html file relative to the executable
-	htmlPath := findWebFile("login.html")
-	if htmlPath == "" {
-		http.Error(w, "Login page not found", http.StatusInternalServerError)
-		log.Printf("[API] login.html not found in any search path")
-		return
-	}
-
-	// Prevent caching so the CSRF cookie is always freshly set
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
-	http.ServeFile(w, r, htmlPath)
+	s.serveDashboardIndex(w, r)
 }
 
 // generateCSRFToken creates a cryptographically random CSRF token
@@ -1745,31 +1735,6 @@ func validateCSRF(r *http.Request) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(headerToken)) == 1
-}
-
-// findWebFile locates a web asset file by searching common paths
-func findWebFile(filename string) string {
-	// Common locations to search
-	searchPaths := []string{
-		filepath.Join("web", filename),
-	}
-
-	// Add path relative to executable
-	if exe, err := os.Executable(); err == nil {
-		searchPaths = append(searchPaths, filepath.Join(filepath.Dir(exe), "web", filename))
-	}
-
-	// Add path relative to source file
-	if _, srcFile, _, ok := runtime.Caller(0); ok {
-		searchPaths = append(searchPaths, filepath.Join(filepath.Dir(srcFile), "..", "web", filename))
-	}
-
-	for _, p := range searchPaths {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
 }
 
 // handleStartSession creates a pending browser auth session (called by connect-app)
@@ -1928,7 +1893,7 @@ func (s *Server) handleCompleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate the auth token
-	claims, err := s.pa.IdP.ValidateToken(req.AuthToken)
+	claims, err := s.pa.Auth.ValidateToken(req.AuthToken)
 	if err != nil {
 		session.Status = "denied"
 		s.pa.Store.SavePendingAuth(session)
@@ -2371,6 +2336,15 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
+func (s *Server) serveDashboardIndex(w http.ResponseWriter, r *http.Request) {
+	distDir := findDashboardDir()
+	if distDir == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dashboard not built - run: cd pdp/pa/dashboard && npm run build"})
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+}
+
 func findDashboardDir() string {
 	candidates := []string{
 		"pdp/pa/dashboard/dist",
@@ -2393,20 +2367,20 @@ func findDashboardDir() string {
 }
 
 // ─────────────────────────────────────────────
-// OIDC / OAuth2 Handlers (Cloud as IdP)
+// OIDC / OAuth2 Handlers (PA as auth broker)
 // ─────────────────────────────────────────────
 
 // handleOIDCAuthorize is the OIDC Authorization Endpoint.
-// The gateway redirects the user's browser here to start authentication.
+// Native endpoint clients redirect the user's browser here to start authentication.
 //
-// GET /auth/authorize?client_id=gateway_1&response_type=code&redirect_uri=https://gateway/auth/callback&state=xyz&scope=openid
+// GET /auth/authorize?client_id=ztna-agent&response_type=code&redirect_uri=http://127.0.0.1/callback&state=xyz&scope=openid
 //
 // Flow:
 //  1. Validates client_id and redirect_uri
 //  2. Creates an OIDC authorize session
-//  3. Serves the login page with the OIDC session context
-//  4. After user authenticates, the login page calls /api/auth/oidc-complete
-//  5. Cloud generates an authorization code and redirects to Gateway's callback
+//  3. Resolves a tenant-level external IdP
+//  4. Redirects to the external IdP and handles the federation callback
+//  5. PA generates an authorization code and redirects to the OIDC client callback
 func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -2437,7 +2411,7 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate client_id
-	client, err := s.pa.IdP.OIDC.ValidateClientID(clientID)
+	client, err := s.pa.Auth.OIDC.ValidateClientID(clientID)
 	if err != nil {
 		log.Printf("[OIDC] Invalid client_id %s: %v", clientID, err)
 		http.Error(w, "Invalid client_id", http.StatusBadRequest)
@@ -2445,7 +2419,7 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate redirect_uri
-	if !s.pa.IdP.OIDC.ValidateRedirectURI(client, redirectURI) {
+	if !s.pa.Auth.OIDC.ValidateRedirectURI(client, redirectURI) {
 		log.Printf("[OIDC] Invalid redirect_uri %s for client %s", redirectURI, clientID)
 		http.Error(w, "Invalid redirect_uri", http.StatusBadRequest)
 		return
@@ -2457,13 +2431,13 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if idp.IsNativeEndpointClientID(client.ClientID) && strings.TrimSpace(deviceID) == "" {
+	if auth.IsNativeEndpointClientID(client.ClientID) && strings.TrimSpace(deviceID) == "" {
 		http.Error(w, "device_id is required for endpoint authorization", http.StatusBadRequest)
 		return
 	}
 
 	// Create an OIDC authorize session
-	oidcSession, err := s.pa.IdP.OIDC.CreateAuthorizeSession(clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, nonce, deviceID, hostname, acrValues)
+	oidcSession, err := s.pa.Auth.OIDC.CreateAuthorizeSession(clientID, redirectURI, state, scope, codeChallenge, codeChallengeMethod, nonce, deviceID, hostname, acrValues)
 	if err != nil {
 		log.Printf("[OIDC] Failed to create authorize session: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -2473,71 +2447,142 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[OIDC] Authorize request: client=%s redirect=%s state=%s session=%s",
 		clientID, redirectURI, state, oidcSession.ID)
 
-	// ── Identity Broker: resolve the correct IdP via HRD ──
-	idpCfg, tenant, gw := s.resolveIdentityProvider(r, clientID)
+	// ── Identity Broker: resolve the correct tenant-level IdP via HRD ──
+	idpCfg, tenant, err := s.resolveIdentityProvider(r, clientID)
+	if err != nil {
+		log.Printf("[HRD] Identity provider resolution failed: %v", err)
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	if idpCfg != nil {
-		// Tenant-level IdP found: redirect to external IdP
-		s.redirectToExternalIdP(w, r, oidcSession, gw, tenant, idpCfg, nonce)
+		s.redirectToExternalIdP(w, r, oidcSession, tenant, idpCfg, nonce)
 		return
 	}
 
-	// ── Legacy fallback: gateway-level FederationConfig ──
-	if gw != nil && gw.AuthMode == "federated" && gw.FederationConfig != nil {
-		s.redirectToExternalIdPLegacy(w, r, oidcSession, gw, nonce)
-		return
-	}
-
-	// ── Builtin mode: show login page ──
-	loginURL := fmt.Sprintf("/auth/login?oidc_session=%s", oidcSession.ID)
-	if strings.Contains(acrValues, "loa:2") || strings.Contains(acrValues, "mfa") {
-		loginURL += "&mfa_step=true"
-	}
-	http.Redirect(w, r, loginURL, http.StatusFound)
+	http.Error(w, "No external identity provider configured for this tenant", http.StatusForbidden)
 }
 
 // ──────────────────────────────────────────────────────────────────────
 // Home Realm Discovery (HRD) — Identity Provider Resolution
 // ──────────────────────────────────────────────────────────────────────
 
-// resolveIdentityProvider determines which IdP should authenticate the user.
-// Priority: 1) domain-based HRD via login_hint, 2) gateway tenant context,
-// 3) legacy gateway FederationConfig (caller handles this fallback).
-func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Tenant, *models.Gateway) {
+// resolveIdentityProvider determines which tenant-level IdP should authenticate
+// the user. Priority: explicit idp_id, login_hint domain, explicit tenant_id,
+// then legacy gateway client_id only as tenant context.
+func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Tenant, error) {
 	gw, _ := s.pa.Store.GetGatewayByOIDCClientID(clientID)
+	queryTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 
-	// Step 1 — Domain-based HRD via login_hint or explicit idp_id
+	// Step 1 — explicit IdP selection.
 	if idpID := r.URL.Query().Get("idp_id"); idpID != "" {
 		if idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(idpID); ok && idpCfg.Enabled {
+			if queryTenantID != "" && !strings.EqualFold(queryTenantID, idpCfg.TenantID) {
+				return nil, nil, fmt.Errorf("selected identity provider does not belong to tenant")
+			}
+			if gw != nil {
+				tenantID := resolveTenantFromGateway(gw)
+				if tenantID != "" && !strings.EqualFold(tenantID, idpCfg.TenantID) {
+					return nil, nil, fmt.Errorf("selected identity provider does not belong to gateway tenant")
+				}
+			}
 			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
+			if tenant == nil || !tenant.Enabled {
+				return nil, nil, fmt.Errorf("identity provider tenant not found or disabled")
+			}
 			log.Printf("[HRD] Direct IdP selection: idp=%s tenant=%s", idpCfg.Name, idpCfg.TenantID)
-			return idpCfg, tenant, gw
+			return idpCfg, tenant, nil
 		}
+		return nil, nil, fmt.Errorf("selected identity provider not found or disabled")
 	}
 
 	// Step 2 — login_hint domain matching
 	if loginHint := r.URL.Query().Get("login_hint"); loginHint != "" {
 		domain := extractDomainFromHint(loginHint)
 		if idpCfg, ok := s.pa.Store.FindIdentityProviderByDomain(domain); ok && idpCfg.Enabled {
+			if queryTenantID != "" && !strings.EqualFold(queryTenantID, idpCfg.TenantID) {
+				return nil, nil, fmt.Errorf("login_hint domain resolves to a different tenant")
+			}
 			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
+			if tenant == nil || !tenant.Enabled {
+				return nil, nil, fmt.Errorf("identity provider tenant not found or disabled")
+			}
 			log.Printf("[HRD] Domain-based discovery: domain=%s → idp=%s tenant=%s", domain, idpCfg.Name, idpCfg.TenantID)
-			return idpCfg, tenant, gw
+			return idpCfg, tenant, nil
 		}
 		log.Printf("[HRD] No IdP found for domain=%s", domain)
 	}
 
-	// Step 3 — Tenant context from gateway
+	// Step 3 — explicit tenant context from the native client.
+	if queryTenantID != "" {
+		if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(queryTenantID); ok {
+			log.Printf("[HRD] Tenant context: tenant=%s → idp=%s", queryTenantID, idpCfg.Name)
+			return idpCfg, tenant, nil
+		}
+		return nil, nil, fmt.Errorf("tenant has no enabled default identity provider")
+	}
+
+	// Step 4 — legacy gateway client_id as tenant context only.
 	if gw != nil {
 		tenantID := resolveTenantFromGateway(gw)
 		if tenantID != "" {
-			if idpCfg, ok := s.pa.Store.GetDefaultIdentityProviderForTenant(tenantID); ok && idpCfg.Enabled {
-				tenant, _ := s.pa.Store.GetTenant(tenantID)
+			if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(tenantID); ok {
 				log.Printf("[HRD] Gateway tenant context: gateway=%s → tenant=%s → idp=%s", gw.Name, tenantID, idpCfg.Name)
-				return idpCfg, tenant, gw
+				return idpCfg, tenant, nil
 			}
 		}
 	}
 
-	return nil, nil, gw
+	// Step 5 — single-tenant deployment fallback.
+	if idpCfg, tenant, ok := s.singleTenantIdentityProvider(); ok {
+		log.Printf("[HRD] Single-tenant fallback: tenant=%s → idp=%s", tenant.ID, idpCfg.Name)
+		return idpCfg, tenant, nil
+	}
+
+	return nil, nil, nil
+}
+
+func (s *Server) defaultIdentityProviderForTenant(tenantID string) (*models.IdentityProviderConfig, *models.Tenant, bool) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, nil, false
+	}
+	tenant, found := s.pa.Store.GetTenant(tenantID)
+	if !found || tenant == nil || !tenant.Enabled {
+		return nil, nil, false
+	}
+	idpCfg, ok := s.pa.Store.GetDefaultIdentityProviderForTenant(tenantID)
+	if !ok || idpCfg == nil || !idpCfg.Enabled {
+		for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID) {
+			if cfg != nil && cfg.Enabled {
+				return cfg, tenant, true
+			}
+		}
+		return nil, tenant, false
+	}
+	return idpCfg, tenant, true
+}
+
+func (s *Server) singleTenantIdentityProvider() (*models.IdentityProviderConfig, *models.Tenant, bool) {
+	var selectedTenant *models.Tenant
+	var selectedIdP *models.IdentityProviderConfig
+	for _, tenant := range s.pa.Store.ListTenants() {
+		if tenant == nil || !tenant.Enabled {
+			continue
+		}
+		idpCfg, resolvedTenant, ok := s.defaultIdentityProviderForTenant(tenant.ID)
+		if !ok || idpCfg == nil {
+			continue
+		}
+		if selectedIdP != nil {
+			return nil, nil, false
+		}
+		selectedTenant = resolvedTenant
+		selectedIdP = idpCfg
+	}
+	if selectedIdP == nil {
+		return nil, nil, false
+	}
+	return selectedIdP, selectedTenant, true
 }
 
 // resolveTenantFromGateway determines which tenant a gateway serves.
@@ -2563,8 +2608,8 @@ func extractDomainFromHint(hint string) string {
 
 // redirectToExternalIdP performs the OIDC Authorization Code flow redirect
 // to an external IdP using a tenant-level IdentityProviderConfig.
-func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, oidcSession *idp.OIDCAuthorizeSession, gw *models.Gateway, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig, nonce string) {
-	pkceVerifier, pkceChallenge, err := idp.GeneratePKCE()
+func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, oidcSession *auth.OIDCAuthorizeSession, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig, nonce string) {
+	pkceVerifier, pkceChallenge, err := auth.GeneratePKCE()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
@@ -2584,29 +2629,24 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 		ClaimMapping:  idpCfg.ClaimMapping,
 	}
 
-	extAuthURL, err := s.pa.IdP.Federation.GenerateExternalAuthURL(
+	extAuthURL, err := s.pa.Auth.Federation.GenerateExternalAuthURL(
 		fedCfg, s.federatedCallbackURL(), fedState, fedNonce, pkceChallenge,
 	)
 	if err != nil {
-		log.Printf("[FEDERATION] Failed to generate external auth URL: %v", err)
+		log.Printf("[FEDERATION] Failed to generate external IdP auth URL: %v", err)
 		http.Error(w, "Federation configuration error", http.StatusInternalServerError)
 		return
 	}
 
-	gwID := ""
-	if gw != nil {
-		gwID = gw.ID
-	}
 	tenantID := ""
 	if tenant != nil {
 		tenantID = tenant.ID
 	}
 
 	// Store federation session with tenant/IdP context for callback
-	fedSession := &idp.FederationSession{
+	fedSession := &auth.FederationSession{
 		ID:            oidcSession.ID,
 		OIDCSessionID: oidcSession.ID,
-		GatewayID:     gwID,
 		TenantID:      tenantID,
 		IdPID:         idpCfg.ID,
 		Issuer:        idpCfg.Issuer,
@@ -2616,48 +2656,9 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 		CreatedAt:     time.Now(),
 		ExpiresAt:     time.Now().Add(5 * time.Minute),
 	}
-	s.pa.IdP.OIDC.CreateFederationSession(fedSession)
+	s.pa.Auth.OIDC.CreateFederationSession(fedSession)
 
 	log.Printf("[FEDERATION] Redirecting to external IdP: tenant=%s idp=%s issuer=%s", tenantID, idpCfg.Name, idpCfg.Issuer)
-	http.Redirect(w, r, extAuthURL, http.StatusFound)
-}
-
-// redirectToExternalIdPLegacy uses the deprecated gateway-level FederationConfig.
-func (s *Server) redirectToExternalIdPLegacy(w http.ResponseWriter, r *http.Request, oidcSession *idp.OIDCAuthorizeSession, gw *models.Gateway, nonce string) {
-	pkceVerifier, pkceChallenge, err := idp.GeneratePKCE()
-	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	fedState := oidcSession.ID
-	fedNonce := nonce
-
-	extAuthURL, err := s.pa.IdP.Federation.GenerateExternalAuthURL(
-		gw.FederationConfig,
-		s.federatedCallbackURL(),
-		fedState, fedNonce, pkceChallenge,
-	)
-	if err != nil {
-		log.Printf("[FEDERATION] Failed to generate external auth URL: %v", err)
-		http.Error(w, "Federation configuration error", http.StatusInternalServerError)
-		return
-	}
-
-	fedSession := &idp.FederationSession{
-		ID:            oidcSession.ID,
-		OIDCSessionID: oidcSession.ID,
-		GatewayID:     gw.ID,
-		Issuer:        gw.FederationConfig.Issuer,
-		PKCEVerifier:  pkceVerifier,
-		Nonce:         fedNonce,
-		State:         fedState,
-		CreatedAt:     time.Now(),
-		ExpiresAt:     time.Now().Add(5 * time.Minute),
-	}
-	s.pa.IdP.OIDC.CreateFederationSession(fedSession)
-
-	log.Printf("[FEDERATION] Redirecting to external IdP (legacy): gateway=%s issuer=%s", gw.Name, gw.FederationConfig.Issuer)
 	http.Redirect(w, r, extAuthURL, http.StatusFound)
 }
 
@@ -2665,11 +2666,10 @@ func (s *Server) redirectToExternalIdPLegacy(w http.ResponseWriter, r *http.Requ
 // Federation Callback Helpers
 // ──────────────────────────────────────────────────────────────────────
 
-// resolveFederatedConfig determines the issuer, claim mapping, and optional
-// IdentityProviderConfig for the callback. Prefers tenant-level IdP config
-// when the federation session carries TenantID/IdPID.
-func (s *Server) resolveFederatedConfig(fedSession *idp.FederationSession) (authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) {
-	// New path: tenant-level IdentityProviderConfig
+// resolveFederatedConfig determines the issuer, claim mapping, and IdP config
+// for the callback from the tenant-level IdentityProviderConfig captured in
+// the federation session.
+func (s *Server) resolveFederatedConfig(fedSession *auth.FederationSession) (authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) {
 	if fedSession.IdPID != "" {
 		if cfg, ok := s.pa.Store.GetIdentityProviderConfig(fedSession.IdPID); ok && cfg.Enabled {
 			claimMapping := cfg.ClaimMapping
@@ -2680,22 +2680,12 @@ func (s *Server) resolveFederatedConfig(fedSession *idp.FederationSession) (auth
 		}
 	}
 
-	// Legacy path: gateway-level FederationConfig
-	gw, found := s.pa.Store.GetGateway(fedSession.GatewayID)
-	if found && gw.FederationConfig != nil {
-		claimMapping := gw.FederationConfig.ClaimMapping
-		if claimMapping == nil {
-			claimMapping = map[string]string{}
-		}
-		return gw.FederationConfig.Issuer, claimMapping, nil
-	}
-
 	return "", nil, nil
 }
 
 // buildFederationConfigForExchange constructs a FederationConfig struct for
-// the token exchange call, supporting both legacy gateway-level and new tenant-level IdP configs.
-func (s *Server) buildFederationConfigForExchange(fedSession *idp.FederationSession, authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) *models.FederationConfig {
+// the token exchange call from the tenant-level IdP config.
+func (s *Server) buildFederationConfigForExchange(_ *auth.FederationSession, _ string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) *models.FederationConfig {
 	if idpCfg != nil {
 		return &models.FederationConfig{
 			Issuer:        idpCfg.Issuer,
@@ -2705,12 +2695,6 @@ func (s *Server) buildFederationConfigForExchange(fedSession *idp.FederationSess
 			AutoDiscovery: idpCfg.AutoDiscovery,
 			ClaimMapping:  claimMapping,
 		}
-	}
-
-	// Legacy path
-	gw, found := s.pa.Store.GetGateway(fedSession.GatewayID)
-	if found && gw.FederationConfig != nil {
-		return gw.FederationConfig
 	}
 
 	return nil
@@ -2753,7 +2737,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Retrieve the federation session (one-time use)
-	fedSession, ok := s.pa.IdP.OIDC.GetFederationSession(state)
+	fedSession, ok := s.pa.Auth.OIDC.GetFederationSession(state)
 	if !ok {
 		http.Error(w, "Unknown or expired federation session", http.StatusBadRequest)
 		return
@@ -2764,8 +2748,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Resolve the federation config: prefer tenant-level IdentityProviderConfig,
-	// fall back to legacy gateway-level FederationConfig.
+	// Resolve the federation config from the tenant-level IdentityProviderConfig.
 	authSource, claimMapping, idpCfg := s.resolveFederatedConfig(fedSession)
 	if authSource == "" {
 		http.Error(w, "Federation configuration not found", http.StatusInternalServerError)
@@ -2780,7 +2763,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tokenResp, err := s.pa.IdP.Federation.ExchangeExternalCode(
+	tokenResp, err := s.pa.Auth.Federation.ExchangeExternalCode(
 		fedCfg, code,
 		s.federatedCallbackURL(),
 		fedSession.PKCEVerifier,
@@ -2792,7 +2775,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Extract identity from the external id_token
-	claims, err := s.pa.IdP.Federation.MapExternalClaims(
+	claims, err := s.pa.Auth.Federation.MapExternalClaims(
 		tokenResp.IDToken,
 		claimMapping,
 	)
@@ -2802,15 +2785,14 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Determine role: use group mapping if an IdentityProviderConfig is available,
-	// otherwise default to "user" for legacy gateway FederationConfig.
+	// Determine role from tenant IdP group mapping when present.
 	role := "user"
 	if idpCfg != nil && len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
-		role = idp.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
+		role = auth.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
 		log.Printf("[FEDERATION] Group mapping applied: groups=%v → role=%s", claims.Groups, role)
 	}
 
-	user, err := s.pa.IdP.Users.FindOrCreateFederatedUser(
+	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(
 		claims.Subject, authSource, claims.Username, claims.Email, role, fedSession.TenantID,
 	)
 	if err != nil {
@@ -2819,7 +2801,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	oidcSess, ok := s.pa.IdP.OIDC.GetAuthorizeSession(fedSession.OIDCSessionID)
+	oidcSess, ok := s.pa.Auth.OIDC.GetAuthorizeSession(fedSession.OIDCSessionID)
 	deviceID := ""
 	if ok {
 		deviceID = oidcSess.DeviceID
@@ -2827,14 +2809,14 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 
 	// Issue PDP JWT with MFADone=false (MFA step-up handled at access time)
 	// and bind it to the device asserted by the Connect-App OIDC request.
-	authToken, err := s.pa.IdP.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, deviceID, fedSession.Nonce, false)
+	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, deviceID, fedSession.Nonce, false)
 	if err != nil {
 		http.Error(w, "Token generation failed", http.StatusInternalServerError)
 		return
 	}
 
 	// Complete the OIDC authorize session → generate authorization code
-	authCode, err := s.pa.IdP.OIDC.CompleteAuthorizeSession(
+	authCode, err := s.pa.Auth.OIDC.CompleteAuthorizeSession(
 		fedSession.OIDCSessionID, authToken,
 		user.ID, user.Username, user.Role, false,
 	)
@@ -2844,21 +2826,17 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Build redirect URL back to the Gateway callback
+	// Build redirect URL back to the OIDC client callback.
 	redirectURL := authCode.RedirectURI + "?code=" + url.QueryEscape(authCode.Code)
 	if ok && oidcSess.State != "" {
 		redirectURL += "&state=" + url.QueryEscape(oidcSess.State)
 	}
 
-	log.Printf("[FEDERATION] User authenticated via external IdP: user=%s source=%s → redirect to gateway",
+	log.Printf("[FEDERATION] User authenticated via external IdP: user=%s source=%s → redirect to OIDC client",
 		user.Username, authSource)
 
-	gwName := ""
-	if gw, found := s.pa.Store.GetGateway(fedSession.GatewayID); found {
-		gwName = gw.Name
-	}
 	s.pa.Audit.LogEvent("federated_login", user.ID, user.Username,
-		r.RemoteAddr, "", "", "Federated auth via "+authSource+" (role="+role+") for gateway "+gwName, true)
+		r.RemoteAddr, "", "", "Federated auth via "+authSource+" (role="+role+") tenant="+fedSession.TenantID, true)
 
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
@@ -2893,20 +2871,20 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 
 	// Validate the auth token — allow MFADone=false because MFA enforcement
 	// happens at resource access time via the policy engine, not at OIDC completion.
-	claims, err := s.pa.IdP.ParseToken(req.AuthToken)
+	claims, err := s.pa.Auth.ParseToken(req.AuthToken)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid auth token"})
 		return
 	}
 
 	// Get user for role info
-	user, exists := s.pa.IdP.Users.GetUser(claims.UserID)
+	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 	role := claims.Role
 	if exists {
 		role = user.Role
 	}
 
-	oidcSess, ok := s.pa.IdP.OIDC.GetAuthorizeSession(req.OIDCSession)
+	oidcSess, ok := s.pa.Auth.OIDC.GetAuthorizeSession(req.OIDCSession)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "OIDC session not found or expired"})
 		return
@@ -2915,7 +2893,7 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 	// Bind the browser-authenticated user token to the device identity carried
 	// by the native Connect-App authorize request. This prevents a token minted
 	// in an unbound browser-only flow from being replayed through the gateway.
-	boundToken, err := s.pa.IdP.JWT.GenerateAuthToken(
+	boundToken, err := s.pa.Auth.JWT.GenerateAuthToken(
 		claims.UserID, claims.Username, role,
 		oidcSess.DeviceID, oidcSess.Nonce, claims.MFADone,
 	)
@@ -2926,7 +2904,7 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Generate authorization code and complete the OIDC session
-	authCode, err := s.pa.IdP.OIDC.CompleteAuthorizeSession(
+	authCode, err := s.pa.Auth.OIDC.CompleteAuthorizeSession(
 		req.OIDCSession, boundToken,
 		claims.UserID, claims.Username, role, claims.MFADone,
 	)
@@ -2936,7 +2914,7 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Build redirect URL back to the Gateway callback
+	// Build redirect URL back to the OIDC client callback.
 	redirectURL := authCode.RedirectURI + "?code=" + url.QueryEscape(authCode.Code)
 	if ok && oidcSess.State != "" {
 		redirectURL += "&state=" + url.QueryEscape(oidcSess.State)
@@ -3026,7 +3004,7 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		newRT, newToken, err := s.pa.IdP.OIDC.RefreshAccessToken(refreshTokenParam, clientID, clientSecret)
+		newRT, newToken, err := s.pa.Auth.OIDC.RefreshAccessToken(refreshTokenParam, clientID, clientSecret)
 		if err != nil {
 			log.Printf("[OIDC] Refresh token failed: %v", err)
 			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -3037,7 +3015,7 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Issue a new JWT for this user, preserving device binding and MFA state.
-		token, err := s.pa.IdP.JWT.GenerateAuthToken(newRT.UserID, newRT.Username, newRT.Role, newRT.DeviceID, "", newRT.MFADone)
+		token, err := s.pa.Auth.JWT.GenerateAuthToken(newRT.UserID, newRT.Username, newRT.Role, newRT.DeviceID, "", newRT.MFADone)
 		if err != nil {
 			log.Printf("[OIDC] Failed to issue token during refresh: %v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
@@ -3073,7 +3051,7 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange the authorization code
-	authCode, refreshToken, err := s.pa.IdP.OIDC.ExchangeCode(code, clientID, clientSecret, redirectURI, codeVerifier)
+	authCode, refreshToken, err := s.pa.Auth.OIDC.ExchangeCode(code, clientID, clientSecret, redirectURI, codeVerifier)
 	if err != nil {
 		log.Printf("[OIDC] Token exchange failed: %v", err)
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
@@ -3091,9 +3069,9 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	if authCode.Nonce != "" {
 		// Issue a new JWT with nonce embedded (OIDC Core 1.0 §3.1.2.1).
 		// Preserve the MFADone status from the original auth token.
-		originalClaims, parseErr := s.pa.IdP.ParseToken(authCode.AuthToken)
+		originalClaims, parseErr := s.pa.Auth.ParseToken(authCode.AuthToken)
 		mfaDone := parseErr == nil && originalClaims.MFADone
-		freshToken, err := s.pa.IdP.JWT.GenerateAuthToken(
+		freshToken, err := s.pa.Auth.JWT.GenerateAuthToken(
 			authCode.UserID, authCode.Username, authCode.Role, authCode.DeviceID, authCode.Nonce, mfaDone,
 		)
 		if err == nil {
@@ -3142,7 +3120,7 @@ func (s *Server) handleOIDCUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := s.pa.IdP.ValidateToken(parts[1])
+	claims, err := s.pa.Auth.ValidateToken(parts[1])
 	if err != nil {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ztna", error="invalid_token"`)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
@@ -3182,7 +3160,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := s.pa.IdP.ValidateToken(parts[1])
+	claims, err := s.pa.Auth.ValidateToken(parts[1])
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 		return
@@ -3456,7 +3434,7 @@ func (s *Server) handleEnrollCompleteSession(w http.ResponseWriter, r *http.Requ
 
 	// Validate the auth token. Enrollment binds device identity to a logged-in
 	// user, while resource-access MFA remains enforced later by policy.
-	claims, err := s.pa.IdP.ParseToken(req.AuthToken)
+	claims, err := s.pa.Auth.ParseToken(req.AuthToken)
 	if err != nil {
 		if _, denyErr := s.pa.Enrollment.DenyBrowserEnrollSession(req.SessionID); denyErr != nil {
 			log.Printf("[ENROLL] Failed to mark browser enrollment session denied: session=%s err=%v", req.SessionID, denyErr)
@@ -3618,12 +3596,12 @@ func (s *Server) handleESTSimpleEnroll(w http.ResponseWriter, r *http.Request) {
 	writeESTCertificateResponse(w, r, result.Enrollment.ID, result.CertPEM, caPEM, result.Reused)
 }
 
-func (s *Server) estBearerClaims(r *http.Request) (*idp.CustomClaims, error) {
+func (s *Server) estBearerClaims(r *http.Request) (*auth.CustomClaims, error) {
 	token, err := bearerToken(r)
 	if err != nil {
 		return nil, err
 	}
-	claims, err := s.pa.IdP.JWT.ParseEnrollmentToken(token)
+	claims, err := s.pa.Auth.JWT.ParseEnrollmentToken(token)
 	if err != nil {
 		return nil, err
 	}
@@ -3677,7 +3655,7 @@ func (s *Server) handleIssueEnrollmentToken(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authorization header required"})
 		return
 	}
-	claims, err := s.pa.IdP.JWT.ParseAuthTokenForAudience(token, "ztna-gateway")
+	claims, err := s.pa.Auth.JWT.ParseAuthTokenForAudience(token, auth.AgentTokenAudience)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid parent token"})
 		return
@@ -4150,9 +4128,8 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			// Probe the configured (or supplied) external IdP's discovery doc
 			// to validate the issuer is reachable and exposes the required
 			// OIDC endpoints. Used by the dashboard "Test connection" button
-			// before saving a federation configuration.
-			gw, found := s.pa.Store.GetGateway(id)
-			if !found {
+			// before saving a tenant identity provider configuration.
+			if _, found := s.pa.Store.GetGateway(id); !found {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "gateway not found"})
 				return
 			}
@@ -4161,14 +4138,11 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			}
 			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&req)
 			issuer := strings.TrimSpace(req.Issuer)
-			if issuer == "" && gw.FederationConfig != nil {
-				issuer = gw.FederationConfig.Issuer
-			}
 			if issuer == "" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer is required (provide in request body or save federation_config first)"})
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer is required"})
 				return
 			}
-			disc, err := s.pa.IdP.Federation.Discover(issuer)
+			disc, err := s.pa.Auth.Federation.Discover(issuer)
 			if err != nil {
 				writeJSON(w, http.StatusBadGateway, map[string]interface{}{
 					"ok":     false,
@@ -4223,20 +4197,25 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		// Strip secrets from response
 		safe := make([]map[string]interface{}, 0, len(cfgs))
 		for _, cfg := range cfgs {
-			safe = append(safe, sanitizeIdPConfig(cfg))
+			safe = append(safe, s.sanitizeIdPConfigForTenant(cfg, tenantID))
 		}
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: safe})
 
 	case http.MethodPost:
-		if existing := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID); len(existing) > 0 {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "tenant already has an identity provider"})
-			return
-		}
-		var cfg models.IdentityProviderConfig
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&cfg); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
+		var cfg models.IdentityProviderConfig
+		if err := json.Unmarshal(body, &cfg); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(body, &raw)
+		makeDefault := idpMakeDefaultRequested(raw)
+
 		cfg.TenantID = tenantID
 		if cfg.ID == "" {
 			var err error
@@ -4260,20 +4239,27 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		if cfg.Scopes == "" {
 			cfg.Scopes = "openid profile email"
 		}
-		cfg.Enabled = true
+		if _, ok := raw["enabled"]; !ok {
+			cfg.Enabled = true
+		}
 		cfg.CreatedAt = time.Now()
 		cfg.UpdatedAt = cfg.CreatedAt
 
 		s.pa.Store.SaveIdentityProviderConfig(&cfg)
-		tenant.DefaultIdPID = cfg.ID
-		tenant.UpdatedAt = time.Now()
-		s.pa.Store.SaveTenant(tenant)
+		if makeDefault {
+			if err := s.setTenantDefaultIdP(tenantID, cfg.ID); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			s.reconcileTenantDefaultIdP(tenantID)
+		}
 		log.Printf("[ADMIN] IdP config created: %s (%s) tenant=%s", cfg.ID, cfg.Name, tenantID)
 
 		writeJSON(w, http.StatusCreated, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration created",
-			Data:    sanitizeIdPConfig(&cfg),
+			Data:    s.sanitizeIdPConfigForTenant(&cfg, tenantID),
 		})
 
 	default:
@@ -4297,7 +4283,7 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
-		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: sanitizeIdPConfig(cfg)})
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: s.sanitizeIdPConfigForTenant(cfg, cfg.TenantID)})
 
 	case http.MethodPut:
 		existing, found := s.pa.Store.GetIdentityProviderConfig(id)
@@ -4318,6 +4304,7 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		}
 		var raw map[string]json.RawMessage
 		_ = json.Unmarshal(body, &raw)
+		makeDefault := idpMakeDefaultRequested(raw)
 
 		if update.Name != "" {
 			existing.Name = update.Name
@@ -4352,17 +4339,20 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		existing.UpdatedAt = time.Now()
 
 		s.pa.Store.SaveIdentityProviderConfig(existing)
-		if tenant, tFound := s.pa.Store.GetTenant(existing.TenantID); tFound && tenant.DefaultIdPID == "" {
-			tenant.DefaultIdPID = existing.ID
-			tenant.UpdatedAt = time.Now()
-			s.pa.Store.SaveTenant(tenant)
+		if makeDefault {
+			if err := s.setTenantDefaultIdP(existing.TenantID, existing.ID); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			s.reconcileTenantDefaultIdP(existing.TenantID)
 		}
 		log.Printf("[ADMIN] IdP config updated: %s (%s)", existing.ID, existing.Name)
 
 		writeJSON(w, http.StatusOK, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration updated",
-			Data:    sanitizeIdPConfig(existing),
+			Data:    s.sanitizeIdPConfigForTenant(existing, existing.TenantID),
 		})
 
 	case http.MethodDelete:
@@ -4375,11 +4365,7 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete IdP config"})
 			return
 		}
-		// Clear the tenant's default IdP reference if it pointed to this
-		if tenant, tFound := s.pa.Store.GetTenant(existing.TenantID); tFound && tenant.DefaultIdPID == id {
-			tenant.DefaultIdPID = ""
-			s.pa.Store.SaveTenant(tenant)
-		}
+		s.reconcileTenantDefaultIdP(existing.TenantID)
 		log.Printf("[ADMIN] IdP config deleted: %s (%s) tenant=%s", id, existing.Name, existing.TenantID)
 
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Identity Provider configuration deleted"})
@@ -4387,6 +4373,70 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func (s *Server) reconcileTenantDefaultIdP(tenantID string) {
+	tenant, found := s.pa.Store.GetTenant(tenantID)
+	if !found || tenant == nil {
+		return
+	}
+	if tenant.DefaultIdPID != "" {
+		if cfg, ok := s.pa.Store.GetIdentityProviderConfig(tenant.DefaultIdPID); ok && cfg != nil && cfg.Enabled && strings.EqualFold(cfg.TenantID, tenantID) {
+			return
+		}
+	}
+
+	tenant.DefaultIdPID = ""
+	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID) {
+		if cfg != nil && cfg.Enabled {
+			tenant.DefaultIdPID = cfg.ID
+			break
+		}
+	}
+	tenant.UpdatedAt = time.Now()
+	s.pa.Store.SaveTenant(tenant)
+}
+
+func (s *Server) setTenantDefaultIdP(tenantID, idpID string) error {
+	tenant, found := s.pa.Store.GetTenant(tenantID)
+	if !found || tenant == nil {
+		return fmt.Errorf("tenant not found")
+	}
+	cfg, found := s.pa.Store.GetIdentityProviderConfig(idpID)
+	if !found || cfg == nil || !strings.EqualFold(cfg.TenantID, tenantID) {
+		return fmt.Errorf("identity provider not found for tenant")
+	}
+	if !cfg.Enabled {
+		return fmt.Errorf("disabled identity provider cannot be default")
+	}
+	tenant.DefaultIdPID = cfg.ID
+	tenant.UpdatedAt = time.Now()
+	s.pa.Store.SaveTenant(tenant)
+	return nil
+}
+
+func idpMakeDefaultRequested(raw map[string]json.RawMessage) bool {
+	for _, key := range []string{"default", "is_default", "make_default"} {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		var requested bool
+		if err := json.Unmarshal(value, &requested); err == nil && requested {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) sanitizeIdPConfigForTenant(cfg *models.IdentityProviderConfig, tenantID string) map[string]interface{} {
+	safe := sanitizeIdPConfig(cfg)
+	if safe == nil {
+		return nil
+	}
+	tenant, found := s.pa.Store.GetTenant(tenantID)
+	safe["is_default"] = found && tenant != nil && tenant.DefaultIdPID == cfg.ID
+	return safe
 }
 
 // sanitizeIdPConfig returns a safe copy of an IdentityProviderConfig without secrets.
@@ -4404,6 +4454,7 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 		"issuer":             cfg.Issuer,
 		"client_id":          cfg.ClientID,
 		"client_secret":      "",
+		"has_client_secret":  cfg.ClientSecret != "",
 		"scopes":             cfg.Scopes,
 		"auto_discovery":     cfg.AutoDiscovery,
 		"claim_mapping":      cfg.ClaimMapping,
@@ -4435,7 +4486,7 @@ func (s *Server) handleAdminIdPDiscover(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	disc, err := s.pa.IdP.Federation.Discover(issuer)
+	disc, err := s.pa.Auth.Federation.Discover(issuer)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]interface{}{
 			"ok":     false,

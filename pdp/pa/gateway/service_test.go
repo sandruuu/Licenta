@@ -202,12 +202,6 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 		Name:              "Edge Gateway",
 		FQDN:              "edge.example.test",
 		AssignedResources: []string{"res-1"},
-		AuthMode:          "federated",
-		FederationConfig: &models.FederationConfig{
-			Issuer:       " https://idp.example.test ",
-			ClientID:     " client-1 ",
-			ClientSecret: "secret-1",
-		},
 	})
 	if err != nil {
 		t.Fatalf("CreateGateway returned error: %v", err)
@@ -215,8 +209,8 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if result.Gateway.ID == "" || len(result.EnrollmentToken) != gatewayEnrollmentTokenBytes*2 {
 		t.Fatalf("gateway credentials were not generated: id=%q token=%q", result.Gateway.ID, result.EnrollmentToken)
 	}
-	if result.Gateway.AuthMode != "federated" || result.Gateway.FederationConfig.Scopes != "openid profile email" {
-		t.Fatalf("federation defaults not applied: %+v", result.Gateway.FederationConfig)
+	if result.Gateway.AuthMode != "builtin" || result.Gateway.FederationConfig != nil {
+		t.Fatalf("gateway should use tenant-level IdP configuration only: auth=%q federation=%+v", result.Gateway.AuthMode, result.Gateway.FederationConfig)
 	}
 
 	items, err := service.ListGatewaySummaries()
@@ -226,8 +220,8 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("list length = %d, want 1", len(items))
 	}
-	if items[0].FederationConfig == nil || items[0].FederationConfig.ClientSecret != "" {
-		t.Fatalf("list did not strip federation secret: %+v", items[0].FederationConfig)
+	if items[0].AuthMode != "builtin" || items[0].FederationConfig != nil {
+		t.Fatalf("list should not expose gateway federation config: auth=%q federation=%+v", items[0].AuthMode, items[0].FederationConfig)
 	}
 	// EnrollmentToken is intentionally zeroed in gatewayListItem for defense-in-depth.
 	// The plaintext token is only returned at creation time (CreateGatewayResult).
@@ -237,12 +231,13 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 
 	result.Gateway.CertPEM = "cert-pem"
 	result.Gateway.OIDCClientSecret = "oidc-secret"
+	result.Gateway.FederationConfig = &models.FederationConfig{Issuer: "https://legacy-idp.example.test", ClientID: "legacy", ClientSecret: "secret"}
 	dataStore.SaveGateway(result.Gateway)
 	detail, err := service.GetGatewayForAdmin(result.Gateway.ID)
 	if err != nil {
 		t.Fatalf("GetGatewayForAdmin returned error: %v", err)
 	}
-	if detail.CertPEM != "" || detail.OIDCClientSecret != "" || detail.FederationConfig.ClientSecret != "" {
+	if detail.CertPEM != "" || detail.OIDCClientSecret != "" || detail.FederationConfig != nil || detail.AuthMode != "builtin" {
 		t.Fatalf("admin detail was not sanitized: cert=%q oidc=%q federation=%+v", detail.CertPEM, detail.OIDCClientSecret, detail.FederationConfig)
 	}
 }
@@ -264,7 +259,19 @@ func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 
 	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", TenantID: gatewayTestTenantID, AuthMode: "federated"})
 	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("missing federation config error = %v, want ErrInvalidRequest", err)
+		t.Fatalf("federated auth mode error = %v, want ErrInvalidRequest", err)
+	}
+
+	_, err = service.CreateGateway(CreateGatewayRequest{
+		Name:     "Edge",
+		TenantID: gatewayTestTenantID,
+		FederationConfig: &models.FederationConfig{
+			Issuer:   "https://idp.example.test",
+			ClientID: "client-1",
+		},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("gateway federation config error = %v, want ErrInvalidRequest", err)
 	}
 
 	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge"})
@@ -273,7 +280,7 @@ func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 	}
 }
 
-func TestServiceUpdateGatewayPreservesFederationSecretAndCanClearFederation(t *testing.T) {
+func TestServiceUpdateGatewayRejectsFederationConfigAndCanClearLegacyFederation(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
 	seedGatewayTenant(dataStore)
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -298,14 +305,25 @@ func TestServiceUpdateGatewayPreservesFederationSecretAndCanClearFederation(t *t
 		UpdatedAt: fixedNow.Add(-time.Hour),
 	})
 
-	updated, err := service.UpdateGateway("gw-1", UpdateGatewayRequest{
-		Name:              "New Gateway",
-		FQDN:              "new.example.test",
-		AssignedResources: []string{"res-1", "res-2"},
+	_, err := service.UpdateGateway("gw-1", UpdateGatewayRequest{
 		FederationConfig: &models.FederationConfig{
 			Issuer:   "https://new-idp.example.test",
 			ClientID: "new-client",
 		},
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("gateway federation config update error = %v, want ErrInvalidRequest", err)
+	}
+
+	_, err = service.UpdateGateway("gw-1", UpdateGatewayRequest{AuthMode: "federated"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("gateway federated auth update error = %v, want ErrInvalidRequest", err)
+	}
+
+	updated, err := service.UpdateGateway("gw-1", UpdateGatewayRequest{
+		Name:              "New Gateway",
+		FQDN:              "new.example.test",
+		AssignedResources: []string{"res-1", "res-2"},
 	})
 	if err != nil {
 		t.Fatalf("UpdateGateway returned error: %v", err)
@@ -314,7 +332,15 @@ func TestServiceUpdateGatewayPreservesFederationSecretAndCanClearFederation(t *t
 		t.Fatalf("gateway fields not updated: %+v", updated)
 	}
 	if updated.FederationConfig == nil || updated.FederationConfig.ClientSecret != "secret-1" {
-		t.Fatalf("federation secret was not preserved: %+v", updated.FederationConfig)
+		t.Fatalf("legacy federation config should be preserved on unrelated updates: %+v", updated.FederationConfig)
+	}
+
+	detail, err := service.GetGatewayForAdmin("gw-1")
+	if err != nil {
+		t.Fatalf("GetGatewayForAdmin returned error: %v", err)
+	}
+	if detail.AuthMode != "builtin" || detail.FederationConfig != nil {
+		t.Fatalf("admin view should hide legacy federation config: auth=%q federation=%+v", detail.AuthMode, detail.FederationConfig)
 	}
 
 	updated, err = service.UpdateGateway("gw-1", UpdateGatewayRequest{AuthMode: "builtin"})

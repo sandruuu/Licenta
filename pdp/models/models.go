@@ -109,8 +109,7 @@ type Tenant struct {
 	Enabled     bool     `json:"enabled"`
 
 	// Identity Provider reference — points to the default IdentityProviderConfig
-	// for this tenant. When empty, PDP uses built-in authentication for users
-	// whose User.AuthSource is "builtin".
+	// for this tenant when more than one external IdP is configured.
 	DefaultIdPID string `json:"default_idp_id,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -124,7 +123,8 @@ type Tenant struct {
 // IdentityProviderConfig defines an external OIDC Identity Provider trusted
 // by a tenant. This replaces the legacy Gateway-scoped FederationConfig so
 // that identity configuration belongs to the organization, not the network
-// infrastructure. A tenant has a single active IdP configuration.
+// infrastructure. A tenant can have multiple IdPs; DefaultIdPID selects the
+// fallback IdP when HRD cannot resolve one from login_hint/domain.
 type IdentityProviderConfig struct {
 	ID       string `json:"id"`
 	TenantID string `json:"tenant_id"`
@@ -631,12 +631,11 @@ type Gateway struct {
 	// Assigned resources (IDs of resources this gateway serves)
 	AssignedResources []string `json:"assigned_resources,omitempty"`
 
-	// Identity Broker: per-gateway authentication mode.
+	// Identity Broker: legacy per-gateway authentication mode.
 	// DEPRECATED: AuthMode and FederationConfig are kept for backward
 	// compatibility. New deployments should configure IdP per Tenant via
-	// IdentityProviderConfig. When both gateway FederationConfig and
-	// tenant IdentityProviderConfig are configured, the tenant-level
-	// config takes precedence.
+	// IdentityProviderConfig. Runtime authentication no longer consults
+	// gateway-level federation settings.
 	AuthMode         string            `json:"auth_mode"`                   // "builtin" (default) or "federated"
 	FederationConfig *FederationConfig `json:"federation_config,omitempty"` // nil when AuthMode="builtin"
 

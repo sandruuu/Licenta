@@ -1,4 +1,4 @@
-package idp
+package auth
 
 import (
 	"log"
@@ -13,10 +13,10 @@ import (
 	"pdp/util"
 )
 
-// IdentityProvider coordinates all identity and authentication services.
+// Service coordinates identity and authentication services owned by the PA.
 // It combines UserManager (user CRUD + password auth), JWTManager (token issuance),
 // TOTP-based MFA, and OIDC authorization into a unified authentication flow.
-type IdentityProvider struct {
+type Service struct {
 	Users      *UserManager
 	JWT        *JWTManager
 	OIDC       *OIDCManager
@@ -27,8 +27,8 @@ type IdentityProvider struct {
 	Cfg        *config.Config
 }
 
-// New creates a new IdentityProvider
-func New(cfg *config.Config, s *store.Store) *IdentityProvider {
+// New creates a new authentication service.
+func New(cfg *config.Config, s *store.Store) *Service {
 	// Ensure data directory exists for JWT keys
 	keysDir := cfg.DataDir
 	if keysDir == "" {
@@ -41,11 +41,11 @@ func New(cfg *config.Config, s *store.Store) *IdentityProvider {
 
 	jwtMgr, err := NewJWTManager(jwtKeyPath, jwtPubPath, cfg.JWTExpiry, cfg.MFATokenExpiry)
 	if err != nil {
-		log.Fatalf("[IDP] Failed to initialize JWT manager: %v", err)
+		log.Fatalf("[AUTH] Failed to initialize JWT manager: %v", err)
 	}
-	log.Printf("[IDP] JWT signing initialized (ES256, kid=%s)", jwtMgr.keyID)
+	log.Printf("[AUTH] JWT signing initialized (ES256, kid=%s)", jwtMgr.keyID)
 
-	return &IdentityProvider{
+	return &Service{
 		Users:      NewUserManager(s),
 		JWT:        jwtMgr,
 		OIDC:       NewOIDCManager(),
@@ -61,10 +61,10 @@ func New(cfg *config.Config, s *store.Store) *IdentityProvider {
 // Always returns an auth token with MFADone=false on success.
 // MFA is never enforced at login — it is triggered later by the policy engine
 // at resource access time (conditional access / step-up authentication).
-func (idp *IdentityProvider) Login(req models.LoginRequest) (*models.LoginResponse, error) {
+func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error) {
 	// Check lockout
-	if locked, until := idp.Store.IsLockedOut(req.Username); locked {
-		idp.audit("login", req.Username, "", "", false,
+	if locked, until := svc.Store.IsLockedOut(req.Username); locked {
+		svc.audit("login", req.Username, "", "", false,
 			"Account locked until "+until.Format(time.RFC3339))
 		return &models.LoginResponse{
 			Status:  "denied",
@@ -73,11 +73,11 @@ func (idp *IdentityProvider) Login(req models.LoginRequest) (*models.LoginRespon
 	}
 
 	// Authenticate with username + password
-	user, err := idp.Users.Authenticate(req.Username, req.Password)
+	user, err := svc.Users.Authenticate(req.Username, req.Password)
 	if err != nil {
 		// Record failed attempt
-		idp.Store.RecordFailedLogin(req.Username, idp.Cfg.MaxLoginAttempts, idp.Cfg.LockoutDuration)
-		idp.audit("login", req.Username, "", "", false, "Invalid credentials")
+		svc.Store.RecordFailedLogin(req.Username, svc.Cfg.MaxLoginAttempts, svc.Cfg.LockoutDuration)
+		svc.audit("login", req.Username, "", "", false, "Invalid credentials")
 		return &models.LoginResponse{
 			Status:  "denied",
 			Message: "Invalid credentials",
@@ -85,16 +85,16 @@ func (idp *IdentityProvider) Login(req models.LoginRequest) (*models.LoginRespon
 	}
 
 	// Reset failed attempts on successful password verification
-	idp.Store.ResetLoginAttempts(req.Username)
+	svc.Store.ResetLoginAttempts(req.Username)
 
 	// Issue auth token with MFADone=false — MFA is handled at access time
-	authToken, err := idp.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", false)
+	authToken, err := svc.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", false)
 	if err != nil {
 		return nil, err
 	}
 
-	idp.audit("login", user.Username, user.ID, "", true, "Authenticated (MFA deferred to access time)")
-	log.Printf("[IDP] Login: %s — authenticated (MFADone=false)", user.Username)
+	svc.audit("login", user.Username, user.ID, "", true, "Authenticated (MFA deferred to access time)")
+	log.Printf("[AUTH] Login: %s — authenticated (MFADone=false)", user.Username)
 
 	return &models.LoginResponse{
 		Status:     "authenticated",
@@ -110,11 +110,11 @@ func (idp *IdentityProvider) Login(req models.LoginRequest) (*models.LoginRespon
 //   - "totp" (default): TOTP verification
 //   - "webauthn": WebAuthn/passkey challenge — not yet implemented
 //   - "push": Push approval — not yet implemented
-func (idp *IdentityProvider) VerifyMFA(req models.MFAVerifyRequest) (*models.MFAVerifyResponse, error) {
+func (svc *Service) VerifyMFA(req models.MFAVerifyRequest) (*models.MFAVerifyResponse, error) {
 	// Validate the temporary MFA token
-	claims, err := idp.JWT.ValidateMFAToken(req.MFAToken)
+	claims, err := svc.JWT.ValidateMFAToken(req.MFAToken)
 	if err != nil {
-		idp.audit("mfa_verify", "", "", "", false, "Invalid MFA token: "+err.Error())
+		svc.audit("mfa_verify", "", "", "", false, "Invalid MFA token: "+err.Error())
 		return &models.MFAVerifyResponse{
 			Status:  "denied",
 			Message: "Invalid or expired MFA token. Please login again.",
@@ -128,7 +128,7 @@ func (idp *IdentityProvider) VerifyMFA(req models.MFAVerifyRequest) (*models.MFA
 	}
 
 	// Verify the user has this method configured
-	user, exists := idp.Users.GetUser(claims.UserID)
+	user, exists := svc.Users.GetUser(claims.UserID)
 	if !exists {
 		return &models.MFAVerifyResponse{
 			Status:  "denied",
@@ -137,7 +137,7 @@ func (idp *IdentityProvider) VerifyMFA(req models.MFAVerifyRequest) (*models.MFA
 	}
 
 	if !containsMFAMethod(claims.MFAMethods, method) {
-		idp.audit("mfa_verify", claims.Username, claims.UserID, "", false, "Method not configured: "+method)
+		svc.audit("mfa_verify", claims.Username, claims.UserID, "", false, "Method not configured: "+method)
 		return &models.MFAVerifyResponse{
 			Status:  "denied",
 			Message: "MFA method not configured for this user",
@@ -147,8 +147,8 @@ func (idp *IdentityProvider) VerifyMFA(req models.MFAVerifyRequest) (*models.MFA
 	// Dispatch to the correct MFA verifier
 	switch method {
 	case "totp":
-		if err := idp.Users.VerifyMFA(claims.UserID, req.TOTPCode); err != nil {
-			idp.audit("mfa_verify", claims.Username, claims.UserID, "", false, "Invalid TOTP code")
+		if err := svc.Users.VerifyMFA(claims.UserID, req.TOTPCode); err != nil {
+			svc.audit("mfa_verify", claims.Username, claims.UserID, "", false, "Invalid TOTP code")
 			return &models.MFAVerifyResponse{
 				Status:  "denied",
 				Message: "Invalid verification code",
@@ -180,13 +180,13 @@ func (idp *IdentityProvider) VerifyMFA(req models.MFAVerifyRequest) (*models.MFA
 	}
 
 	// Issue full auth token with MFA completed
-	authToken, err := idp.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
+	authToken, err := svc.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, "", "", true)
 	if err != nil {
 		return nil, err
 	}
 
-	idp.audit("mfa_verify", user.Username, user.ID, "", true, "MFA verified ("+method+"), fully authenticated")
-	log.Printf("[IDP] MFA verified: %s — method=%s, fully authenticated", user.Username, method)
+	svc.audit("mfa_verify", user.Username, user.ID, "", true, "MFA verified ("+method+"), fully authenticated")
+	log.Printf("[AUTH] MFA verified: %s — method=%s, fully authenticated", user.Username, method)
 
 	return &models.MFAVerifyResponse{
 		Status:    "authenticated",
@@ -206,20 +206,20 @@ func containsMFAMethod(methods []string, method string) bool {
 }
 
 // ValidateToken validates a JWT auth token and returns the claims (requires MFADone=true)
-func (idp *IdentityProvider) ValidateToken(tokenString string) (*CustomClaims, error) {
-	return idp.JWT.ValidateAuthToken(tokenString)
+func (svc *Service) ValidateToken(tokenString string) (*CustomClaims, error) {
+	return svc.JWT.ValidateAuthToken(tokenString)
 }
 
 // ParseToken validates a JWT auth token without checking MFADone.
 // Used by the MFA step-up flow to accept tokens before MFA completion.
-func (idp *IdentityProvider) ParseToken(tokenString string) (*CustomClaims, error) {
-	return idp.JWT.ParseAuthToken(tokenString)
+func (svc *Service) ParseToken(tokenString string) (*CustomClaims, error) {
+	return svc.JWT.ParseAuthTokenForAudience(tokenString, AgentTokenAudience)
 }
 
 // audit records an event in the audit log
-func (idp *IdentityProvider) audit(eventType, username, userID, sourceIP string, success bool, details string) {
+func (svc *Service) audit(eventType, username, userID, sourceIP string, success bool, details string) {
 	entryID, _ := util.GenerateID("aud")
-	idp.Store.AddAuditEntry(&models.AuditEntry{
+	svc.Store.AddAuditEntry(&models.AuditEntry{
 		ID:        entryID,
 		Timestamp: time.Now(),
 		EventType: eventType,

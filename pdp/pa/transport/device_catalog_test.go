@@ -351,7 +351,7 @@ func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	})
-	token, err := server.pa.IdP.JWT.GenerateAuthToken("user-1", "alice@example.test", role, deviceID, "", false)
+	token, err := server.pa.Auth.JWT.GenerateAuthToken("user-1", "alice@example.test", role, deviceID, "", false)
 	if err != nil {
 		t.Fatalf("GenerateAuthToken returned error: %v", err)
 	}

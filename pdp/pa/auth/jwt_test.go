@@ -1,4 +1,4 @@
-package idp
+package auth
 
 import (
 	"path/filepath"
@@ -30,14 +30,32 @@ func TestEnrollmentTokenUsesDedicatedAudienceAndPurpose(t *testing.T) {
 	}
 }
 
-func TestEnrollmentParserRejectsGatewayToken(t *testing.T) {
+func TestAuthTokenUsesAgentAudience(t *testing.T) {
+	manager := newTestJWTManager(t)
+	authToken, err := manager.GenerateAuthToken("user-1", "user@example.com", "user", "device-1", "", false)
+	if err != nil {
+		t.Fatalf("GenerateAuthToken returned error: %v", err)
+	}
+	claims, err := manager.ParseAuthTokenForAudience(authToken, AgentTokenAudience)
+	if err != nil {
+		t.Fatalf("ParseAuthTokenForAudience returned error: %v", err)
+	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != AgentTokenAudience {
+		t.Fatalf("audience = %v", claims.Audience)
+	}
+	if _, err := manager.ParseAuthTokenForAudience(authToken, "ztna-gateway"); err == nil {
+		t.Fatalf("ParseAuthTokenForAudience accepted gateway audience")
+	}
+}
+
+func TestEnrollmentParserRejectsAgentToken(t *testing.T) {
 	manager := newTestJWTManager(t)
 	authToken, err := manager.GenerateAuthToken("user-1", "user@example.com", "user", "device-1", "", false)
 	if err != nil {
 		t.Fatalf("GenerateAuthToken returned error: %v", err)
 	}
 	if _, err := manager.ParseEnrollmentToken(authToken); err == nil {
-		t.Fatalf("ParseEnrollmentToken accepted gateway auth token")
+		t.Fatalf("ParseEnrollmentToken accepted PA auth token")
 	}
 }
 

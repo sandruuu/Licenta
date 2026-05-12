@@ -22,8 +22,7 @@ const (
 	gatewayIDBytes                 = 16
 	gatewayEnrollmentTokenBytes    = 32
 
-	defaultGatewayAuthMode   = "builtin"
-	federatedGatewayAuthMode = "federated"
+	defaultGatewayAuthMode = "builtin"
 )
 
 var (
@@ -160,21 +159,11 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	if authMode == "" {
 		authMode = defaultGatewayAuthMode
 	}
-	if authMode != defaultGatewayAuthMode && authMode != federatedGatewayAuthMode {
-		return nil, fmt.Errorf("%w: auth_mode must be 'builtin' or 'federated'", ErrInvalidRequest)
+	if authMode != defaultGatewayAuthMode {
+		return nil, fmt.Errorf("%w: gateway authentication is configured at tenant level; use tenant identity providers", ErrInvalidRequest)
 	}
-
-	var federationConfig *models.FederationConfig
-	if authMode == federatedGatewayAuthMode {
-		if req.FederationConfig == nil || strings.TrimSpace(req.FederationConfig.Issuer) == "" || strings.TrimSpace(req.FederationConfig.ClientID) == "" {
-			return nil, fmt.Errorf("%w: federation_config.issuer and federation_config.client_id are required when auth_mode='federated'", ErrInvalidRequest)
-		}
-		federationConfig = cloneFederationConfig(req.FederationConfig)
-		federationConfig.Issuer = strings.TrimSpace(federationConfig.Issuer)
-		federationConfig.ClientID = strings.TrimSpace(federationConfig.ClientID)
-		if federationConfig.Scopes == "" {
-			federationConfig.Scopes = "openid profile email"
-		}
+	if req.FederationConfig != nil {
+		return nil, fmt.Errorf("%w: federation_config is not supported on gateways; configure an identity provider on the tenant", ErrInvalidRequest)
 	}
 
 	gatewayID, err := randomHex(gatewayIDBytes)
@@ -200,7 +189,6 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 		Status:            "pending",
 		AssignedResources: append([]string(nil), req.AssignedResources...),
 		AuthMode:          authMode,
-		FederationConfig:  federationConfig,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -254,18 +242,16 @@ func (s *Service) UpdateGateway(id string, req UpdateGatewayRequest) (*models.Ga
 	if req.AssignedResources != nil {
 		gateway.AssignedResources = targetResources
 	}
-	if req.AuthMode == defaultGatewayAuthMode || req.AuthMode == federatedGatewayAuthMode {
-		gateway.AuthMode = req.AuthMode
-		if req.AuthMode == defaultGatewayAuthMode {
-			gateway.FederationConfig = nil
-		}
+	authMode := strings.TrimSpace(req.AuthMode)
+	if authMode != "" && authMode != defaultGatewayAuthMode {
+		return nil, fmt.Errorf("%w: gateway authentication is configured at tenant level; use tenant identity providers", ErrInvalidRequest)
 	}
-	if req.FederationConfig != nil && gateway.AuthMode == federatedGatewayAuthMode {
-		incoming := cloneFederationConfig(req.FederationConfig)
-		if incoming.ClientSecret == "" && gateway.FederationConfig != nil {
-			incoming.ClientSecret = gateway.FederationConfig.ClientSecret
-		}
-		gateway.FederationConfig = incoming
+	if req.FederationConfig != nil {
+		return nil, fmt.Errorf("%w: federation_config is not supported on gateways; configure an identity provider on the tenant", ErrInvalidRequest)
+	}
+	if authMode == defaultGatewayAuthMode {
+		gateway.AuthMode = defaultGatewayAuthMode
+		gateway.FederationConfig = nil
 	}
 	gateway.UpdatedAt = s.clock()
 	s.store.SaveGateway(gateway)
@@ -666,8 +652,7 @@ func gatewayListItem(gateway *models.Gateway) GatewayListItem {
 		TokenExpiresAt:    gateway.TokenExpiresAt,
 		CertExpiresAt:     gateway.CertExpiresAt,
 		AssignedResources: append([]string(nil), gateway.AssignedResources...),
-		AuthMode:          gateway.AuthMode,
-		FederationConfig:  sanitizeFederationConfig(gateway.FederationConfig),
+		AuthMode:          defaultGatewayAuthMode,
 		CreatedAt:         gateway.CreatedAt,
 		UpdatedAt:         gateway.UpdatedAt,
 		LastSeenAt:        gateway.LastSeenAt,
@@ -684,30 +669,9 @@ func sanitizeGatewayForAdmin(gateway *models.Gateway) *models.Gateway {
 	copy.EnrollmentToken = "" // Never expose token hash — defense in depth
 	copy.OIDCClientSecret = ""
 	copy.CertPEM = ""
-	copy.FederationConfig = sanitizeFederationConfig(gateway.FederationConfig)
+	copy.AuthMode = defaultGatewayAuthMode
+	copy.FederationConfig = nil
 	return &copy
-}
-
-func sanitizeFederationConfig(config *models.FederationConfig) *models.FederationConfig {
-	clone := cloneFederationConfig(config)
-	if clone != nil {
-		clone.ClientSecret = ""
-	}
-	return clone
-}
-
-func cloneFederationConfig(config *models.FederationConfig) *models.FederationConfig {
-	if config == nil {
-		return nil
-	}
-	clone := *config
-	if config.ClaimMapping != nil {
-		clone.ClaimMapping = make(map[string]string, len(config.ClaimMapping))
-		for key, value := range config.ClaimMapping {
-			clone.ClaimMapping[key] = value
-		}
-	}
-	return &clone
 }
 
 func gatewaySubjectID(gatewayID string) string {

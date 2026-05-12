@@ -61,6 +61,31 @@ services:
       retries: 10
       start_period: 15s
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    container_name: ztna-keycloak
+    profiles:
+      - idp
+    command:
+      - start-dev
+      - --import-realm
+      - --hostname=http://keycloak.ztna.local:8080
+      - --hostname-strict=false
+    ports:
+      - "8080:8080"
+    networks:
+      public:
+        ipv4_address: 172.30.0.30
+        aliases:
+          - keycloak.ztna.local
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+      - ./infrastructure/keycloak/import:/opt/keycloak/data/import:ro
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    restart: unless-stopped
+
   public-dns:
     image: coredns/coredns:1.11.1
     container_name: ztna-public-dns
@@ -253,4 +278,6 @@ volumes:
   gateway-data:
     driver: local
   vault-data:
+    driver: local
+  keycloak-data:
     driver: local

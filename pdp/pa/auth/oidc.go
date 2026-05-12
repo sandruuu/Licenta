@@ -1,4 +1,4 @@
-package idp
+package auth
 
 import (
 	"crypto/rand"
@@ -16,7 +16,7 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────
-// OIDC Authorization Code Flow — PDP acts as the Identity Provider
+// OIDC Authorization Code Flow — PA acts as an auth broker/session issuer
 //
 // This module manages:
 //   - OIDC client registrations (native/public clients and confidential clients)
@@ -30,11 +30,11 @@ import (
 //   4. Connect-App exchanges the code for a PDP JWT via POST /auth/token
 // ──────────────────────────────────────────────────────────────────────
 
-// OIDCManager manages OIDC authorization state on the PDP (IdP)
+// OIDCManager manages OIDC authorization state on the PA.
 type OIDCManager struct {
 	mu sync.RWMutex
 
-	// Registered OIDC clients (gateways)
+	// Registered OIDC clients (native endpoint clients)
 	Clients map[string]*OIDCClient
 
 	// Pending authorization codes (short-lived, max 60s)
@@ -550,8 +550,8 @@ func (m *OIDCManager) CreateFederationSession(sess *FederationSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.FederationSessions[sess.State] = sess
-	log.Printf("[OIDC] Federation session created: state=%s oidc_session=%s gateway=%s",
-		sess.State, sess.OIDCSessionID, sess.GatewayID)
+	log.Printf("[OIDC] Federation session created: state=%s oidc_session=%s tenant=%s idp=%s",
+		sess.State, sess.OIDCSessionID, sess.TenantID, sess.IdPID)
 }
 
 // GetFederationSession retrieves and removes a federation session by state (one-time use).

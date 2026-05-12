@@ -90,11 +90,11 @@ export async function login(username, password) {
   return res.json();
 }
 
-export async function verifyMFA(token, code) {
+export async function verifyMFA(token, code, method = 'totp') {
   const res = await fetch(`${API_BASE}/auth/verify-mfa`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, code }),
+    body: JSON.stringify({ mfa_token: token, method, totp_code: code }),
   });
   return res.json();
 }

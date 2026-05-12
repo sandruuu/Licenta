@@ -1,4 +1,4 @@
-package idp
+package auth
 
 import (
 	"crypto/hmac"

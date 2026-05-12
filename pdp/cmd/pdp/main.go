@@ -35,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
-	log.Println("=== ZTNA PDP Service (PA + PE + IdP) ===")
+	log.Println("=== ZTNA PDP Service (PA + PE + Auth Broker) ===")
 
 	var cfg *config.Config
 	if *genConfig {
@@ -114,8 +114,8 @@ func main() {
 
 	// ── Init PA ──
 	policyAdmin := pa.NewPolicyAdministrator(cfg, dataStore)
-	policyAdmin.IdP.OIDC.RegisterNativeConnectAppClient()
-	policyAdmin.IdP.OIDC.RegisterNativeAgentClient()
+	policyAdmin.Auth.OIDC.RegisterNativeConnectAppClient()
+	policyAdmin.Auth.OIDC.RegisterNativeAgentClient()
 
 	// ── Test user ──
 	ensureTestUser(policyAdmin)
@@ -249,14 +249,14 @@ func ensureTestUser(policyAdmin *pa.PolicyAdministrator) {
 			return
 		}
 	}
-	user, err := policyAdmin.IdP.Users.Register(models.RegisterRequest{
+	user, err := policyAdmin.Auth.Users.Register(models.RegisterRequest{
 		Username: "admin", Password: "admin", Email: "admin@ztna.local",
 	})
 	if err != nil {
 		log.Printf("[INIT] Failed to create test user: %v", err)
 		return
 	}
-	policyAdmin.IdP.Users.SetUserRole(user.ID, "admin")
+	policyAdmin.Auth.Users.SetUserRole(user.ID, "admin")
 	log.Printf("[INIT] Test user: admin / admin (role=admin)")
 }
 
@@ -265,13 +265,13 @@ func createAdminUser(policyAdmin *pa.PolicyAdministrator, spec string) {
 	if len(parts) < 3 {
 		log.Fatalf("--create-admin format: username:password:email")
 	}
-	user, err := policyAdmin.IdP.Users.Register(models.RegisterRequest{
+	user, err := policyAdmin.Auth.Users.Register(models.RegisterRequest{
 		Username: parts[0], Password: parts[1], Email: parts[2],
 	})
 	if err != nil {
 		log.Fatalf("Failed: %v", err)
 	}
-	policyAdmin.IdP.Users.SetUserRole(user.ID, "admin")
+	policyAdmin.Auth.Users.SetUserRole(user.ID, "admin")
 }
 
 func splitN(s, sep string, n int) []string {
