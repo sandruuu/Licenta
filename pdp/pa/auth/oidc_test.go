@@ -5,10 +5,11 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNativeConnectAppLoopbackRedirectValidation(t *testing.T) {
-	mgr := NewOIDCManager()
+	mgr := newTestOIDCManager()
 	mgr.RegisterNativeConnectAppClient()
 
 	client, err := mgr.ValidateClientID(NativeConnectAppClientID)
@@ -46,7 +47,7 @@ func TestNativeConnectAppLoopbackRedirectValidation(t *testing.T) {
 }
 
 func TestNativeAgentLoopbackRedirectValidation(t *testing.T) {
-	mgr := NewOIDCManager()
+	mgr := newTestOIDCManager()
 	mgr.RegisterNativeAgentClient()
 
 	client, err := mgr.ValidateClientID(NativeAgentClientID)
@@ -71,7 +72,7 @@ func TestNativeAgentLoopbackRedirectValidation(t *testing.T) {
 }
 
 func TestExchangeCodeRequiresAndVerifiesPKCES256(t *testing.T) {
-	mgr := NewOIDCManager()
+	mgr := newTestOIDCManager()
 	mgr.RegisterNativeConnectAppClient()
 
 	verifier := "correct-code-verifier-with-enough-entropy"
@@ -127,7 +128,7 @@ func TestExchangeCodeRequiresAndVerifiesPKCES256(t *testing.T) {
 }
 
 func TestExchangeCodeRejectsMissingPKCEChallenge(t *testing.T) {
-	mgr := NewOIDCManager()
+	mgr := newTestOIDCManager()
 	mgr.RegisterNativeConnectAppClient()
 
 	sess, err := mgr.CreateAuthorizeSession(
@@ -153,6 +154,10 @@ func TestExchangeCodeRejectsMissingPKCEChallenge(t *testing.T) {
 	if _, _, err := mgr.ExchangeCode(authCode.Code, NativeConnectAppClientID, "", authCode.RedirectURI, "verifier"); err == nil || !strings.Contains(err.Error(), "code_challenge") {
 		t.Fatalf("ExchangeCode() error = %v, want missing code_challenge", err)
 	}
+}
+
+func newTestOIDCManager() *OIDCManager {
+	return NewOIDCManager(5*time.Minute, time.Minute, 24*time.Hour, 30*time.Second)
 }
 
 func pkceChallenge(verifier string) string {

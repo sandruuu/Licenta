@@ -15,19 +15,32 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+func transitKeyName(cfg VaultConfig) (string, error) {
+	name := strings.Trim(strings.TrimSpace(cfg.TransitKeyName), "/")
+	if name == "" {
+		return "", fmt.Errorf("vault transit key name is required")
+	}
+	return name, nil
+}
 
 // TransitEncryptKey encrypts a PEM-encoded private key using Vault Transit
 // and returns the ciphertext to be stored on disk.
 //
 // Vault Transit key must be pre-created:
 //
-//	vault write -f transit/keys/ztna-pdp-key
+//	vault write -f transit/keys/<transit-key-name>
 func TransitEncryptKey(ctx context.Context, cfg VaultConfig, keyPEM []byte) ([]byte, error) {
 	client, err := NewVaultClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("create Vault client: %w", err)
+	}
+	keyName, err := transitKeyName(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Encode plaintext as base64 (Vault Transit requirement)
@@ -40,7 +53,7 @@ func TransitEncryptKey(ctx context.Context, cfg VaultConfig, keyPEM []byte) ([]b
 		return nil, fmt.Errorf("marshal transit encrypt request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1/transit/encrypt/ztna-pdp-key", client.baseURL)
+	endpoint := fmt.Sprintf("%s/v1/transit/encrypt/%s", client.baseURL, keyName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create transit encrypt request: %w", err)
@@ -93,6 +106,10 @@ func TransitDecryptKey(ctx context.Context, cfg VaultConfig, ciphertext []byte) 
 	if err != nil {
 		return nil, fmt.Errorf("create Vault client: %w", err)
 	}
+	keyName, err := transitKeyName(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	reqBody := map[string]interface{}{
 		"ciphertext": string(ciphertext),
@@ -102,7 +119,7 @@ func TransitDecryptKey(ctx context.Context, cfg VaultConfig, ciphertext []byte) 
 		return nil, fmt.Errorf("marshal transit decrypt request: %w", err)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1/transit/decrypt/ztna-pdp-key", client.baseURL)
+	endpoint := fmt.Sprintf("%s/v1/transit/decrypt/%s", client.baseURL, keyName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create transit decrypt request: %w", err)
@@ -153,63 +170,71 @@ func TransitDecryptKey(ctx context.Context, cfg VaultConfig, ciphertext []byte) 
 	return keyPEM, nil
 }
 
-// RestoreOrCreateKey attempts to restore the PDP private key from Vault Transit,
-// or generates a new one and encrypts it if no saved key exists.
-//
-// Returns the ECDSA private key (for TLS config) and the PEM-encoded key.
-func RestoreOrCreateKey(ctx context.Context, cfg VaultConfig, keyPath, encryptedKeyPath string) (*ecdsa.PrivateKey, []byte, error) {
+// RestoreOrCreateKey restores the PDP private key from the local
+// Transit-encrypted file, or generates and encrypts a new key if none exists.
+func RestoreOrCreateKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath string) (*ecdsa.PrivateKey, error) {
+	return RestoreOrCreateNamedKey(ctx, cfg, encryptedKeyPath, "PDP")
+}
+
+// RestoreOrCreateNamedKey restores an ECDSA private key from the local
+// Transit-encrypted file, or generates and encrypts a new key if none exists.
+func RestoreOrCreateNamedKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath, keyLabel string) (*ecdsa.PrivateKey, error) {
+	label := strings.TrimSpace(keyLabel)
+	if label == "" {
+		label = "ECDSA"
+	}
+
 	// Try to restore from Vault Transit
 	if data, err := os.ReadFile(encryptedKeyPath); err == nil {
-		log.Printf("[PDP-TRANSIT] Found encrypted key at %s, decrypting via Vault Transit...", encryptedKeyPath)
+		log.Printf("[TRANSIT] Found encrypted %s key at %s, decrypting via Vault Transit...", label, encryptedKeyPath)
 		keyPEM, err := TransitDecryptKey(ctx, cfg, data)
 		if err != nil {
-			return nil, nil, fmt.Errorf("decrypt PDP key via Vault Transit: %w", err)
+			return nil, fmt.Errorf("decrypt %s key via Vault Transit: %w", label, err)
 		}
 		privKey, err := parseECDSAPrivateKey(keyPEM)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse decrypted PDP key: %w", err)
+			return nil, fmt.Errorf("parse decrypted %s key: %w", label, err)
 		}
-		log.Printf("[PDP-TRANSIT] Key restored successfully from Vault Transit")
-		return privKey, keyPEM, nil
+		log.Printf("[TRANSIT] %s key restored successfully from Vault Transit", label)
+		return privKey, nil
 	}
 
-	// No saved key — generate new one
-	log.Printf("[PDP-TRANSIT] No encrypted key found, generating new ECDSA P-256 key...")
+	// No saved key - generate new one
+	log.Printf("[TRANSIT] No encrypted %s key found, generating new ECDSA P-256 key...", label)
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate PDP key: %w", err)
+		return nil, fmt.Errorf("generate %s key: %w", label, err)
 	}
 
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal PDP key: %w", err)
+		return nil, fmt.Errorf("marshal %s key: %w", label, err)
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	// Encrypt via Vault Transit and save
-	log.Printf("[PDP-TRANSIT] Encrypting key via Vault Transit...")
+	log.Printf("[TRANSIT] Encrypting %s key via Vault Transit...", label)
+	if err := encryptAndSaveKey(ctx, cfg, encryptedKeyPath, keyPEM, label); err != nil {
+		return nil, err
+	}
+
+	log.Printf("[TRANSIT] New %s key generated, encrypted, and saved to %s", label, encryptedKeyPath)
+	return key, nil
+}
+
+func encryptAndSaveKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath string, keyPEM []byte, keyLabel string) error {
 	ciphertext, err := TransitEncryptKey(ctx, cfg, keyPEM)
 	if err != nil {
-		return nil, nil, fmt.Errorf("encrypt PDP key via Vault Transit: %w", err)
+		return fmt.Errorf("encrypt %s key via Vault Transit: %w", keyLabel, err)
 	}
 
-	if err := os.MkdirAll(strings.TrimSuffix(encryptedKeyPath, "/pdp_key.enc"), 0o700); err != nil {
-		// If encryptedKeyPath is like "data/pdp_key.enc", MkdirAll "data"
-		dir := "."
-		for i := len(encryptedKeyPath) - 1; i >= 0; i-- {
-			if encryptedKeyPath[i] == '/' || encryptedKeyPath[i] == '\\' {
-				dir = encryptedKeyPath[:i]
-				break
-			}
-		}
-		_ = os.MkdirAll(dir, 0o700)
+	if err := os.MkdirAll(filepath.Dir(encryptedKeyPath), 0o700); err != nil {
+		return fmt.Errorf("create encrypted key directory: %w", err)
 	}
 	if err := os.WriteFile(encryptedKeyPath, ciphertext, 0o600); err != nil {
-		return nil, nil, fmt.Errorf("write encrypted PDP key: %w", err)
+		return fmt.Errorf("write encrypted PDP key: %w", err)
 	}
-
-	log.Printf("[PDP-TRANSIT] New key generated, encrypted, and saved to %s", encryptedKeyPath)
-	return key, keyPEM, nil
+	return nil
 }
 
 // parseECDSAPrivateKey decodes a PEM-encoded ECDSA private key.

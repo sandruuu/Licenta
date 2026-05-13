@@ -610,7 +610,7 @@ This preserves all MFA data model and UI investment while keeping the access flo
 | PA/PE separation with `EvaluateAccess` | [`policy_evaluation.go`](pdp/pa/policy_evaluation.go:13) | ✅ |
 | PE deterministic evaluation | [`engine.go`](pdp/pe/evaluation/engine.go:39) | ✅ |
 | Temporal policies (time windows, days) | [`engine.go`](pdp/pe/evaluation/engine.go:116) | ✅ |
-| CAEP event infrastructure (pub/sub) | [`broker.go`](pdp/events/broker.go) | ✅ |
+| CAEP event infrastructure (pub/sub) | [`broker.go`](pdp/pa/events/broker.go) | ✅ |
 | OIDC federation (discovery, PKCE, token exchange) | [`federation.go`](pdp/idp/federation.go) | ✅ |
 | Catalog with SHA-256 versioning, TTL | [`catalog.go`](pdp/pa/catalog/catalog.go) | ✅ |
 | Agent authorization gRPC | [`agent_authorization_grpc.go`](pdp/pa/transport/agent_authorization_grpc.go) | ✅ |

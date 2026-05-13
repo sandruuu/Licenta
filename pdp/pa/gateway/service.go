@@ -1,12 +1,8 @@
 package gateway
 
 import (
-	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,8 +13,8 @@ import (
 )
 
 const (
-	gatewayCertificateValidityDays = 7
-	gatewayEnrollmentTokenTTL      = time.Hour
+	defaultCertificateValidityDays = 7
+	defaultEnrollmentTokenTTL      = time.Hour
 	gatewayIDBytes                 = 16
 	gatewayEnrollmentTokenBytes    = 32
 
@@ -43,12 +39,19 @@ type CertificateSigner func(csrPEM []byte, validDays int, role string) ([]byte, 
 
 type CertificateRevoker func(serial, certPEM, subjectID string, expiresOn time.Time)
 
+type Config struct {
+	CertificateValidityDays int
+	EnrollmentTokenTTL      time.Duration
+}
+
 type Service struct {
-	store   *store.Store
-	pkiRole string
-	signer  CertificateSigner
-	revoker CertificateRevoker
-	now     func() time.Time
+	store                   *store.Store
+	pkiRole                 string
+	certificateValidityDays int
+	enrollmentTokenTTL      time.Duration
+	signer                  CertificateSigner
+	revoker                 CertificateRevoker
+	now                     func() time.Time
 }
 
 type EnrollmentResult struct {
@@ -110,8 +113,26 @@ type GatewayListItem struct {
 	LastSeenAt        time.Time                `json:"last_seen_at,omitempty"`
 }
 
-func NewService(store *store.Store, pkiRole string) *Service {
-	return &Service{store: store, pkiRole: strings.TrimSpace(pkiRole), now: time.Now}
+func NewService(store *store.Store, pkiRole string, cfgs ...Config) *Service {
+	cfg := Config{
+		CertificateValidityDays: defaultCertificateValidityDays,
+		EnrollmentTokenTTL:      defaultEnrollmentTokenTTL,
+	}
+	if len(cfgs) > 0 {
+		if cfgs[0].CertificateValidityDays > 0 {
+			cfg.CertificateValidityDays = cfgs[0].CertificateValidityDays
+		}
+		if cfgs[0].EnrollmentTokenTTL > 0 {
+			cfg.EnrollmentTokenTTL = cfgs[0].EnrollmentTokenTTL
+		}
+	}
+	return &Service{
+		store:                   store,
+		pkiRole:                 strings.TrimSpace(pkiRole),
+		certificateValidityDays: cfg.CertificateValidityDays,
+		enrollmentTokenTTL:      cfg.EnrollmentTokenTTL,
+		now:                     time.Now,
+	}
 }
 
 func (s *Service) SetCertificateAuthority(signer CertificateSigner, revoker CertificateRevoker) {
@@ -185,7 +206,7 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 		Name:              name,
 		FQDN:              strings.TrimSpace(req.FQDN),
 		EnrollmentToken:   tokenHash,
-		TokenExpiresAt:    now.Add(gatewayEnrollmentTokenTTL).Format(time.RFC3339),
+		TokenExpiresAt:    now.Add(s.enrollmentTokenTTL).Format(time.RFC3339),
 		Status:            "pending",
 		AssignedResources: append([]string(nil), req.AssignedResources...),
 		AuthMode:          authMode,
@@ -264,7 +285,7 @@ func (s *Service) DeleteGateway(id string) (*models.Gateway, error) {
 		return nil, err
 	}
 	if gateway.CertSerial != "" && s.revoker != nil {
-		s.revoker(gateway.CertSerial, gateway.CertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(gatewayCertificateValidityDays*24*time.Hour))
+		s.revoker(gateway.CertSerial, gateway.CertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(s.certificateValidity()))
 	}
 	if !s.store.DeleteGateway(gateway.ID) {
 		return nil, fmt.Errorf("%w: delete gateway", ErrGatewayPersistence)
@@ -285,7 +306,7 @@ func (s *Service) RegenerateEnrollmentToken(id string) (*RegenerateTokenResult, 
 	tokenHashRaw := sha256.Sum256([]byte(enrollmentToken))
 	tokenHash := hex.EncodeToString(tokenHashRaw[:])
 	gateway.EnrollmentToken = tokenHash
-	gateway.TokenExpiresAt = now.Add(gatewayEnrollmentTokenTTL).Format(time.RFC3339)
+	gateway.TokenExpiresAt = now.Add(s.enrollmentTokenTTL).Format(time.RFC3339)
 	gateway.Status = "pending"
 	gateway.UpdatedAt = now
 	s.store.SaveGateway(gateway)
@@ -303,377 +324,7 @@ func (s *Service) RevokeGateway(id string) (*models.Gateway, error) {
 	s.store.SaveGateway(gateway)
 
 	if gateway.CertSerial != "" && s.revoker != nil {
-		s.revoker(gateway.CertSerial, gateway.CertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(gatewayCertificateValidityDays*24*time.Hour))
+		s.revoker(gateway.CertSerial, gateway.CertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(s.certificateValidity()))
 	}
 	return gateway, nil
-}
-
-func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentResult, error) {
-	if err := s.ready(); err != nil {
-		return nil, err
-	}
-	req.Token = strings.TrimSpace(req.Token)
-	req.CSRPEM = strings.TrimSpace(req.CSRPEM)
-	if req.Token == "" || req.CSRPEM == "" {
-		return nil, fmt.Errorf("%w: token and csr_pem are required", ErrInvalidRequest)
-	}
-
-	gateway, found := s.store.GetGatewayByToken(req.Token)
-	if !found {
-		return nil, ErrInvalidEnrollmentToken
-	}
-	if tokenExpired(gateway.TokenExpiresAt, s.clock()) {
-		return nil, ErrEnrollmentTokenExpired
-	}
-	if gateway.Status == "enrolled" {
-		return nil, ErrGatewayAlreadyEnrolled
-	}
-	if gateway.Status == "revoked" {
-		return nil, fmt.Errorf("%w: revoked gateways cannot be enrolled", ErrForbidden)
-	}
-	if strings.TrimSpace(gateway.TenantID) == "" {
-		return nil, fmt.Errorf("%w: gateway tenant_id is required before enrollment", ErrInvalidRequest)
-	}
-	if requestGatewayID := strings.TrimSpace(req.GatewayID); requestGatewayID != "" && requestGatewayID != gateway.ID {
-		return nil, fmt.Errorf("%w: enrollment gateway_id does not match token gateway", ErrForbidden)
-	}
-	if requestTenantID := strings.TrimSpace(req.TenantID); requestTenantID != "" && requestTenantID != gateway.TenantID {
-		return nil, fmt.Errorf("%w: enrollment tenant_id does not match token tenant", ErrForbidden)
-	}
-
-	csr, err := parseGatewayCSR(req.CSRPEM)
-	if err != nil {
-		return nil, err
-	}
-	fqdn := strings.TrimSpace(req.FQDN)
-	if fqdn == "" {
-		fqdn = strings.TrimSpace(gateway.FQDN)
-	}
-	if err := validateGatewayCSRIdentity(csr, gateway, fqdn); err != nil {
-		return nil, err
-	}
-	if !s.store.ConsumeGatewayEnrollmentToken(gateway.ID, req.Token, s.clock()) {
-		return nil, ErrInvalidEnrollmentToken
-	}
-
-	certPEM, err := s.signer([]byte(req.CSRPEM), gatewayCertificateValidityDays, s.pkiRole)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
-	}
-	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
-		return nil, err
-	}
-	certFingerprint, certSerial := certificateIdentity(certPEM)
-
-	now := s.clock()
-	gateway.Status = "enrolled"
-	gateway.EnrollmentToken = ""
-	gateway.TokenExpiresAt = ""
-	gateway.CertPEM = string(certPEM)
-	gateway.CertFingerprint = certFingerprint
-	gateway.CertSerial = certSerial
-	gateway.CertExpiresAt = now.Add(gatewayCertificateValidityDays * 24 * time.Hour).Format(time.RFC3339)
-	gateway.OIDCClientID = ""
-	gateway.OIDCClientSecret = ""
-	if fqdn != "" {
-		gateway.FQDN = fqdn
-	}
-	if name := strings.TrimSpace(req.Name); name != "" {
-		gateway.Name = name
-	}
-	gateway.UpdatedAt = now
-	gateway.LastSeenAt = now
-	s.store.SaveGateway(gateway)
-
-	return &EnrollmentResult{Gateway: gateway, CertPEM: certPEM}, nil
-}
-
-func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string) (*RenewalResult, error) {
-	if err := s.ready(); err != nil {
-		return nil, err
-	}
-	if gateway == nil {
-		return nil, fmt.Errorf("%w: gateway identity not found in request context", ErrForbidden)
-	}
-	csrPEM = strings.TrimSpace(csrPEM)
-	if csrPEM == "" {
-		return nil, fmt.Errorf("%w: csr_pem is required", ErrInvalidRequest)
-	}
-	csr, err := parseGatewayCSR(csrPEM)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateGatewayCSRIdentity(csr, gateway, strings.TrimSpace(gateway.FQDN)); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrForbidden, err)
-	}
-
-	oldSerial := gateway.CertSerial
-	oldCertPEM := gateway.CertPEM
-	oldExpiresOn := s.clock().Add(gatewayCertificateValidityDays * 24 * time.Hour)
-	if parsedExpiry, err := time.Parse(time.RFC3339, gateway.CertExpiresAt); err == nil {
-		oldExpiresOn = parsedExpiry
-	}
-
-	certPEM, err := s.signer([]byte(csrPEM), gatewayCertificateValidityDays, s.pkiRole)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
-	}
-	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
-		return nil, err
-	}
-	certFingerprint, certSerial := certificateIdentity(certPEM)
-	now := s.clock()
-	gateway.CertPEM = string(certPEM)
-	gateway.CertFingerprint = certFingerprint
-	gateway.CertSerial = certSerial
-	gateway.CertExpiresAt = now.Add(gatewayCertificateValidityDays * 24 * time.Hour).Format(time.RFC3339)
-	gateway.UpdatedAt = now
-	gateway.LastSeenAt = now
-	s.store.SaveGateway(gateway)
-
-	if oldSerial != "" && oldSerial != gateway.CertSerial && s.revoker != nil {
-		s.revoker(oldSerial, oldCertPEM, gatewaySubjectID(gateway.ID), oldExpiresOn)
-	}
-
-	return &RenewalResult{Gateway: gateway, CertPEM: certPEM}, nil
-}
-
-func (s *Service) gatewayByID(id string) (*models.Gateway, error) {
-	if err := s.readyStore(); err != nil {
-		return nil, err
-	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return nil, fmt.Errorf("%w: gateway ID required", ErrInvalidRequest)
-	}
-	gateway, found := s.store.GetGateway(id)
-	if !found {
-		return nil, ErrGatewayNotFound
-	}
-	return gateway, nil
-}
-
-func (s *Service) ready() error {
-	if err := s.readyStore(); err != nil {
-		return err
-	}
-	if s.signer == nil {
-		return fmt.Errorf("%w: PKI signer not initialized", ErrGatewaySigning)
-	}
-	return nil
-}
-
-func (s *Service) readyStore() error {
-	if s == nil || s.store == nil {
-		return ErrGatewayStoreUnavailable
-	}
-	return nil
-}
-
-func (s *Service) validateTenant(tenantID string) (string, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		return "", fmt.Errorf("%w: tenant_id is required", ErrInvalidRequest)
-	}
-	tenant, found := s.store.GetTenant(tenantID)
-	if !found || tenant == nil || !tenant.Enabled {
-		return "", fmt.Errorf("%w: tenant not found or disabled", ErrInvalidRequest)
-	}
-	return tenantID, nil
-}
-
-func (s *Service) validateAssignedResourcesTenant(tenantID string, resourceIDs []string) error {
-	tenantID = strings.TrimSpace(tenantID)
-	for _, resourceID := range resourceIDs {
-		resourceID = strings.TrimSpace(resourceID)
-		if resourceID == "" {
-			continue
-		}
-		resource, found := s.store.GetResource(resourceID)
-		if !found || resource == nil {
-			return fmt.Errorf("%w: assigned resource %s not found", ErrInvalidRequest, resourceID)
-		}
-		if strings.TrimSpace(resource.TenantID) != "" && !strings.EqualFold(resource.TenantID, tenantID) {
-			return fmt.Errorf("%w: assigned resource %s belongs to a different tenant", ErrInvalidRequest, resourceID)
-		}
-	}
-	return nil
-}
-
-func (s *Service) clock() time.Time {
-	if s != nil && s.now != nil {
-		return s.now()
-	}
-	return time.Now()
-}
-
-func tokenExpired(value string, now time.Time) bool {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return false
-	}
-	expiresAt, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return false
-	}
-	return now.After(expiresAt)
-}
-
-func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		return nil, fmt.Errorf("%w: invalid CSR PEM", ErrInvalidCSR)
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("%w: CSR signature invalid: %v", ErrInvalidCSR, err)
-	}
-	return csr, nil
-}
-
-func validateGatewayCSRIdentity(csr *x509.CertificateRequest, gateway *models.Gateway, fqdn string) error {
-	if csr == nil || gateway == nil {
-		return fmt.Errorf("%w: CSR and gateway identity are required", ErrInvalidCSR)
-	}
-	tenantID := strings.TrimSpace(gateway.TenantID)
-	gatewayID := strings.TrimSpace(gateway.ID)
-	if tenantID == "" || gatewayID == "" {
-		return fmt.Errorf("%w: gateway tenant_id and gateway_id are required", ErrInvalidCSR)
-	}
-	if !csrHasGatewayIdentity(csr, tenantID, gatewayID) {
-		return fmt.Errorf("%w: CSR must include URI SAN %q", ErrInvalidCSR, GatewayIdentityURI(tenantID, gatewayID))
-	}
-	if fqdn = strings.TrimSpace(fqdn); fqdn != "" && !stringSliceContainsFold(csr.DNSNames, fqdn) {
-		return fmt.Errorf("%w: CSR DNS SAN must include gateway FQDN %q", ErrInvalidCSR, fqdn)
-	}
-	return nil
-}
-
-func validateGatewayCertificate(certPEM []byte, csr *x509.CertificateRequest, gateway *models.Gateway) error {
-	cert, err := parseLeafCertificate(certPEM)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidCSR, err)
-	}
-	if cert.IsCA {
-		return fmt.Errorf("%w: issued gateway certificate must not be a CA", ErrInvalidCSR)
-	}
-	if !certificateHasGatewayIdentity(cert, gateway.TenantID, gateway.ID) {
-		return fmt.Errorf("%w: issued certificate does not contain expected gateway URI SAN", ErrInvalidCSR)
-	}
-	if !publicKeysEqual(cert.PublicKey, csr.PublicKey) {
-		return fmt.Errorf("%w: issued certificate public key does not match CSR", ErrInvalidCSR)
-	}
-	if !extKeyUsageContains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
-		return fmt.Errorf("%w: issued gateway certificate must allow client authentication", ErrInvalidCSR)
-	}
-	return nil
-}
-
-func parseLeafCertificate(certPEM []byte) (*x509.Certificate, error) {
-	block, _ := pem.Decode(certPEM)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, fmt.Errorf("certificate PEM is invalid")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return cert, nil
-}
-
-func publicKeysEqual(left, right interface{}) bool {
-	leftDER, err := x509.MarshalPKIXPublicKey(left)
-	if err != nil {
-		return false
-	}
-	rightDER, err := x509.MarshalPKIXPublicKey(right)
-	if err != nil {
-		return false
-	}
-	return bytes.Equal(leftDER, rightDER)
-}
-
-func extKeyUsageContains(usages []x509.ExtKeyUsage, expected x509.ExtKeyUsage) bool {
-	for _, usage := range usages {
-		if usage == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func stringSliceContainsFold(values []string, expected string) bool {
-	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(value), expected) {
-			return true
-		}
-	}
-	return false
-}
-
-func certificateIdentity(certPEM []byte) (string, string) {
-	block, _ := pem.Decode(certPEM)
-	if block == nil {
-		return "", ""
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return "", ""
-	}
-	fingerprint := sha256.Sum256(cert.Raw)
-	return hex.EncodeToString(fingerprint[:]), cert.SerialNumber.String()
-}
-
-func randomHex(bytesLen int) (string, error) {
-	if bytesLen <= 0 {
-		return "", fmt.Errorf("random byte length must be positive")
-	}
-	randomBytes := make([]byte, bytesLen)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(randomBytes), nil
-}
-
-func gatewayListItem(gateway *models.Gateway) GatewayListItem {
-	return GatewayListItem{
-		ID:                gateway.ID,
-		TenantID:          gateway.TenantID,
-		Name:              gateway.Name,
-		FQDN:              gateway.FQDN,
-		Status:            gateway.Status,
-		ListenAddr:        gateway.ListenAddr,
-		PublicIP:          gateway.PublicIP,
-		OIDCClientID:      gateway.OIDCClientID,
-		EnrollmentToken:   "", // Never expose token hash — admin gets plaintext at creation only
-		TokenExpiresAt:    gateway.TokenExpiresAt,
-		CertExpiresAt:     gateway.CertExpiresAt,
-		AssignedResources: append([]string(nil), gateway.AssignedResources...),
-		AuthMode:          defaultGatewayAuthMode,
-		CreatedAt:         gateway.CreatedAt,
-		UpdatedAt:         gateway.UpdatedAt,
-		LastSeenAt:        gateway.LastSeenAt,
-	}
-}
-
-func sanitizeGatewayForAdmin(gateway *models.Gateway) *models.Gateway {
-	if gateway == nil {
-		return nil
-	}
-	copy := *gateway
-	copy.AssignedResources = append([]string(nil), gateway.AssignedResources...)
-	copy.TenantIDs = append([]string(nil), gateway.TenantIDs...)
-	copy.EnrollmentToken = "" // Never expose token hash — defense in depth
-	copy.OIDCClientSecret = ""
-	copy.CertPEM = ""
-	copy.AuthMode = defaultGatewayAuthMode
-	copy.FederationConfig = nil
-	return &copy
-}
-
-func gatewaySubjectID(gatewayID string) string {
-	return "gateway:" + gatewayID
 }

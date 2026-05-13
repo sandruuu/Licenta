@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Copy, Edit, Eye, EyeOff, Globe, Key, Monitor, Server, Shield, Terminal, Trash2 } from 'lucide-react';
+import { Copy, Edit, Eye, EyeOff, Key, Server, Shield, Trash2 } from 'lucide-react';
 import {
   createResource,
   deleteResource,
@@ -16,11 +16,12 @@ import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui/FormField';
+import { usePublicConfig } from '../config/publicConfig';
 
-const typeOptions = [
-  { value: 'web', label: 'WEB', icon: Globe, defaultPort: 443 },
-  { value: 'ssh', label: 'SSH', icon: Terminal, defaultPort: 22 },
-  { value: 'rdp', label: 'RDP', icon: Monitor, defaultPort: 3389 },
+const typeMeta = [
+  { value: 'web', label: 'WEB' },
+  { value: 'ssh', label: 'SSH' },
+  { value: 'rdp', label: 'RDP' },
 ];
 
 function splitList(value) {
@@ -41,6 +42,7 @@ function typeVariant(type) {
 export default function Resources() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const publicConfig = usePublicConfig();
   const [resources, setResources] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [gateways, setGateways] = useState([]);
@@ -54,6 +56,10 @@ export default function Resources() {
 
   const tenantByID = useMemo(() => new Map(tenants.map((tenant) => [tenant.id, tenant])), [tenants]);
   const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
+  const typeOptions = useMemo(() => typeMeta.map((item) => ({
+    ...item,
+    defaultPort: publicConfig.resource_default_ports?.[item.value] || 0,
+  })), [publicConfig.resource_default_ports]);
 
   const gatewaysForTenant = (tenantID) => gateways.filter((gateway) => gateway.tenant_id === tenantID);
 
@@ -90,7 +96,7 @@ export default function Resources() {
       tenant_id: tenantID,
       gateway_id: defaultGatewayID(tenantID),
       host: '',
-      port: option?.defaultPort || 443,
+      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
       external_url: '',
       catalog_fqdn: '',
       enabled: true,

@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -29,14 +30,15 @@ type SelfEnrollResult struct {
 // using the provided ECDSA key (or generates a new one if nil), signs it via the
 // PDP PKI role, and returns a tls.Certificate ready for use as the server's TLS identity.
 //
-// This replaces the old static pdp.crt/pdp.key files.
+// This replaces static TLS material with a Vault-issued certificate and a
+// Transit-protected private key.
 func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, existingKey *ecdsa.PrivateKey) (*SelfEnrollResult, error) {
 	if strings.TrimSpace(pdpFQDN) == "" {
 		return nil, fmt.Errorf("pdp_fqdn is required for self-enrollment")
 	}
 	role := strings.TrimSpace(rolePDP)
 	if role == "" {
-		role = "ztna-pdp"
+		return nil, fmt.Errorf("pki_role_pdp is required for self-enrollment")
 	}
 
 	// 1. Use existing key or generate new ECDSA P-256 keypair
@@ -117,12 +119,11 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, e
 
 // SelfEnrollLoop periodically checks certificate expiration and renews
 // before expiry. dataDir is the PDP's data directory for persisting certs.
-func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP, certPath, keyPath, dataDir string, renewThreshold time.Duration) {
-	if renewThreshold <= 0 {
-		renewThreshold = 24 * time.Hour
+func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, key *ecdsa.PrivateKey, certPath, caPath, dataDir string, renewThreshold, checkInterval time.Duration, onRenew func(*tls.Certificate)) {
+	if checkInterval <= 0 {
+		checkInterval = 6 * time.Hour
 	}
-
-	ticker := time.NewTicker(6 * time.Hour)
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	for {
@@ -134,14 +135,17 @@ func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP, cert
 				continue
 			}
 			log.Printf("[PDP-SELF-ENROLL] Certificate near expiry, renewing...")
-			result, err := SelfEnroll(ctx, cfg, pdpFQDN, rolePDP, nil)
+			result, err := SelfEnroll(ctx, cfg, pdpFQDN, rolePDP, key)
 			if err != nil {
 				log.Printf("[PDP-SELF-ENROLL] Renewal failed: %v", err)
 				continue
 			}
-			if err := SaveEnrolledCert(result, certPath, keyPath, dataDir); err != nil {
+			if err := SaveEnrolledCert(result, certPath, caPath, dataDir); err != nil {
 				log.Printf("[PDP-SELF-ENROLL] Save renewed cert failed: %v", err)
 				continue
+			}
+			if onRenew != nil {
+				onRenew(result.Certificate)
 			}
 			log.Printf("[PDP-SELF-ENROLL] Certificate renewed (expires=%s)", result.ExpiresAt.Format(time.RFC3339))
 		}
@@ -149,10 +153,16 @@ func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP, cert
 }
 
 // SaveEnrolledCert persists the enrolled certificate and CA to disk.
-// The key is saved separately via Vault Transit encryption (transit.go).
-func SaveEnrolledCert(result *SelfEnrollResult, certPath, keyPath, dataDir string) error {
+// The private key is stored separately as Vault Transit encrypted ciphertext.
+func SaveEnrolledCert(result *SelfEnrollResult, certPath, caPath, dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o700); err != nil {
+		return fmt.Errorf("create PDP cert directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(caPath), 0o700); err != nil {
+		return fmt.Errorf("create CA cert directory: %w", err)
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{
@@ -163,8 +173,6 @@ func SaveEnrolledCert(result *SelfEnrollResult, certPath, keyPath, dataDir strin
 		return fmt.Errorf("write PDP cert: %w", err)
 	}
 
-	// Save CA PEM for mTLS
-	caPath := dataDir + "/ca-cert.pem"
 	if err := os.WriteFile(caPath, result.CAPEM, 0o644); err != nil {
 		return fmt.Errorf("write CA cert: %w", err)
 	}

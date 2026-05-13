@@ -7,9 +7,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"pdp/config"
 	"pdp/store"
 )
 
@@ -32,20 +35,64 @@ type geoCache struct {
 // with a 1-hour TTL. All failures are graceful — callers get a zero-value
 // GeoLocation and a nil error so that geolocation never blocks access.
 type GeoLocator struct {
-	store      *store.Store
-	cache      map[string]geoCache
-	mu         sync.RWMutex
-	httpClient *http.Client
+	store                    *store.Store
+	cache                    map[string]geoCache
+	mu                       sync.RWMutex
+	httpClient               *http.Client
+	providerURL              string
+	cacheTTL                 time.Duration
+	cacheMaxEntries          int
+	sameAreaDistanceKM       float64
+	suspiciousTravelSpeedKMH float64
+	impossibleTravelSpeedKMH float64
 }
 
 // NewGeoLocator creates a GeoLocator backed by the given store.
-func NewGeoLocator(s *store.Store) *GeoLocator {
+func NewGeoLocator(s *store.Store, cfgs ...config.GeoConfig) *GeoLocator {
+	cfg := config.GeoConfig{
+		ProviderURL:              "https://ipapi.co/{ip}/json/",
+		HTTPTimeout:              3 * time.Second,
+		CacheTTL:                 time.Hour,
+		CacheMaxEntries:          10000,
+		SameAreaDistanceKM:       50,
+		SuspiciousTravelSpeedKMH: 500,
+		ImpossibleTravelSpeedKMH: 900,
+	}
+	if len(cfgs) > 0 {
+		if strings.TrimSpace(cfgs[0].ProviderURL) != "" {
+			cfg.ProviderURL = cfgs[0].ProviderURL
+		}
+		if cfgs[0].HTTPTimeout > 0 {
+			cfg.HTTPTimeout = cfgs[0].HTTPTimeout
+		}
+		if cfgs[0].CacheTTL > 0 {
+			cfg.CacheTTL = cfgs[0].CacheTTL
+		}
+		if cfgs[0].CacheMaxEntries > 0 {
+			cfg.CacheMaxEntries = cfgs[0].CacheMaxEntries
+		}
+		if cfgs[0].SameAreaDistanceKM > 0 {
+			cfg.SameAreaDistanceKM = cfgs[0].SameAreaDistanceKM
+		}
+		if cfgs[0].SuspiciousTravelSpeedKMH > 0 {
+			cfg.SuspiciousTravelSpeedKMH = cfgs[0].SuspiciousTravelSpeedKMH
+		}
+		if cfgs[0].ImpossibleTravelSpeedKMH > 0 {
+			cfg.ImpossibleTravelSpeedKMH = cfgs[0].ImpossibleTravelSpeedKMH
+		}
+	}
 	return &GeoLocator{
 		store: s,
 		cache: make(map[string]geoCache),
 		httpClient: &http.Client{
-			Timeout: 3 * time.Second,
+			Timeout: cfg.HTTPTimeout,
 		},
+		providerURL:              cfg.ProviderURL,
+		cacheTTL:                 cfg.CacheTTL,
+		cacheMaxEntries:          cfg.CacheMaxEntries,
+		sameAreaDistanceKM:       cfg.SameAreaDistanceKM,
+		suspiciousTravelSpeedKMH: cfg.SuspiciousTravelSpeedKMH,
+		impossibleTravelSpeedKMH: cfg.ImpossibleTravelSpeedKMH,
 	}
 }
 
@@ -69,17 +116,15 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 	}
 	g.mu.RUnlock()
 
-	// Call ipapi.co (free tier, HTTPS, 1000 req/day)
-	url := fmt.Sprintf("https://ipapi.co/%s/json/", ip)
-	resp, err := g.httpClient.Get(url)
+	resp, err := g.httpClient.Get(g.lookupURL(ip))
 	if err != nil {
-		log.Printf("[GEO] ipapi.co request failed for %s: %v", ip, err)
+		log.Printf("[GEO] provider request failed for %s: %v", ip, err)
 		return GeoLocation{}, nil // graceful fallback
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 429 {
-		log.Printf("[GEO] ipapi.co rate limited for %s", ip)
+		log.Printf("[GEO] provider rate limited for %s", ip)
 		return GeoLocation{}, nil
 	}
 
@@ -92,12 +137,12 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		CountryName string  `json:"country_name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[GEO] ipapi.co decode failed for %s: %v", ip, err)
+		log.Printf("[GEO] provider decode failed for %s: %v", ip, err)
 		return GeoLocation{}, nil
 	}
 
 	if result.Error {
-		log.Printf("[GEO] ipapi.co lookup failed for %s: %s", ip, result.Reason)
+		log.Printf("[GEO] provider lookup failed for %s: %s", ip, result.Reason)
 		return GeoLocation{}, nil
 	}
 
@@ -108,11 +153,10 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		Country:   result.CountryName,
 	}
 
-	// Cache for 1 hour
 	g.mu.Lock()
-	g.cache[ip] = geoCache{loc: loc, expiresAt: time.Now().Add(1 * time.Hour)}
+	g.cache[ip] = geoCache{loc: loc, expiresAt: time.Now().Add(g.cacheTTL)}
 	// Evict expired entries when cache grows large
-	if len(g.cache) > 10000 {
+	if len(g.cache) > g.cacheMaxEntries {
 		now := time.Now()
 		for k, v := range g.cache {
 			if now.After(v.expiresAt) {
@@ -123,6 +167,18 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 	g.mu.Unlock()
 
 	return loc, nil
+}
+
+func (g *GeoLocator) lookupURL(ip string) string {
+	provider := strings.TrimSpace(g.providerURL)
+	if provider == "" {
+		provider = "https://ipapi.co/{ip}/json/"
+	}
+	escapedIP := url.PathEscape(ip)
+	if strings.Contains(provider, "{ip}") {
+		return strings.ReplaceAll(provider, "{ip}", escapedIP)
+	}
+	return fmt.Sprintf("%s/%s/json/", strings.TrimRight(provider, "/"), escapedIP)
 }
 
 // GeoVelocityResult holds the result of an impossible-travel check.
@@ -164,7 +220,7 @@ func (g *GeoLocator) CheckImpossibleTravel(userID, sourceIP string) GeoVelocityR
 
 	// Calculate distance (Haversine)
 	dist := haversineKm(prev.Latitude, prev.Longitude, currentLoc.Latitude, currentLoc.Longitude)
-	if dist < 50 {
+	if dist < g.sameAreaDistanceKM {
 		return empty // same metro area → no flag
 	}
 
@@ -183,12 +239,12 @@ func (g *GeoLocator) CheckImpossibleTravel(userID, sourceIP string) GeoVelocityR
 	}
 
 	switch {
-	case speed > 900:
+	case speed > g.impossibleTravelSpeedKMH:
 		result.IsImpossible = true
 		result.IsSuspicious = true
 		log.Printf("[GEO] IMPOSSIBLE TRAVEL: user=%s speed=%.0f km/h dist=%.0f km time=%.2f h (%s → %s)",
 			userID, speed, dist, timeDelta, prev.City, currentLoc.City)
-	case speed > 500:
+	case speed > g.suspiciousTravelSpeedKMH:
 		result.IsSuspicious = true
 		log.Printf("[GEO] SUSPICIOUS TRAVEL: user=%s speed=%.0f km/h dist=%.0f km time=%.2f h (%s → %s)",
 			userID, speed, dist, timeDelta, prev.City, currentLoc.City)

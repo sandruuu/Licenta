@@ -1,0 +1,223 @@
+{
+  "listen_addr": ":8443",
+  "pdp_fqdn": "pdp.ztna.local",
+  "tls_cert": "./data/pdp-server-tls-cert.pem",
+  "mtls_ca": "./data/vault-pki-ca-cert.pem",
+  "pki_url": "http://vault:8200",
+  "pki_token": "ztna-dev-root-token",
+  "pki_path": "pki_int",
+  "pki_role_pdp": "ztna-pdp",
+  "pki_role_device": "ztna-device",
+  "pki_role_gateway": "ztna-gateway",
+  "pki_transit_key": "ztna-pdp-key",
+  "pki_ca_file": "",
+  "pki_server_name": "",
+  "pki_timeout": 10000000000,
+  "jwt_expiry": 3600000000000,
+  "mfa_token_expiry": 300000000000,
+  "jwt_transit_key": "ztna-pdp-key",
+  "totp_issuer": "ZTNA-PDP",
+  "session_expiry": 28800000000000,
+  "max_sessions": 5,
+  "max_login_attempts": 5,
+  "lockout_duration": 900000000000,
+  "data_dir": "./data",
+  "database_path": "./data/ztna.db",
+  "pdp_key_encrypted_path": "./data/pdp_key.enc",
+  "jwt_key_encrypted_path": "./data/jwt_signing_key.enc",
+  "webauthn_rp_id": "localhost",
+  "webauthn_rp_name": "ZTNA PDP",
+  "webauthn_rp_origins": "https://localhost:8443",
+  "cors_origins": [],
+  "runtime": {
+    "store_auto_save_interval": 60000000000,
+    "session_cleanup_interval": 300000000000,
+    "certificate_renew_before": 86400000000000,
+    "http_read_timeout": 30000000000,
+    "http_read_header_timeout": 10000000000,
+    "http_write_timeout": 60000000000,
+    "http_idle_timeout": 120000000000,
+    "pki_renew_check_interval": 21600000000000,
+    "event_buffer_size": 64,
+    "catalog_ttl_seconds": 300,
+    "auth_rate_limit_window": 900000000000,
+    "auth_rate_limit_max": 10,
+    "oidc_authorize_session_ttl": 300000000000,
+    "oidc_auth_code_ttl": 60000000000,
+    "oidc_refresh_token_ttl": 86400000000000,
+    "oidc_cleanup_interval": 30000000000,
+    "oidc_enrollment_token_ttl": 300000000000,
+    "webauthn_challenge_ttl": 300000000000,
+    "webauthn_cleanup_interval": 120000000000,
+    "federation_cache_ttl": 21600000000000,
+    "federation_http_timeout": 10000000000,
+    "browser_auth_session_ttl": 300000000000,
+    "csrf_cookie_max_age_seconds": 3600,
+    "enroll_rate_limit_window": 60000000000,
+    "enroll_rate_limit_max": 5,
+    "gateway_revoke_timeout": 5000000000
+  },
+  "bootstrap_admin": {
+    "enabled": true,
+    "username": "admin",
+    "password": "admin",
+    "email": "admin@ztna.local",
+    "role": "admin"
+  },
+  "public": {
+    "device_health_agent_url": "http://127.0.0.1:12080",
+    "device_health_timeout_ms": 3000,
+    "device_health_retry_ms": 5000,
+    "federated_callback_url": "https://localhost:8443/auth/federated/callback",
+    "oidc_default_scopes": "openid profile email",
+    "oidc_default_claim_mapping": {
+      "username": "preferred_username",
+      "email": "email",
+      "groups": "groups"
+    },
+    "resource_default_ports": {
+      "web": 443,
+      "ssh": 22,
+      "rdp": 3389
+    }
+  },
+  "gateway": {
+    "certificate_validity_days": 7,
+    "enrollment_token_ttl": 3600000000000
+  },
+  "enrollment": {
+    "certificate_validity_days": 1,
+    "browser_session_ttl": 300000000000
+  },
+  "geo": {
+    "provider_url": "https://ipapi.co/{ip}/json/",
+    "http_timeout": 3000000000,
+    "cache_ttl": 3600000000000,
+    "cache_max_entries": 10000,
+    "same_area_distance_km": 50,
+    "suspicious_travel_speed_kmh": 500,
+    "impossible_travel_speed_kmh": 900
+  },
+  "policies": {
+    "seed_default_rules": true,
+    "default_rules": [
+      {
+        "id": "rule_default_deny_unhealthy",
+        "name": "Deny Unhealthy Devices",
+        "description": "Block access for devices with critical health issues",
+        "priority": 10,
+        "enabled": true,
+        "conditions": {
+          "min_health_score": 40
+        },
+        "action": "deny"
+      },
+      {
+        "id": "rule_mfa_rdp",
+        "name": "Require MFA for RDP",
+        "description": "All RDP connections require multi-factor authentication",
+        "priority": 20,
+        "enabled": true,
+        "conditions": {
+          "target_ports": [3389]
+        },
+        "action": "mfa_required"
+      },
+      {
+        "id": "rule_mfa_ssh",
+        "name": "Require MFA for SSH",
+        "description": "All SSH connections require multi-factor authentication",
+        "priority": 25,
+        "enabled": true,
+        "conditions": {
+          "target_ports": [22]
+        },
+        "action": "mfa_required"
+      },
+      {
+        "id": "rule_block_high_risk",
+        "name": "Block High Risk Access",
+        "description": "Deny access when risk score exceeds threshold",
+        "priority": 15,
+        "enabled": true,
+        "conditions": {
+          "max_risk_score": 75
+        },
+        "action": "deny"
+      },
+      {
+        "id": "rule_allow_admin",
+        "name": "Allow Admin Full Access",
+        "description": "Administrators have full access to all resources",
+        "priority": 5,
+        "enabled": true,
+        "conditions": {
+          "allowed_roles": ["admin"]
+        },
+        "action": "allow"
+      },
+      {
+        "id": "rule_business_hours_web",
+        "name": "Allow Web During Business Hours",
+        "description": "Web access allowed during business hours for all users",
+        "priority": 30,
+        "enabled": true,
+        "conditions": {
+          "target_ports": [80, 443],
+          "allowed_time_start": "08:00",
+          "allowed_time_end": "18:00",
+          "allowed_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        },
+        "action": "allow"
+      }
+    ]
+  },
+  "risk": {
+    "posture_critical_after": 1800000000000,
+    "posture_stale_after": 600000000000,
+    "posture_critical_points": 30,
+    "posture_stale_points": 15,
+    "no_device_health_points": 25,
+    "health_excellent_min": 80,
+    "health_good_min": 60,
+    "health_fair_min": 40,
+    "health_good_points": 10,
+    "health_fair_points": 20,
+    "health_poor_points": 35,
+    "critical_check_points": {
+      "Firewall": 5,
+      "Antivirus": 5,
+      "Disk Encryption": 3,
+      "Password & Lock": 2
+    },
+    "failed_attempts_high": 5,
+    "failed_attempts_medium": 3,
+    "failed_attempts_low": 1,
+    "failed_attempts_high_points": 20,
+    "failed_attempts_medium_points": 10,
+    "failed_attempts_low_points": 5,
+    "business_hours_start": 8,
+    "business_hours_end": 18,
+    "business_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    "outside_business_points": 10,
+    "night_hours_start": 0,
+    "night_hours_end": 6,
+    "night_hours_points": 5,
+    "new_device_points": 10,
+    "new_location_points": 5,
+    "protocol_points": {
+      "rdp": 10,
+      "ssh": 5,
+      "http": 0,
+      "https": 0
+    },
+    "unknown_protocol_points": 5,
+    "impossible_travel_points": 30,
+    "suspicious_geo_velocity_kmh": 500,
+    "suspicious_geo_velocity_points": 15,
+    "max_anomaly_points": 25,
+    "max_score": 100,
+    "default_deny_risk_threshold": 80,
+    "default_mfa_risk_threshold": 50
+  }
+}

@@ -38,25 +38,31 @@ type PolicyAdministrator struct {
 
 // NewPolicyAdministrator creates and initializes the Policy Administrator
 func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministrator {
+	cfg.ApplyDefaults()
 	auditLogger := audit.NewAuditLogger(s)
 	pa := &PolicyAdministrator{
-		Auth:       auth.New(cfg, s),
-		Engine:     evaluation.NewEngine(),
-		Geo:        policies.NewGeoLocator(s),
-		Rules:      policies.NewRuleManager(s),
-		Catalog:    catalog.NewService(s),
-		Devices:    devices.NewService(s, auditLogger),
-		Enrollment: enrollment.NewService(s),
-		Gateways:   gateway.NewService(s, cfg.PKIRoleGateway),
-		Resources:  resources.NewService(s, cfg.PKIRoleResource),
-		Sessions:   sessions.NewSessionManager(s, cfg.SessionExpiry, cfg.MaxSessions),
-		Audit:      auditLogger,
-		Store:      s,
-		Cfg:        cfg,
+		Auth:    auth.New(cfg, s),
+		Engine:  evaluation.NewEngine(cfg.Risk),
+		Geo:     policies.NewGeoLocator(s, cfg.Geo),
+		Rules:   policies.NewRuleManager(s),
+		Catalog: catalog.NewService(s, cfg.Runtime.CatalogTTLSeconds),
+		Devices: devices.NewService(s, auditLogger),
+		Enrollment: enrollment.NewService(s, enrollment.Config{
+			CertificateValidityDays: cfg.Enrollment.CertificateValidityDays,
+			BrowserSessionTTL:       cfg.Enrollment.BrowserSessionTTL,
+		}),
+		Gateways: gateway.NewService(s, cfg.PKIRoleGateway, gateway.Config{
+			CertificateValidityDays: cfg.Gateway.CertificateValidityDays,
+			EnrollmentTokenTTL:      cfg.Gateway.EnrollmentTokenTTL,
+		}),
+		Resources: resources.NewService(s),
+		Sessions:  sessions.NewSessionManager(s, cfg.SessionExpiry, cfg.MaxSessions),
+		Audit:     auditLogger,
+		Store:     s,
+		Cfg:       cfg,
 	}
 
-	// Initialize default policy rules
-	policies.InitDefaultRules(s)
+	policies.InitDefaultRules(s, cfg.Policies)
 
 	return pa
 }

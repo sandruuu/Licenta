@@ -1,14 +1,16 @@
 package auth
 
 import (
+	"context"
+	"crypto/ecdsa"
 	"log"
-	"os"
-	"path/filepath"
+	"strings"
 	"time"
 
 	"pdp/config"
 	"pdp/mfa"
 	"pdp/models"
+	"pdp/pki"
 	"pdp/store"
 	"pdp/util"
 )
@@ -21,7 +23,6 @@ type Service struct {
 	JWT        *JWTManager
 	OIDC       *OIDCManager
 	WebAuthn   *mfa.WebAuthnProvider // nil if WebAuthn not configured
-	Push       *mfa.PushProvider
 	Federation *FederationProvider
 	Store      *store.Store
 	Cfg        *config.Config
@@ -29,17 +30,17 @@ type Service struct {
 
 // New creates a new authentication service.
 func New(cfg *config.Config, s *store.Store) *Service {
-	// Ensure data directory exists for JWT keys
-	keysDir := cfg.DataDir
-	if keysDir == "" {
-		keysDir = "./data"
+	if cfg == nil {
+		log.Fatal("[AUTH] PDP config is required")
 	}
-	os.MkdirAll(keysDir, 0755)
+	cfg.ApplyDefaults()
 
-	jwtKeyPath := filepath.Join(keysDir, "jwt-signing.key")
-	jwtPubPath := filepath.Join(keysDir, "jwt-signing.pub")
+	jwtKey, err := loadJWTSigningKey(cfg)
+	if err != nil {
+		log.Fatalf("[AUTH] Failed to load JWT signing key: %v", err)
+	}
 
-	jwtMgr, err := NewJWTManager(jwtKeyPath, jwtPubPath, cfg.JWTExpiry, cfg.MFATokenExpiry)
+	jwtMgr, err := NewJWTManager(jwtKey, cfg.JWTExpiry, cfg.MFATokenExpiry, cfg.Runtime.OIDCEnrollmentTokenTTL)
 	if err != nil {
 		log.Fatalf("[AUTH] Failed to initialize JWT manager: %v", err)
 	}
@@ -48,13 +49,35 @@ func New(cfg *config.Config, s *store.Store) *Service {
 	return &Service{
 		Users:      NewUserManager(s),
 		JWT:        jwtMgr,
-		OIDC:       NewOIDCManager(),
+		OIDC:       NewOIDCManager(cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
 		WebAuthn:   mfa.NewWebAuthnProvider(cfg),
-		Push:       mfa.NewPushProvider(s),
-		Federation: NewFederationProvider(),
+		Federation: NewFederationProvider(cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
 		Store:      s,
 		Cfg:        cfg,
 	}
+}
+
+func loadJWTSigningKey(cfg *config.Config) (*ecdsa.PrivateKey, error) {
+	if strings.TrimSpace(cfg.PKIURL) == "" || strings.TrimSpace(cfg.PKIToken) == "" {
+		log.Printf("[AUTH] Vault Transit not configured; using in-memory JWT signing key")
+		return GenerateJWTSigningKey()
+	}
+
+	vaultCfg := pki.VaultConfig{
+		URL:            cfg.PKIURL,
+		Token:          cfg.PKIToken,
+		PKIPath:        cfg.PKIPath,
+		TransitKeyName: cfg.JWTTransitKey,
+		CAFile:         cfg.PKICAFile,
+		ServerName:     cfg.PKIServerName,
+		Timeout:        cfg.PKITimeout,
+	}
+
+	key, err := pki.RestoreOrCreateNamedKey(context.Background(), vaultCfg, cfg.JWTKeyEncryptedPath, "JWT signing")
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 // Login handles primary authentication (username + password).
@@ -109,7 +132,6 @@ func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error
 // It dispatches to the correct MFA method based on req.Method:
 //   - "totp" (default): TOTP verification
 //   - "webauthn": WebAuthn/passkey challenge — not yet implemented
-//   - "push": Push approval — not yet implemented
 func (svc *Service) VerifyMFA(req models.MFAVerifyRequest) (*models.MFAVerifyResponse, error) {
 	// Validate the temporary MFA token
 	claims, err := svc.JWT.ValidateMFAToken(req.MFAToken)
@@ -162,15 +184,6 @@ func (svc *Service) VerifyMFA(req models.MFAVerifyRequest) (*models.MFAVerifyRes
 		return &models.MFAVerifyResponse{
 			Status:  "denied",
 			Message: "WebAuthn uses the /api/mfa/webauthn/authenticate/* endpoints",
-		}, nil
-	case "push":
-		// Push uses a separate begin/status polling flow via dedicated endpoints:
-		//   POST /api/mfa/push/begin   → creates challenge, returns challenge_id
-		//   GET  /api/mfa/push/status  → polls until approved/denied/expired
-		// The generic VerifyMFA endpoint is not used for push.
-		return &models.MFAVerifyResponse{
-			Status:  "denied",
-			Message: "Push uses the /api/mfa/push/* endpoints",
 		}, nil
 	default:
 		return &models.MFAVerifyResponse{

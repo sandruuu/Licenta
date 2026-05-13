@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"pdp/events"
 	"pdp/models"
 	"pdp/pa/audit"
+	"pdp/pa/events"
 	"pdp/store"
 )
 

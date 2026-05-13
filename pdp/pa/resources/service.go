@@ -9,18 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"pdp/certs"
-	"pdp/events"
 	"pdp/models"
+	"pdp/pa/events"
 	"pdp/store"
 	"pdp/util"
 )
 
 const (
-	defaultCertMode       = "manual"
-	vaultSignedCertMode   = "vault-signed"
-	selfSignedCertMode    = "self-signed"
-	defaultCertValidity   = 365
 	clientIDRandomBytes   = 9
 	clientSecretByteCount = 20
 )
@@ -30,44 +25,21 @@ var (
 	ErrInvalidRequest     = errors.New("invalid resource request")
 	ErrResourceNotFound   = errors.New("resource not found")
 	ErrCredentialIssue    = errors.New("resource credential generation failed")
-	ErrCertificateIssue   = errors.New("resource certificate generation failed")
 )
-
-type CertificateSigner func(csrPEM []byte, validDays int, role string) ([]byte, error)
 
 type EventPublisher interface {
 	PublishCAEPEvent(eventType string, fields map[string]string)
 }
 
 type Service struct {
-	store   *store.Store
-	pkiRole string
-	signer  CertificateSigner
-	now     func() time.Time
+	store *store.Store
+	now   func() time.Time
 
 	publisher EventPublisher
 }
 
-type GenerateCertificateRequest struct {
-	ResourceID string `json:"resource_id"`
-	Domain     string `json:"domain"`
-	ValidDays  int    `json:"valid_days"`
-}
-
-type GenerateCertificateResult struct {
-	Resource *models.Resource
-	CertInfo *certs.CertInfo
-}
-
-func NewService(store *store.Store, pkiRole string) *Service {
-	return &Service{store: store, pkiRole: strings.TrimSpace(pkiRole), now: time.Now}
-}
-
-func (service *Service) SetCertificateAuthority(signer CertificateSigner) {
-	if service == nil {
-		return
-	}
-	service.signer = signer
+func NewService(store *store.Store) *Service {
+	return &Service{store: store, now: time.Now}
 }
 
 func (service *Service) SetEventPublisher(publisher EventPublisher) {
@@ -112,28 +84,9 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	resource.ID = resourceID
 	resource.CreatedAt = now
 	resource.UpdatedAt = now
-	if resource.CertMode == "" {
-		resource.CertMode = defaultCertMode
-	}
 	resource.Enabled = true
 	resource.ClientID = clientID
 	resource.ClientSecret = clientSecret
-
-	if resource.CertMode == selfSignedCertMode || resource.CertMode == vaultSignedCertMode {
-		domain := resource.CertDomain
-		if domain == "" {
-			domain = resource.Host
-		}
-		certPEM, keyPEM, err := service.signResourceCert(domain, defaultCertValidity)
-		if err != nil {
-			return nil, err
-		}
-		resource.CertPEM = string(certPEM)
-		resource.KeyPEM = string(keyPEM)
-		resource.CertMode = vaultSignedCertMode
-		resource.CertExpiry = now.Add(defaultCertValidity * 24 * time.Hour).Format(time.RFC3339)
-		resource.CertDomain = domain
-	}
 
 	service.store.SaveResource(&resource)
 	service.publishResourceEvent(resource.ID, "created", "resource_created")
@@ -164,11 +117,6 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyStringMapField(fields, "metadata", &updated.Metadata)
 	applyStringSliceField(fields, "allowed_roles", &updated.AllowedRoles)
 	applyBoolField(fields, "require_mfa", &updated.RequireMFA)
-	applyStringField(fields, "cert_mode", &updated.CertMode)
-	applyStringField(fields, "cert_pem", &updated.CertPEM)
-	applyStringField(fields, "key_pem", &updated.KeyPEM)
-	applyStringField(fields, "cert_expiry", &updated.CertExpiry)
-	applyStringField(fields, "cert_domain", &updated.CertDomain)
 	applyStringField(fields, "tenant_id", &updated.TenantID)
 	applyStringField(fields, "gateway_id", &updated.GatewayID)
 
@@ -214,36 +162,6 @@ func (service *Service) RegenerateSecret(id string) (*models.Resource, error) {
 	return resource, nil
 }
 
-func (service *Service) GenerateCertificate(req GenerateCertificateRequest) (*GenerateCertificateResult, error) {
-	resource, err := service.resourceByID(req.ResourceID)
-	if err != nil {
-		return nil, err
-	}
-	domain := strings.TrimSpace(req.Domain)
-	if domain == "" {
-		domain = resource.Host
-	}
-	validDays := req.ValidDays
-	if validDays <= 0 {
-		validDays = defaultCertValidity
-	}
-	certPEM, keyPEM, err := service.signResourceCert(domain, validDays)
-	if err != nil {
-		return nil, err
-	}
-	now := service.clock()
-	resource.CertPEM = string(certPEM)
-	resource.KeyPEM = string(keyPEM)
-	resource.CertMode = vaultSignedCertMode
-	resource.CertDomain = domain
-	resource.CertExpiry = now.Add(time.Duration(validDays) * 24 * time.Hour).Format(time.RFC3339)
-	resource.UpdatedAt = now
-	service.store.SaveResource(resource)
-
-	info, _ := certs.ParseCertPEM(resource.CertPEM)
-	return &GenerateCertificateResult{Resource: resource, CertInfo: info}, nil
-}
-
 func (service *Service) resourceByID(id string) (*models.Resource, error) {
 	if err := service.readyStore(); err != nil {
 		return nil, err
@@ -257,28 +175,6 @@ func (service *Service) resourceByID(id string) (*models.Resource, error) {
 		return nil, ErrResourceNotFound
 	}
 	return resource, nil
-}
-
-func (service *Service) signResourceCert(domain string, validDays int) ([]byte, []byte, error) {
-	if service.signer == nil {
-		return nil, nil, fmt.Errorf("%w: PKI signer not initialized", ErrCertificateIssue)
-	}
-	role := strings.TrimSpace(service.pkiRole)
-	if role == "" {
-		return nil, nil, fmt.Errorf("%w: pki_role_resource is not configured", ErrCertificateIssue)
-	}
-	if validDays <= 0 {
-		validDays = defaultCertValidity
-	}
-	csrPEM, keyPEM, err := certs.BuildResourceCSR(strings.TrimSpace(domain))
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: build resource CSR: %v", ErrCertificateIssue, err)
-	}
-	certPEM, err := service.signer(csrPEM, validDays, role)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%w: vault sign resource cert: %v", ErrCertificateIssue, err)
-	}
-	return certPEM, keyPEM, nil
 }
 
 func (service *Service) readyStore() error {

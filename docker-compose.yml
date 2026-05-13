@@ -42,17 +42,8 @@ services:
     volumes:
       - ./pdp/certs:/app/certs:ro
       - ./pdp/data:/app/data
+      - ./pdp/config.json:/app/config.json:ro
       - ./pdp/pa/dashboard/dist:/app/dashboard/dist:ro
-    environment:
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
-      - PKI_URL=${PKI_URL:-http://vault:8200}
-      - PKI_TOKEN=${PKI_TOKEN:-}
-      - PKI_PATH=${PKI_PATH:-pki_int}
-      - PKI_ROLE_DEVICE=${PKI_ROLE_DEVICE:-ztna-device}
-      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
-      - PKI_CA_FILE=${PKI_CA_FILE:-}
-      - PKI_SERVER_NAME=${PKI_SERVER_NAME:-}
-      - PKI_TIMEOUT=${PKI_TIMEOUT:-10s}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]

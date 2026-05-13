@@ -13,10 +13,11 @@ import (
 	"pdp/store"
 )
 
-const TTLSeconds = 300
+const defaultTTLSeconds = 300
 
 type Service struct {
-	store *store.Store
+	store      *store.Store
+	ttlSeconds int
 }
 
 type Snapshot struct {
@@ -35,12 +36,16 @@ type ResourceEntry struct {
 	Port       int    `json:"port"`
 }
 
-func NewService(store *store.Store) *Service {
-	return &Service{store: store}
+func NewService(store *store.Store, ttlSeconds ...int) *Service {
+	ttl := defaultTTLSeconds
+	if len(ttlSeconds) > 0 && ttlSeconds[0] > 0 {
+		ttl = ttlSeconds[0]
+	}
+	return &Service{store: store, ttlSeconds: ttl}
 }
 
 func EmptySnapshot() Snapshot {
-	return newSnapshot(nil, nil)
+	return newSnapshot(nil, nil, defaultTTLSeconds)
 }
 
 func (service *Service) BuildForRole(role string) Snapshot {
@@ -50,7 +55,7 @@ func (service *Service) BuildForRole(role string) Snapshot {
 	resources := service.store.ListResources()
 	suffixes := buildSuffixes(resources, role)
 	entries := buildResources(resources, role)
-	return newSnapshot(suffixes, entries)
+	return newSnapshot(suffixes, entries, service.ttlSeconds)
 }
 
 func (service *Service) BuildForTenantRole(tenantID, role string) Snapshot {
@@ -64,7 +69,7 @@ func (service *Service) BuildForTenantRole(tenantID, role string) Snapshot {
 	resources := service.store.ListResourcesByTenant(tenantID)
 	suffixes := buildSuffixes(resources, role)
 	entries := buildResources(resources, role)
-	return newSnapshot(suffixes, entries)
+	return newSnapshot(suffixes, entries, service.ttlSeconds)
 }
 
 func ResourceVisibleForRole(resource *models.Resource, role string) bool {
@@ -122,13 +127,16 @@ func ResourcePort(resource *models.Resource, protocol string) int {
 	}
 }
 
-func newSnapshot(suffixes []string, resources []ResourceEntry) Snapshot {
+func newSnapshot(suffixes []string, resources []ResourceEntry, ttlSeconds int) Snapshot {
+	if ttlSeconds <= 0 {
+		ttlSeconds = defaultTTLSeconds
+	}
 	version := version(suffixes, resources)
 	return Snapshot{
 		Version:     version,
 		DNSSuffixes: suffixes,
 		Resources:   resources,
-		TTLSeconds:  TTLSeconds,
+		TTLSeconds:  ttlSeconds,
 		NotModified: false,
 		PolicyEpoch: version,
 	}

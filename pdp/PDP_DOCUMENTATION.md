@@ -14,10 +14,9 @@ The runtime is a single Go process with explicit PA and PE boundaries:
 - PA admin dashboard: `pa/dashboard/`
 - PE evaluator: `pe/evaluation/`
 - PE risk scoring: `pe/risk/`
-- External/shared services: `idp/`, `mfa/`, `pki/`, `store/`, `events/`, `models/`, `config/`
+- External/shared services: `idp/`, `mfa/`, `pki/`, `store/`, `models/`, `config/`
 - Docker image entrypoint: `/app/pdp`
-- Default config file: `pdp-config.json`
-- Docker config file: `docker-pdp-config.json`
+- Single application config file: `config.json` (also copied into the Docker image as `/app/config.json`)
 
 PA calls PE through `pa.PolicyAdministrator.EvaluateAccess`. This method loads policy rules, user role, failed-attempt count, posture, and geo-risk context, then passes a normalized `evaluation.AccessContext` into `pe/evaluation.Engine.Evaluate`.
 

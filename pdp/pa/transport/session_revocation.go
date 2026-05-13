@@ -4,14 +4,11 @@ import (
 	"context"
 	"log"
 	"strings"
-	"time"
 
-	"pdp/events"
 	"pdp/models"
 	"pdp/pa"
+	"pdp/pa/events"
 )
-
-const gatewaySessionRevocationTimeout = 5 * time.Second
 
 func (s *Server) wireSessionDeleteSink() {
 	if s == nil || s.pa == nil || s.pa.Sessions == nil {
@@ -90,7 +87,7 @@ func (s *Server) revokeProvisionedGatewaySession(session *models.Session, reason
 		return
 	}
 	for _, gatewayID := range gatewayIDs {
-		ctx, cancel := context.WithTimeout(context.Background(), gatewaySessionRevocationTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), s.appConfig().Runtime.GatewayRevokeTimeout)
 		err := s.gatewayControl.RevokeSession(ctx, gatewayID, session.ID, reason)
 		cancel()
 		if err != nil {

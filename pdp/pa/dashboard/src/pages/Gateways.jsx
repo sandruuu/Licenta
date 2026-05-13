@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Ban, Copy, RefreshCw, Router, Server, Trash2 } from 'lucide-react';
 import {
-  createGateway,
   deleteGateway,
   getGateways,
   getTenants,
@@ -13,7 +12,6 @@ import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import FormField, { FormInput, FormRow, FormSelect } from '../components/ui/FormField';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -43,18 +41,11 @@ function copyText(text) {
 
 export default function Gateways() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const [gateways, setGateways] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [enrollmentInfo, setEnrollmentInfo] = useState(null);
-  const [form, setForm] = useState({
-    tenant_id: searchParams.get('tenant_id') || '',
-    name: '',
-    fqdn: '',
-  });
 
   const tenantByID = useMemo(() => {
     const result = new Map();
@@ -67,13 +58,8 @@ export default function Gateways() {
     setError('');
     try {
       const [gatewayData, tenantData] = await Promise.all([getGateways(), getTenants()]);
-      const tenantList = Array.isArray(tenantData) ? tenantData : [];
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
-      setTenants(tenantList);
-      setForm((current) => ({
-        ...current,
-        tenant_id: current.tenant_id || tenantList[0]?.id || '',
-      }));
+      setTenants(Array.isArray(tenantData) ? tenantData : []);
     } catch (e) {
       setError(e.message || 'Failed to load gateways');
     } finally {
@@ -84,44 +70,6 @@ export default function Gateways() {
   useEffect(() => {
     load();
   }, []);
-
-  const handleCreate = async (e) => {
-    e.preventDefault();
-    setError('');
-    setEnrollmentInfo(null);
-    if (!form.tenant_id) {
-      setError('Select a tenant before creating a gateway');
-      return;
-    }
-    if (!form.name.trim()) {
-      setError('Gateway name is required');
-      return;
-    }
-
-    setSaving(true);
-    try {
-      const result = await createGateway({
-        tenant_id: form.tenant_id,
-        name: form.name.trim(),
-        fqdn: form.fqdn.trim(),
-        auth_mode: 'builtin',
-      });
-      if (result?.enrollment_token) {
-        setEnrollmentInfo({
-          token: result.enrollment_token,
-          gateway_id: result.id,
-          tenant_id: result.tenant_id,
-          expires_at: result.token_expires_at,
-        });
-      }
-      setForm((current) => ({ tenant_id: current.tenant_id, name: '', fqdn: '' }));
-      await load();
-    } catch (e2) {
-      setError(e2.message || 'Failed to create gateway');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleRegenerateToken = async (id) => {
     setError('');
@@ -238,70 +186,31 @@ export default function Gateways() {
         </div>
       )}
 
-      <div className="bg-surface-card border border-border rounded-md p-5 mb-4 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-        <form onSubmit={handleCreate}>
-          <FormRow>
-            <FormField label="Tenant" htmlFor="gw-tenant">
-              <FormSelect
-                id="gw-tenant"
-                value={form.tenant_id}
-                onChange={(e) => setForm({ ...form, tenant_id: e.target.value })}
-                disabled={tenants.length === 0}
-              >
-                <option value="">Select tenant</option>
-                {tenants.map((tenant) => (
-                  <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
-                ))}
-              </FormSelect>
-            </FormField>
-            <FormField label="Name" htmlFor="gw-name">
-              <FormInput
-                id="gw-name"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="HQ Gateway"
-              />
-            </FormField>
-          </FormRow>
-          <FormField label="FQDN" htmlFor="gw-fqdn" hint="Used as the public identity and endpoint advertised by this gateway.">
-            <FormInput
-              id="gw-fqdn"
-              value={form.fqdn}
-              onChange={(e) => setForm({ ...form, fqdn: e.target.value })}
-              placeholder="gateway.example.com"
-            />
-          </FormField>
-          <Button type="submit" disabled={saving || tenants.length === 0}>
-            <Router size={14} /> {saving ? 'Creating...' : 'Create Gateway'}
-          </Button>
-        </form>
-
-        {enrollmentInfo?.token && (
-          <div className="mt-4 p-3 border border-warning/30 rounded-md bg-warning-muted">
-            <div className="text-xs font-semibold text-text-primary mb-2">Gateway Enrollment</div>
-            <div className="grid gap-2 md:grid-cols-3">
-              <div>
-                <div className="text-[10px] font-semibold uppercase text-text-muted">Gateway ID</div>
-                <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.gateway_id || '-'}</code>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase text-text-muted">Tenant ID</div>
-                <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.tenant_id || '-'}</code>
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase text-text-muted">Expires</div>
-                <code className="text-mono text-text-primary">{formatDate(enrollmentInfo.expires_at)}</code>
-              </div>
+      {enrollmentInfo?.token && (
+        <div className="bg-surface-card border border-warning/30 rounded-md p-4 mb-4 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+          <div className="text-xs font-semibold text-text-primary mb-2">Gateway Enrollment Token</div>
+          <div className="grid gap-2 md:grid-cols-3">
+            <div>
+              <div className="text-[10px] font-semibold uppercase text-text-muted">Gateway ID</div>
+              <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.gateway_id || '-'}</code>
             </div>
-            <div className="mt-3 flex gap-2 items-center">
-              <code className="text-mono flex-1 [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.token}</code>
-              <Button variant="secondary" onClick={() => copyText(enrollmentInfo.token)} className="text-xs px-2 py-1">
-                <Copy size={12} /> Copy Token
-              </Button>
+            <div>
+              <div className="text-[10px] font-semibold uppercase text-text-muted">Tenant ID</div>
+              <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.tenant_id || '-'}</code>
+            </div>
+            <div>
+              <div className="text-[10px] font-semibold uppercase text-text-muted">Expires</div>
+              <code className="text-mono text-text-primary">{formatDate(enrollmentInfo.expires_at)}</code>
             </div>
           </div>
-        )}
-      </div>
+          <div className="mt-3 flex gap-2 items-center">
+            <code className="text-mono flex-1 [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.token}</code>
+            <Button variant="secondary" onClick={() => copyText(enrollmentInfo.token)} className="text-xs px-2 py-1">
+              <Copy size={12} /> Copy Token
+            </Button>
+          </div>
+        </div>
+      )}
 
       <DataTable
         columns={columns}

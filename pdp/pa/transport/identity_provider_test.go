@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pdp/config"
 	"pdp/models"
 	"pdp/pa"
 	"pdp/store"
@@ -49,7 +50,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 	tenant2.DefaultIdPID = "idp-2"
 	dataStore.SaveTenant(tenant2)
 
-	server := &Server{pa: &pa.PolicyAdministrator{Store: dataStore}}
+	server := newIdentityProviderTestServer(dataStore)
 
 	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?tenant_id=tenant-2", nil)
 	idpCfg, tenant, err := server.resolveIdentityProvider(request, "ztna-agent")
@@ -75,11 +76,60 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 	}
 }
 
+func TestResolveIdentityProviderUsesTenantDomainForDefaultIdP(t *testing.T) {
+	dataStore := newIdentityProviderTestStore(t)
+	now := time.Now()
+	dataStore.SaveTenant(&models.Tenant{
+		ID:        "tenant-1",
+		Name:      "Tenant 1",
+		Domain:    "company-a.test",
+		Domains:   []string{"branch.company-a.test"},
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SaveIdentityProviderConfig(&models.IdentityProviderConfig{
+		ID:        "idp-1",
+		TenantID:  "tenant-1",
+		Name:      "Tenant 1 IdP",
+		Type:      "oidc",
+		Enabled:   true,
+		Issuer:    "https://idp1.example.test",
+		ClientID:  "client-1",
+		Scopes:    "openid profile email",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	tenant, _ := dataStore.GetTenant("tenant-1")
+	tenant.DefaultIdPID = "idp-1"
+	dataStore.SaveTenant(tenant)
+
+	server := newIdentityProviderTestServer(dataStore)
+
+	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=alice@company-a.test", nil)
+	idpCfg, resolvedTenant, err := server.resolveIdentityProvider(request, "ztna-agent")
+	if err != nil {
+		t.Fatalf("resolveIdentityProvider primary domain returned error: %v", err)
+	}
+	if idpCfg == nil || idpCfg.ID != "idp-1" || resolvedTenant == nil || resolvedTenant.ID != "tenant-1" {
+		t.Fatalf("tenant primary domain mismatch: idp=%+v tenant=%+v", idpCfg, resolvedTenant)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=bob@branch.company-a.test", nil)
+	idpCfg, resolvedTenant, err = server.resolveIdentityProvider(request, "ztna-agent")
+	if err != nil {
+		t.Fatalf("resolveIdentityProvider domain alias returned error: %v", err)
+	}
+	if idpCfg == nil || idpCfg.ID != "idp-1" || resolvedTenant == nil || resolvedTenant.ID != "tenant-1" {
+		t.Fatalf("tenant alias domain mismatch: idp=%+v tenant=%+v", idpCfg, resolvedTenant)
+	}
+}
+
 func TestAdminIdentityProvidersAllowMultipleAndDefaultSelection(t *testing.T) {
 	dataStore := newIdentityProviderTestStore(t)
 	now := time.Now()
 	dataStore.SaveTenant(&models.Tenant{ID: "tenant-1", Name: "Tenant 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
-	server := &Server{pa: &pa.PolicyAdministrator{Store: dataStore}}
+	server := newIdentityProviderTestServer(dataStore)
 
 	body := `{"id":"idp-1","name":"IdP 1","issuer":"https://idp1.example.test","client_id":"client-1"}`
 	recorder := httptest.NewRecorder()
@@ -115,4 +165,22 @@ func newIdentityProviderTestStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = dataStore.Close() })
 	return dataStore
+}
+
+func newIdentityProviderTestServer(dataStore *store.Store) *Server {
+	return &Server{
+		pa: &pa.PolicyAdministrator{
+			Store: dataStore,
+			Cfg: &config.Config{
+				Public: config.PublicDashboardConfig{
+					OIDCDefaultScopes: "openid profile email",
+					OIDCDefaultClaimMapping: map[string]string{
+						"username": "preferred_username",
+						"email":    "email",
+						"groups":   "groups",
+					},
+				},
+			},
+		},
+	}
 }

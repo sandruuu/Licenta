@@ -18,12 +18,13 @@ import (
 
 // VaultConfig defines connectivity/authentication for Vault PKI.
 type VaultConfig struct {
-	URL        string
-	Token      string
-	PKIPath    string
-	CAFile     string
-	ServerName string
-	Timeout    time.Duration
+	URL            string
+	Token          string
+	PKIPath        string
+	TransitKeyName string
+	CAFile         string
+	ServerName     string
+	Timeout        time.Duration
 }
 
 // VaultClient is a minimal Vault PKI API client used by the PDP signer layer.
@@ -51,9 +52,6 @@ func NewVaultClient(cfg VaultConfig) (*VaultClient, error) {
 	}
 
 	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
 
 	transport := &http.Transport{}
 	if parsed.Scheme == "https" {
@@ -77,7 +75,7 @@ func NewVaultClient(cfg VaultConfig) (*VaultClient, error) {
 
 	pkiPath := strings.Trim(strings.TrimSpace(cfg.PKIPath), "/")
 	if pkiPath == "" {
-		pkiPath = "pki_int"
+		return nil, fmt.Errorf("vault PKI path is required")
 	}
 
 	return &VaultClient{

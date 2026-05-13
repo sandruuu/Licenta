@@ -23,8 +23,12 @@ import (
 // It caches OIDC discovery metadata per issuer and provides
 // methods to generate authorization URLs and exchange codes.
 type FederationProvider struct {
-	mu    sync.RWMutex
-	cache map[string]*discoveryCache
+	mu                  sync.RWMutex
+	cache               map[string]*discoveryCache
+	defaultScopes       string
+	defaultClaimMapping map[string]string
+	cacheTTL            time.Duration
+	httpTimeout         time.Duration
 }
 
 type discoveryCache struct {
@@ -74,9 +78,21 @@ type FederatedClaims struct {
 }
 
 // NewFederationProvider creates a new provider with an empty discovery cache.
-func NewFederationProvider() *FederationProvider {
+func NewFederationProvider(defaultScopes string, defaultClaimMapping map[string]string, durations ...time.Duration) *FederationProvider {
+	cacheTTL := 6 * time.Hour
+	httpTimeout := 10 * time.Second
+	if len(durations) > 0 && durations[0] > 0 {
+		cacheTTL = durations[0]
+	}
+	if len(durations) > 1 && durations[1] > 0 {
+		httpTimeout = durations[1]
+	}
 	return &FederationProvider{
-		cache: make(map[string]*discoveryCache),
+		cache:               make(map[string]*discoveryCache),
+		defaultScopes:       strings.TrimSpace(defaultScopes),
+		defaultClaimMapping: copyClaimMapping(defaultClaimMapping),
+		cacheTTL:            cacheTTL,
+		httpTimeout:         httpTimeout,
 	}
 }
 
@@ -84,14 +100,14 @@ func NewFederationProvider() *FederationProvider {
 // Results are cached for 6 hours.
 func (fp *FederationProvider) Discover(issuer string) (*OIDCDiscovery, error) {
 	fp.mu.RLock()
-	if cached, ok := fp.cache[issuer]; ok && time.Since(cached.fetchedAt) < 6*time.Hour {
+	if cached, ok := fp.cache[issuer]; ok && time.Since(cached.fetchedAt) < fp.cacheTTL {
 		fp.mu.RUnlock()
 		return cached.metadata, nil
 	}
 	fp.mu.RUnlock()
 
 	discoveryURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: fp.httpTimeout}
 	resp, err := client.Get(discoveryURL)
 	if err != nil {
 		return nil, fmt.Errorf("fetch discovery document: %w", err)
@@ -149,7 +165,7 @@ func (fp *FederationProvider) GenerateExternalAuthURL(fedCfg *models.FederationC
 
 	scopes := fedCfg.Scopes
 	if scopes == "" {
-		scopes = "openid profile email"
+		scopes = fp.defaultScopes
 	}
 
 	params := url.Values{
@@ -185,7 +201,7 @@ func (fp *FederationProvider) ExchangeExternalCode(fedCfg *models.FederationConf
 		data.Set("client_secret", fedCfg.ClientSecret)
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: fp.httpTimeout}
 	resp, err := client.PostForm(disc.TokenEndpoint, data)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange request: %w", err)
@@ -229,12 +245,7 @@ func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map
 		return nil, fmt.Errorf("unexpected claims type")
 	}
 
-	// Default mappings
-	mapping := map[string]string{
-		"username": "preferred_username",
-		"email":    "email",
-		"groups":   "groups", // default OIDC groups claim
-	}
+	mapping := copyClaimMapping(fp.defaultClaimMapping)
 	// Override with user-configured mappings
 	for k, v := range claimMapping {
 		if v != "" {
@@ -279,6 +290,16 @@ func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map
 		claims.Subject, claims.Username, claims.Email, claims.Groups)
 
 	return claims, nil
+}
+
+func copyClaimMapping(source map[string]string) map[string]string {
+	mapping := make(map[string]string, len(source))
+	for key, value := range source {
+		if strings.TrimSpace(value) != "" {
+			mapping[key] = strings.TrimSpace(value)
+		}
+	}
+	return mapping
 }
 
 // extractGroups extracts group names from a JWT claim value. Handles both

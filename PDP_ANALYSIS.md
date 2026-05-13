@@ -72,7 +72,7 @@ Additional thesis-described subsystems:
 |---|---|---|---|
 | Vault PKI | Sign CSR, fetch CA PEM, revoke certificate, per-role signing (device/gateway/resource) | [`pdp/pki/vault.go`](pdp/pki/vault.go:1) | ✅ Complete |
 | SQLite Store | All entities persisted, WAL mode, tamper-evident audit chain | [`pdp/store/store.go`](pdp/store/store.go:1890) | ✅ Complete |
-| Event Broker | In-memory pub/sub, standard topics (revocation, policy, resources, session, push, health) | [`pdp/events/broker.go`](pdp/events/broker.go:200) | ✅ Complete |
+| Event Broker | In-memory pub/sub, standard topics (revocation, policy, resources, session, push, health) | [`pdp/pa/events/broker.go`](pdp/pa/events/broker.go:200) | ✅ Complete |
 | Metrics | Prometheus text-format exporter (stdlib-only, no dependencies) | [`pdp/metrics/metrics.go`](pdp/metrics/metrics.go:149) | ✅ Complete |
 | Admin Dashboard | React 19 + Vite 7 + Tailwind CSS v4, 11 pages, full CRUD for all entities | [`pdp/pa/dashboard/src/`](pdp/pa/dashboard/src/) | ✅ Complete |
 
@@ -226,7 +226,7 @@ The PDP codebase is architecturally complete but has areas where the thesis is m
 | Step | Description | Files Affected | Effort |
 |---|---|---|---|
 | P4.1 | Add `EvaluateSession` method to PA that re-runs PE for an active session | [`pdp/pa/policy_evaluation.go`](pdp/pa/policy_evaluation.go:43) | Medium |
-| P4.2 | Wire CAEP events (health.changed, policy.updated, resources.updated) to trigger session re-evaluation | [`pdp/events/broker.go`](pdp/events/broker.go:200), [`pdp/pa/sessions/manager.go`](pdp/pa/sessions/manager.go:168) | Medium |
+| P4.2 | Wire CAEP events (health.changed, policy.updated, resources.updated) to trigger session re-evaluation | [`pdp/pa/events/broker.go`](pdp/pa/events/broker.go:200), [`pdp/pa/sessions/manager.go`](pdp/pa/sessions/manager.go:168) | Medium |
 | P4.3 | If session no longer passes evaluation, revoke and notify gateway via control stream | [`pdp/pa/gateway/control.go`](pdp/pa/gateway/control.go:295) | Medium |
 | P4.4 | Dashboard: CAEP event log viewer | [`pdp/pa/dashboard/src/pages/Audit.jsx`](pdp/pa/dashboard/src/pages/Audit.jsx:69) | Small |
 | P4.5 | Integration test: device health drops → session revoked → gateway notified | Tests | Large |

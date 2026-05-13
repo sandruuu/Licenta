@@ -62,20 +62,24 @@ type WebAuthnProvider struct {
 
 	mu       sync.Mutex
 	sessions map[string]*challengeSession // key = userID + ceremony type
+
+	challengeTTL    time.Duration
+	cleanupInterval time.Duration
 }
 
 // NewWebAuthnProvider creates a WebAuthn relying party.
 // Returns nil if WebAuthn is not configured (RPID is empty).
 func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
+	if cfg == nil {
+		return nil
+	}
+	cfg.ApplyDefaults()
 	if cfg.WebAuthnRPID == "" {
 		log.Println("[MFA] WebAuthn disabled (webauthn_rp_id not configured)")
 		return nil
 	}
 
 	rpName := cfg.WebAuthnRPName
-	if rpName == "" {
-		rpName = "ZTNA PDP"
-	}
 
 	var origins []string
 	for _, o := range strings.Split(cfg.WebAuthnRPOrigins, ",") {
@@ -83,9 +87,6 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 		if o != "" {
 			origins = append(origins, o)
 		}
-	}
-	if len(origins) == 0 {
-		origins = []string{fmt.Sprintf("https://%s", cfg.WebAuthnRPID)}
 	}
 
 	wa, err := webauthn.New(&webauthn.Config{
@@ -99,8 +100,10 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 	}
 
 	p := &WebAuthnProvider{
-		wa:       wa,
-		sessions: make(map[string]*challengeSession),
+		wa:              wa,
+		sessions:        make(map[string]*challengeSession),
+		challengeTTL:    cfg.Runtime.WebAuthnChallengeTTL,
+		cleanupInterval: cfg.Runtime.WebAuthnCleanupInterval,
 	}
 
 	// Background cleanup of expired challenge sessions
@@ -226,7 +229,7 @@ func (p *WebAuthnProvider) loadSession(userID, ceremony string) (*webauthn.Sessi
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s, ok := p.sessions[sessionKey(userID, ceremony)]
-	if !ok || time.Since(s.CreatedAt) > 5*time.Minute {
+	if !ok || time.Since(s.CreatedAt) > p.challengeTTL {
 		return nil, false
 	}
 	return s.Data, true
@@ -239,12 +242,12 @@ func (p *WebAuthnProvider) deleteSession(userID, ceremony string) {
 }
 
 func (p *WebAuthnProvider) cleanupLoop() {
-	ticker := time.NewTicker(2 * time.Minute)
+	ticker := time.NewTicker(p.cleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		p.mu.Lock()
 		for k, s := range p.sessions {
-			if time.Since(s.CreatedAt) > 5*time.Minute {
+			if time.Since(s.CreatedAt) > p.challengeTTL {
 				delete(p.sessions, k)
 			}
 		}

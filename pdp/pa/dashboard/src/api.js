@@ -151,13 +151,6 @@ export async function deleteResource(id) {
   });
 }
 
-export async function generateCert(resourceId, domain, validDays) {
-  return apiFetch('/admin/resources-generate-cert', {
-    method: 'POST',
-    body: JSON.stringify({ resource_id: resourceId, domain, valid_days: validDays }),
-  });
-}
-
 export async function regenerateSecret(resourceId) {
   return apiFetch(`/admin/resources-regenerate-secret/${resourceId}`, {
     method: 'POST',

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"pdp/config"
 	"pdp/models"
 	perisk "pdp/pe/risk"
 )
@@ -28,10 +29,17 @@ type AccessContext struct {
 // Engine is the Policy Engine. It evaluates normalized access context and
 // returns a deterministic decision without creating sessions, provisioning
 // Gateways, signing certificates, or writing audit records.
-type Engine struct{}
+type Engine struct {
+	riskConfig config.RiskConfig
+}
 
-func NewEngine() *Engine {
-	return &Engine{}
+func NewEngine(riskConfigs ...config.RiskConfig) *Engine {
+	cfg := &config.Config{}
+	if len(riskConfigs) > 0 {
+		cfg.Risk = riskConfigs[0]
+	}
+	cfg.ApplyDefaults()
+	return &Engine{riskConfig: cfg.Risk}
 }
 
 // Evaluate processes a normalized access context against enabled policy rules.
@@ -58,7 +66,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 		AnomalyAlerts:      req.AnomalyAlerts,
 		AnomalyScore:       req.AnomalyScore,
 	}
-	riskScore := perisk.CalculateRiskScore(riskCtx)
+	riskScore := perisk.CalculateRiskScore(riskCtx, e.riskConfig)
 
 	for _, rule := range ctx.Rules {
 		if rule == nil || !rule.Enabled {
@@ -244,14 +252,14 @@ func matchesRuleScope(rule *models.PolicyRule, req models.AccessRequest) bool {
 
 func (e *Engine) defaultDecision(req models.AccessRequest, riskScore int) *models.AccessDecision {
 	switch {
-	case riskScore >= 80:
+	case riskScore >= e.riskConfig.DefaultDenyRiskThreshold:
 		log.Printf("[PE] Default decision: DENY (risk=%d)", riskScore)
 		return &models.AccessDecision{
 			Decision:  "deny",
 			Reason:    fmt.Sprintf("High risk score (%d/100) - access denied by default policy", riskScore),
 			RiskScore: riskScore,
 		}
-	case riskScore >= 50:
+	case riskScore >= e.riskConfig.DefaultMFARiskThreshold:
 		log.Printf("[PE] Default decision: MFA_REQUIRED (risk=%d)", riskScore)
 		return &models.AccessDecision{
 			Decision:  "mfa_required",

@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -83,8 +82,11 @@ func TestEnrollmentTokenCanBindUserSID(t *testing.T) {
 
 func newTestJWTManager(t *testing.T) *JWTManager {
 	t.Helper()
-	dir := t.TempDir()
-	manager, err := NewJWTManager(filepath.Join(dir, "jwt.key"), filepath.Join(dir, "jwt.pub"), time.Hour, time.Minute)
+	key, err := GenerateJWTSigningKey()
+	if err != nil {
+		t.Fatalf("GenerateJWTSigningKey returned error: %v", err)
+	}
+	manager, err := NewJWTManager(key, time.Hour, time.Minute)
 	if err != nil {
 		t.Fatalf("NewJWTManager returned error: %v", err)
 	}

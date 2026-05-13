@@ -9,9 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -27,12 +25,13 @@ const (
 
 // JWTManager handles creation and validation of JSON Web Tokens using ES256 (ECDSA P-256).
 type JWTManager struct {
-	privateKey     *ecdsa.PrivateKey
-	publicKey      *ecdsa.PublicKey
-	keyID          string // kid for JWKS
-	tokenExpiry    time.Duration
-	mfaTokenExpiry time.Duration
-	issuer         string
+	privateKey            *ecdsa.PrivateKey
+	publicKey             *ecdsa.PublicKey
+	keyID                 string // kid for JWKS
+	tokenExpiry           time.Duration
+	mfaTokenExpiry        time.Duration
+	enrollmentTokenExpiry time.Duration
+	issuer                string
 }
 
 // CustomClaims extends the standard JWT claims with application-specific fields
@@ -58,7 +57,7 @@ type MFAClaims struct {
 	UserID     string   `json:"user_id"`
 	Username   string   `json:"username"`
 	Role       string   `json:"role"`
-	MFAMethods []string `json:"mfa_methods"` // configured methods: "totp", "webauthn", "push"
+	MFAMethods []string `json:"mfa_methods"` // configured methods: "totp", "webauthn"
 	Purpose    string   `json:"purpose"`     // always "mfa_verification"
 }
 
@@ -78,52 +77,41 @@ type JWKS struct {
 	Keys []JWK `json:"keys"`
 }
 
-// NewJWTManager creates a new JWT manager with ES256 signing.
-// If keyPath/pubPath exist, loads keys from disk; otherwise generates and saves them.
-func NewJWTManager(keyPath, pubPath string, tokenExpiry, mfaTokenExpiry time.Duration) (*JWTManager, error) {
-	var privKey *ecdsa.PrivateKey
-	var err error
-
-	keyData, keyErr := os.ReadFile(keyPath)
-	if keyErr == nil {
-		privKey, err = parseECPrivateKey(keyData)
-		if err != nil {
-			return nil, fmt.Errorf("parse JWT signing key: %w", err)
-		}
-	} else {
-		privKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("generate JWT signing key: %w", err)
-		}
-		keyPEM, err := marshalECPrivateKey(privKey)
-		if err != nil {
-			return nil, err
-		}
-		pubPEM, err := marshalECPublicKey(&privKey.PublicKey)
-		if err != nil {
-			return nil, err
-		}
-		if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-			return nil, fmt.Errorf("save JWT signing key: %w", err)
-		}
-		if err := os.WriteFile(pubPath, pubPEM, 0644); err != nil {
-			return nil, fmt.Errorf("save JWT public key: %w", err)
-		}
+// NewJWTManager creates a new JWT manager with an in-memory ES256 signing key.
+func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry, mfaTokenExpiry time.Duration, enrollmentTokenExpiry ...time.Duration) (*JWTManager, error) {
+	if privKey == nil {
+		return nil, fmt.Errorf("JWT signing key is nil")
 	}
-
+	enrollmentTTL := EnrollmentTokenTTL
+	if len(enrollmentTokenExpiry) > 0 && enrollmentTokenExpiry[0] > 0 {
+		enrollmentTTL = enrollmentTokenExpiry[0]
+	}
 	// Compute key ID from public key thumbprint (SHA-256)
-	pubDER, _ := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	pubDER, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshal JWT public key: %w", err)
+	}
 	thumbprint := sha256.Sum256(pubDER)
 	kid := hex.EncodeToString(thumbprint[:8])
 
 	return &JWTManager{
-		privateKey:     privKey,
-		publicKey:      &privKey.PublicKey,
-		keyID:          kid,
-		tokenExpiry:    tokenExpiry,
-		mfaTokenExpiry: mfaTokenExpiry,
-		issuer:         "ztna-pdp",
+		privateKey:            privKey,
+		publicKey:             &privKey.PublicKey,
+		keyID:                 kid,
+		tokenExpiry:           tokenExpiry,
+		mfaTokenExpiry:        mfaTokenExpiry,
+		enrollmentTokenExpiry: enrollmentTTL,
+		issuer:                "ztna-pdp",
 	}, nil
+}
+
+// GenerateJWTSigningKey creates a new ECDSA P-256 signing key for JWTs.
+func GenerateJWTSigningKey() (*ecdsa.PrivateKey, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate JWT signing key: %w", err)
+	}
+	return key, nil
 }
 
 // GenerateAuthToken creates a PA API authentication JWT.
@@ -195,7 +183,7 @@ func (j *JWTManager) GenerateEnrollmentTokenForUserSID(userID, username, role, d
 			Subject:   userID,
 			Audience:  jwt.ClaimStrings{EnrollmentTokenAudience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(EnrollmentTokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(j.enrollmentTokenExpiry)),
 			NotBefore: jwt.NewNumericDate(now),
 			ID:        jti,
 		},
@@ -217,7 +205,7 @@ func (j *JWTManager) GenerateEnrollmentTokenForUserSID(userID, username, role, d
 	if err != nil {
 		return "", 0, fmt.Errorf("sign enrollment token: %w", err)
 	}
-	return signed, EnrollmentTokenTTL, nil
+	return signed, j.enrollmentTokenExpiry, nil
 }
 
 // ParseAuthTokenForAudience validates the JWT and additionally requires that
@@ -383,40 +371,4 @@ func generateJTI() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-func parseECPrivateKey(pemData []byte) (*ecdsa.PrivateKey, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM")
-	}
-	key, err := x509.ParseECPrivateKey(block.Bytes)
-	if err != nil {
-		pkcs8Key, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err2 != nil {
-			return nil, fmt.Errorf("parse EC key: %w", err)
-		}
-		ecKey, ok := pkcs8Key.(*ecdsa.PrivateKey)
-		if !ok {
-			return nil, fmt.Errorf("key is not ECDSA")
-		}
-		return ecKey, nil
-	}
-	return key, nil
-}
-
-func marshalECPrivateKey(key *ecdsa.PrivateKey) ([]byte, error) {
-	der, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("marshal EC private key: %w", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), nil
-}
-
-func marshalECPublicKey(key *ecdsa.PublicKey) ([]byte, error) {
-	der, err := x509.MarshalPKIXPublicKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("marshal EC public key: %w", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 }
