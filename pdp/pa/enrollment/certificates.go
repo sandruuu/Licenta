@@ -38,6 +38,13 @@ func (s *Service) ApprovePendingEnrollment(enrollmentID, approvedBy string) (*mo
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
+	csr, _, err := ParseCSR(csrPEM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
+	if err := ValidateCSRDeviceIdentity(csr, enrollment.DeviceID); err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
 	if enrollment.PublicKeyFingerprint != "" && enrollment.PublicKeyFingerprint != csrFingerprint {
 		return nil, nil, fmt.Errorf("%w: public key fingerprint does not match enrollment", ErrForbidden)
 	}
@@ -105,12 +112,15 @@ func (s *Service) IssueDeviceCertificate(req models.EnrollmentRequest, enrollmen
 	if err != nil {
 		return nil, nil, false, err
 	}
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if err := ValidateCSRDeviceIdentity(csr, deviceID); err != nil {
+		return nil, nil, false, err
+	}
 	if err := ValidateCSREmailIdentity(csr, username); err != nil {
 		return nil, nil, false, err
 	}
 
 	component := NormalizeComponent(req.Component)
-	deviceID := strings.TrimSpace(req.DeviceID)
 	if existing, found := s.store.GetDeviceEnrollmentByComponent(deviceID, component); found {
 		if existing.Status == "approved" && existing.ExpiresAt.After(time.Now()) && existing.CertPEM != "" {
 			if existing.PublicKeyFingerprint == csrFingerprint {
@@ -200,6 +210,13 @@ func (s *Service) RenewDeviceCertificate(req models.EnrollmentRequest, authentic
 	}
 	csrFingerprint, err := ComputeCSRFingerprint(csrPEM)
 	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
+	csr, _, err := ParseCSR(csrPEM)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
+	}
+	if err := ValidateCSRDeviceIdentity(csr, deviceID); err != nil {
 		return nil, nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
 

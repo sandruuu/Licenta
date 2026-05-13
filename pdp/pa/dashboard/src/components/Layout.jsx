@@ -5,7 +5,6 @@ import {
   Server,
   Router,
   Shield,
-  Users,
   Radio,
   Activity,
   FileText,
@@ -15,11 +14,10 @@ import {
 
 const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/dashboard/tenants', icon: Building2, label: 'Tenants' },
+  { to: '/dashboard/organizations', icon: Building2, label: 'Organizations' },
   { to: '/dashboard/resources', icon: Server, label: 'Resources' },
   { to: '/dashboard/gateways', icon: Router, label: 'Gateways' },
   { to: '/dashboard/policies', icon: Shield, label: 'Policies' },
-  { to: '/dashboard/users', icon: Users, label: 'Users' },
   { to: '/dashboard/sessions', icon: Radio, label: 'Sessions' },
   { to: '/dashboard/device-health', icon: Activity, label: 'Device Health' },
   { to: '/dashboard/audit', icon: FileText, label: 'Audit Log' },

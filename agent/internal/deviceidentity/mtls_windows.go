@@ -72,14 +72,12 @@ func machineStoreCertificates(name string) ([]*x509.Certificate, error) {
 		}
 		current = next
 		if current.EncodedCert == nil || current.Length == 0 {
-			_ = windows.CertFreeCertificateContext(current)
-			return nil, fmt.Errorf("certificate store %s returned an empty certificate context", name)
+			continue
 		}
 		der := unsafe.Slice(current.EncodedCert, int(current.Length))
 		cert, err := x509.ParseCertificate(append([]byte(nil), der...))
 		if err != nil {
-			_ = windows.CertFreeCertificateContext(current)
-			return nil, fmt.Errorf("parse certificate from LocalMachine\\%s: %w", name, err)
+			continue
 		}
 		certs = append(certs, cert)
 	}

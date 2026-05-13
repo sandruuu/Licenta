@@ -1,14 +1,21 @@
 export const scopeOptions = [
-  { value: 'global', label: 'Global' },
-  { value: 'tenant', label: 'Tenant' },
+  { value: 'tenant', label: 'Organization' },
   { value: 'gateway', label: 'Gateway' },
   { value: 'resource', label: 'Resource' },
+];
+
+export const assignmentFilterOptions = [
+  { value: 'all', label: 'All assignments' },
+  { value: 'unassigned', label: 'Unassigned' },
+  ...scopeOptions,
 ];
 
 export const basePolicyConditions = {
   min_health_score: 0,
   required_checks: '',
   allowed_roles: '',
+  allowed_users: '',
+  allowed_groups: '',
   allowed_ips: '',
   allowed_time_start: '',
   allowed_time_end: '',
@@ -27,6 +34,8 @@ export function conditionsToForm(conditions = {}) {
     min_health_score: conditions.min_health_score ?? 0,
     required_checks: (conditions.required_checks || []).join(', '),
     allowed_roles: (conditions.allowed_roles || []).join(', '),
+    allowed_users: (conditions.allowed_users || []).join(', '),
+    allowed_groups: (conditions.allowed_groups || []).join(', '),
     allowed_ips: (conditions.allowed_ips || []).join(', '),
     allowed_time_start: conditions.allowed_time_start || '',
     allowed_time_end: conditions.allowed_time_end || '',
@@ -56,6 +65,29 @@ export function ruleScopeMode(rule) {
   if (rule.scope === 'resource') return 'resource';
   if (rule.scope === 'gateway') return 'gateway';
   return rule.tenant_id ? 'tenant' : 'global';
+}
+
+export function assignmentScopeMode(assignment) {
+  if (!assignment) return 'unassigned';
+  if (assignment.resource_id) return 'resource';
+  if (assignment.gateway_id) return 'gateway';
+  return assignment.tenant_id ? 'tenant' : 'unassigned';
+}
+
+export function assignmentScopeLabel(assignment) {
+  const mode = assignmentScopeMode(assignment);
+  if (mode === 'tenant') return 'Organization';
+  if (mode === 'gateway') return 'Gateway';
+  if (mode === 'resource') return 'Resource';
+  return 'Unassigned';
+}
+
+export function assignmentScopeVariant(assignment) {
+  const mode = assignmentScopeMode(assignment);
+  if (mode === 'resource') return 'info';
+  if (mode === 'gateway') return 'accent';
+  if (mode === 'tenant') return 'success';
+  return 'neutral';
 }
 
 export function scopeLabel(rule) {

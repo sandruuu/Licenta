@@ -19,8 +19,10 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 		}
 	}
 
+	var user *models.User
 	if pa.Store != nil {
-		if user, ok := pa.Store.GetUser(req.UserID); ok && user != nil {
+		if foundUser, ok := pa.Store.GetUser(req.UserID); ok && foundUser != nil {
+			user = foundUser
 			if req.TenantID == "" {
 				req.TenantID = user.TenantID
 			} else if user.TenantID != "" && !strings.EqualFold(req.TenantID, user.TenantID) {
@@ -53,8 +55,11 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 			ctx.Rules = pa.Store.ListPolicyRules()
 		}
 		ctx.FailedAttempts = pa.Store.GetFailedAttempts(req.Username)
-		if user, ok := pa.Store.GetUser(req.UserID); ok && user != nil {
+		if user != nil {
 			ctx.UserRole = user.Role
+			if decision := pa.populateDirectoryContext(&ctx, user); decision != nil {
+				return decision
+			}
 		}
 	}
 

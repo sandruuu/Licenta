@@ -181,6 +181,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)                     // JWKS public key endpoint
 	s.mux.HandleFunc("/.well-known/openid-configuration", s.handleOIDCDiscovery) // OIDC discovery doc
 
+	// SCIM inbound provisioning endpoints (Bearer token per tenant IdP)
+	s.mux.HandleFunc("/scim/v2/", s.handleSCIM)
+
 	// ─────────────────────────────────────────────
 	// ─────────────────────────────────────────────
 
@@ -213,9 +216,13 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/tenants/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminTenantByID)))
 	s.mux.Handle("/api/admin/rules", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminRules)))
 	s.mux.Handle("/api/admin/rules/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminRuleByID)))
+	s.mux.Handle("/api/admin/policy-assignments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignments)))
+	s.mux.Handle("/api/admin/policy-assignments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignmentByID)))
 	s.mux.Handle("/api/admin/sessions", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessions)))
 	s.mux.Handle("/api/admin/sessions/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessionByID)))
 	s.mux.Handle("/api/admin/audit", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAudit)))
+	s.mux.Handle("/api/admin/directory/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDirectoryUsers)))
+	s.mux.Handle("/api/admin/directory/groups", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDirectoryGroups)))
 
 	// ─────────────────────────────────────────────
 	// Device enrollment endpoints

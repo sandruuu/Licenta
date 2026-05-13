@@ -128,6 +128,37 @@ func TestServiceCompleteESTEnrollmentValidatesTokenAndCSRBinding(t *testing.T) {
 	}
 }
 
+func TestServiceCompleteESTEnrollmentAcceptsDeviceURISAN(t *testing.T) {
+	dataStore := newEnrollmentTestStore(t)
+	service := NewService(dataStore)
+	authority := newTestCertificateAuthority(t)
+	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
+		return "device-role"
+	})
+
+	deviceID := "2050b1864ca3647164fea13ac86d759e7f8bfb5ede15e202cc0869aa12671972"
+	request := models.EnrollmentRequest{
+		DeviceID:  deviceID,
+		Component: "endpoint",
+		CSRPEM:    testEnrollmentCSRPEMWithDeviceURI(t, testEnrollmentKey(t), "ztna-device-2050b1864ca3647164fea13ac86d759e7f8bfb5ede15e202", deviceID, "alice@example.com"),
+	}
+	identity := ESTEnrollmentIdentity{
+		DeviceID:       deviceID,
+		UserID:         "user-1",
+		Username:       "alice@example.com",
+		TokenID:        "token-uri-san",
+		TokenExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+
+	issued, err := service.CompleteESTEnrollment(request, identity)
+	if err != nil {
+		t.Fatalf("CompleteESTEnrollment returned error: %v", err)
+	}
+	if issued.Enrollment.DeviceID != deviceID {
+		t.Fatalf("enrollment device_id = %q, want %q", issued.Enrollment.DeviceID, deviceID)
+	}
+}
+
 func TestServiceIssueEnrollmentTokenGeneratesNonceAndIncludesOptionalFields(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
 	service := NewService(dataStore)

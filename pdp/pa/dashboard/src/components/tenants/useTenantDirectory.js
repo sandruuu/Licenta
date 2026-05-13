@@ -59,7 +59,7 @@ function useTenantDirectory() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this tenant? All associated gateways, resources, and policies will be orphaned.')) return;
+    if (!confirm('Delete this organization? All associated gateways, resources, and policies will be orphaned.')) return;
     await deleteTenant(id);
     load();
   };

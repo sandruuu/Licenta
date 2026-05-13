@@ -1,55 +1,32 @@
 import FormField, { FormCheckbox, FormInput, FormSelect } from '../ui/FormField';
-import { scopeOptions } from './policyHelpers';
+import { splitList } from './policyHelpers';
 
 export default function PolicyForm({
   form,
   setForm,
-  tenants,
-  gateways,
-  resources,
-  onScopeChange,
-  onTenantChange,
-  onGatewayChange,
-  onResourceChange,
+  directoryUsers = [],
+  directoryGroups = [],
   onConditionChange,
 }) {
-  const scopeMode = form.scope_mode || 'tenant';
+  const selectListValue = (key) => splitList(form.conditions?.[key]);
+  const updateMultiCondition = (key, event) => {
+    const values = Array.from(event.target.selectedOptions).map((option) => option.value);
+    onConditionChange(key, values.join(', '));
+  };
+  const directoryUserLabel = (user) => {
+    const name = user.display_name || user.user_name || user.email || user.id;
+    return user.email && user.email !== name ? `${name} (${user.email})` : name;
+  };
+  const directoryGroupLabel = (group) => {
+    const count = Array.isArray(group.member_ids) ? group.member_ids.length : 0;
+    return count > 0 ? `${group.display_name || group.id} (${count})` : group.display_name || group.id;
+  };
 
   return (
     <>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-3">
-        <FormField label="Scope" className="mb-0">
-          <FormSelect value={scopeMode} onChange={(e) => onScopeChange(e.target.value)}>
-            {scopeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </FormSelect>
-        </FormField>
-        {scopeMode !== 'global' && (
-          <FormField label="Tenant" className="mb-0">
-            <FormSelect value={form.tenant_id || ''} onChange={(e) => onTenantChange(e.target.value)}>
-              <option value="">Select tenant</option>
-              {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
-            </FormSelect>
-          </FormField>
-        )}
-        {(scopeMode === 'gateway' || scopeMode === 'resource') && (
-          <FormField label="Gateway" className="mb-0">
-            <FormSelect value={form.gateway_id || ''} onChange={(e) => onGatewayChange(e.target.value)}>
-              <option value="">Select gateway</option>
-              {gateways.map((gateway) => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
-            </FormSelect>
-          </FormField>
-        )}
-        {scopeMode === 'resource' && (
-          <FormField label="Resource" className="mb-0">
-            <FormSelect value={form.resource_id || ''} onChange={(e) => onResourceChange(e.target.value)}>
-              <option value="">Select resource</option>
-              {resources.map((resource) => <option key={resource.id} value={resource.id}>{resource.name}</option>)}
-            </FormSelect>
-          </FormField>
-        )}
-
         <FormField label="Name" className="mb-0 md:col-span-2">
-          <FormInput value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Allow finance RDP" />
+          <FormInput value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Require MFA for administrators" />
         </FormField>
         <FormField label="Priority" className="mb-0">
           <FormInput type="number" value={form.priority ?? 100} onChange={(e) => setForm({ ...form, priority: e.target.value })} />
@@ -87,6 +64,36 @@ export default function PolicyForm({
         <FormField label="Allowed Roles" className="mb-0 md:col-span-2">
           <FormInput value={form.conditions?.allowed_roles || ''} onChange={(e) => onConditionChange('allowed_roles', e.target.value)} placeholder="admin, user" />
         </FormField>
+        <FormField label="SCIM Groups" className="mb-0 md:col-span-2">
+          <FormSelect
+            multiple
+            value={selectListValue('allowed_groups')}
+            onChange={(e) => updateMultiCondition('allowed_groups', e)}
+            className="min-h-[96px]"
+          >
+            {directoryGroups.length === 0 && <option value="" disabled>No synced groups</option>}
+            {directoryGroups.map((group) => (
+              <option key={`${group.idp_id}:${group.id}`} value={group.id}>
+                {directoryGroupLabel(group)}
+              </option>
+            ))}
+          </FormSelect>
+        </FormField>
+        <FormField label="SCIM Users" className="mb-0 md:col-span-2">
+          <FormSelect
+            multiple
+            value={selectListValue('allowed_users')}
+            onChange={(e) => updateMultiCondition('allowed_users', e)}
+            className="min-h-[96px]"
+          >
+            {directoryUsers.length === 0 && <option value="" disabled>No synced users</option>}
+            {directoryUsers.map((user) => (
+              <option key={`${user.idp_id}:${user.id}`} value={user.id}>
+                {directoryUserLabel(user)}
+              </option>
+            ))}
+          </FormSelect>
+        </FormField>
         <FormField label="Allowed IPs" className="mb-0 md:col-span-2">
           <FormInput value={form.conditions?.allowed_ips || ''} onChange={(e) => onConditionChange('allowed_ips', e.target.value)} placeholder="10.0.0.0/8, 192.168.1.0/24" />
         </FormField>
@@ -99,11 +106,9 @@ export default function PolicyForm({
         <FormField label="Target Ports" className="mb-0 md:col-span-2">
           <FormInput value={form.conditions?.target_ports || ''} onChange={(e) => onConditionChange('target_ports', e.target.value)} placeholder="22, 443, 3389" />
         </FormField>
-        {scopeMode !== 'resource' && (
-          <FormField label="Target Resources" className="mb-0 md:col-span-2">
-            <FormInput value={form.conditions?.target_resources || ''} onChange={(e) => onConditionChange('target_resources', e.target.value)} placeholder="resource IDs, comma-separated" />
-          </FormField>
-        )}
+        <FormField label="Target Resources" className="mb-0 md:col-span-2">
+          <FormInput value={form.conditions?.target_resources || ''} onChange={(e) => onConditionChange('target_resources', e.target.value)} placeholder="Optional resource IDs, comma-separated" />
+        </FormField>
       </div>
     </>
   );

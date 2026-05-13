@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
@@ -126,15 +127,33 @@ func ValidateKeyProof(csr *x509.CertificateRequest, deviceID, fingerprint, keyPr
 		return fmt.Errorf("CSR public key is not P-256")
 	}
 	signature, err := hex.DecodeString(keyProof)
-	if err != nil || len(signature) < 60 {
+	if err != nil {
 		return fmt.Errorf("invalid key proof format")
 	}
 	challenge := fmt.Sprintf("ztna-est-enrollment:%s:%s", deviceID, fingerprint)
 	hash := sha256.Sum256([]byte(challenge))
-	r := new(big.Int).SetBytes(signature[:len(signature)/2])
-	s := new(big.Int).SetBytes(signature[len(signature)/2:])
+	r, s, err := parseECDSAKeyProofSignature(signature)
+	if err != nil {
+		return err
+	}
 	if !ecdsa.Verify(pub, hash[:], r, s) {
 		return fmt.Errorf("key proof signature verification failed")
 	}
 	return nil
+}
+
+type ecdsaKeyProofSignature struct {
+	R, S *big.Int
+}
+
+func parseECDSAKeyProofSignature(signature []byte) (*big.Int, *big.Int, error) {
+	if len(signature) == 64 {
+		return new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:]), nil
+	}
+	var decoded ecdsaKeyProofSignature
+	rest, err := asn1.Unmarshal(signature, &decoded)
+	if err == nil && len(rest) == 0 && decoded.R != nil && decoded.S != nil {
+		return decoded.R, decoded.S, nil
+	}
+	return nil, nil, fmt.Errorf("invalid key proof format")
 }

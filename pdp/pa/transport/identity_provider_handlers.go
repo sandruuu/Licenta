@@ -170,6 +170,9 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		if update.ClientSecret != "" {
 			existing.ClientSecret = update.ClientSecret
 		}
+		if update.SCIMToken != "" {
+			existing.SCIMToken = update.SCIMToken
+		}
 		if update.Scopes != "" {
 			existing.Scopes = update.Scopes
 		}
@@ -307,6 +310,8 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 		"client_id":          cfg.ClientID,
 		"client_secret":      "",
 		"has_client_secret":  cfg.ClientSecret != "",
+		"scim_token":         "",
+		"has_scim_token":     cfg.SCIMToken != "",
 		"scopes":             cfg.Scopes,
 		"auto_discovery":     cfg.AutoDiscovery,
 		"claim_mapping":      cfg.ClaimMapping,

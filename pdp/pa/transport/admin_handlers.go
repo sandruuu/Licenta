@@ -177,6 +177,100 @@ func (s *Server) handleAdminRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleAdminPolicyAssignments(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		assignments := s.pa.Rules.ListAssignments()
+		writeJSON(w, http.StatusOK, models.APIResponse{
+			Success: true,
+			Data:    assignments,
+		})
+
+	case http.MethodPost:
+		var assignment models.PolicyAssignment
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&assignment); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		if err := s.pa.Rules.CreateAssignment(&assignment); err != nil {
+			writeError(w, http.StatusBadRequest, "failed to create policy assignment", err)
+			return
+		}
+		s.publishCAEPEvent(events.TopicPolicyUpdated, map[string]string{
+			"policy_id":            assignment.PolicyID,
+			"policy_assignment_id": assignment.ID,
+			"action":               "assigned",
+			"reason":               "policy_assignment_created",
+		})
+		writeJSON(w, http.StatusCreated, models.APIResponse{
+			Success: true,
+			Message: "Policy assignment created",
+			Data:    assignment,
+		})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAdminPolicyAssignmentByID(w http.ResponseWriter, r *http.Request) {
+	assignmentID := strings.TrimPrefix(r.URL.Path, "/api/admin/policy-assignments/")
+	if assignmentID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "policy assignment ID required"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		assignment, err := s.pa.Rules.GetAssignment(assignmentID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy assignment not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: assignment})
+
+	case http.MethodPut:
+		var assignment models.PolicyAssignment
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&assignment); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		assignment.ID = assignmentID
+		if err := s.pa.Rules.UpdateAssignment(&assignment); err != nil {
+			writeError(w, http.StatusBadRequest, "failed to update policy assignment", err)
+			return
+		}
+		s.publishCAEPEvent(events.TopicPolicyUpdated, map[string]string{
+			"policy_id":            assignment.PolicyID,
+			"policy_assignment_id": assignment.ID,
+			"action":               "assignment_updated",
+			"reason":               "policy_assignment_updated",
+		})
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Policy assignment updated", Data: assignment})
+
+	case http.MethodDelete:
+		assignment, _ := s.pa.Rules.GetAssignment(assignmentID)
+		if err := s.pa.Rules.DeleteAssignment(assignmentID); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy assignment not found"})
+			return
+		}
+		policyID := ""
+		if assignment != nil {
+			policyID = assignment.PolicyID
+		}
+		s.publishCAEPEvent(events.TopicPolicyUpdated, map[string]string{
+			"policy_id":            policyID,
+			"policy_assignment_id": assignmentID,
+			"action":               "unassigned",
+			"reason":               "policy_assignment_deleted",
+		})
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Policy assignment deleted"})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
 func (s *Server) handleAdminRuleByID(w http.ResponseWriter, r *http.Request) {
 	// Extract rule ID from URL: /api/admin/rules/{id}
 	ruleID := strings.TrimPrefix(r.URL.Path, "/api/admin/rules/")

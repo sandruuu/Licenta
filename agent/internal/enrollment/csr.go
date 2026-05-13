@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/mail"
+	"net/url"
 	"strings"
 )
 
@@ -38,10 +39,15 @@ func CreateCSRWithIdentity(signer crypto.Signer, identity CSRIdentity) ([]byte, 
 	}
 	template := &x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName:   deviceID,
+			CommonName:   deviceCommonName(deviceID),
 			Organization: []string{"ZeroTrust Endpoint"},
 		},
 	}
+	deviceURI, err := url.Parse(deviceIdentityURI(deviceID))
+	if err != nil {
+		return nil, fmt.Errorf("build device URI SAN: %w", err)
+	}
+	template.URIs = []*url.URL{deviceURI}
 	if hostname := strings.TrimSpace(identity.Hostname); hostname != "" {
 		template.DNSNames = []string{hostname}
 	}
@@ -55,6 +61,57 @@ func CreateCSRWithIdentity(signer crypto.Signer, identity CSRIdentity) ([]byte, 
 		return nil, fmt.Errorf("create CSR: %w", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}), nil
+}
+
+func deviceIdentityURI(deviceID string) string {
+	u := url.URL{
+		Scheme: "spiffe",
+		Host:   "ztna.local",
+		Path:   "/device/" + strings.TrimSpace(deviceID),
+	}
+	return u.String()
+}
+
+func deviceCommonName(deviceID string) string {
+	deviceID = strings.TrimSpace(deviceID)
+	if isDNSLabel(deviceID) {
+		return deviceID
+	}
+	const prefix = "ztna-device-"
+	suffix := strings.ToLower(deviceID)
+	if max := 63 - len(prefix); len(suffix) > max {
+		suffix = suffix[:max]
+	}
+	suffix = strings.Trim(suffix, "-")
+	if suffix == "" {
+		return strings.TrimSuffix(prefix, "-")
+	}
+	return prefix + suffix
+}
+
+func isDNSLabel(value string) bool {
+	if len(value) == 0 || len(value) > 63 {
+		return false
+	}
+	if value[0] == '-' || value[len(value)-1] == '-' {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' {
+			continue
+		}
+		if r >= 'A' && r <= 'Z' {
+			continue
+		}
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		if r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func emailSAN(value string) (string, bool, error) {

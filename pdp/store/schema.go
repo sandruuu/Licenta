@@ -48,6 +48,20 @@ func (s *Store) createTables() error {
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS policy_assignments (
+			id TEXT PRIMARY KEY,
+			policy_id TEXT NOT NULL,
+			tenant_id TEXT NOT NULL,
+			gateway_id TEXT DEFAULT '',
+			resource_id TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_policy ON policy_assignments(policy_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_tenant ON policy_assignments(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_gateway ON policy_assignments(gateway_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			user_id TEXT DEFAULT '',
@@ -226,6 +240,7 @@ func (s *Store) createTables() error {
 			issuer TEXT DEFAULT '',
 			client_id TEXT DEFAULT '',
 			client_secret TEXT DEFAULT '',
+			scim_token TEXT DEFAULT '',
 			scopes TEXT DEFAULT '',
 			auto_discovery INTEGER DEFAULT 1,
 			claim_mapping_json TEXT DEFAULT '{}',
@@ -234,6 +249,46 @@ func (s *Store) createTables() error {
 			updated_at TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_idp_tenant ON identity_provider_configs(tenant_id)`,
+		`CREATE TABLE IF NOT EXISTS directory_users (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			idp_id TEXT NOT NULL,
+			external_id TEXT DEFAULT '',
+			user_name TEXT NOT NULL,
+			display_name TEXT DEFAULT '',
+			email TEXT DEFAULT '',
+			active INTEGER DEFAULT 1,
+			attributes_json TEXT DEFAULT '{}',
+			raw_json TEXT DEFAULT '',
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT '',
+			UNIQUE(tenant_id, idp_id, user_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_directory_users_tenant_idp ON directory_users(tenant_id, idp_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_directory_users_external_id ON directory_users(tenant_id, idp_id, external_id) WHERE external_id <> ''`,
+		`CREATE TABLE IF NOT EXISTS directory_groups (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			idp_id TEXT NOT NULL,
+			external_id TEXT DEFAULT '',
+			display_name TEXT NOT NULL,
+			raw_json TEXT DEFAULT '',
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT '',
+			UNIQUE(tenant_id, idp_id, display_name)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_directory_groups_tenant_idp ON directory_groups(tenant_id, idp_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_directory_groups_external_id ON directory_groups(tenant_id, idp_id, external_id) WHERE external_id <> ''`,
+		`CREATE TABLE IF NOT EXISTS directory_group_members (
+			tenant_id TEXT NOT NULL,
+			idp_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			created_at TEXT DEFAULT '',
+			PRIMARY KEY (tenant_id, idp_id, group_id, user_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_directory_group_members_group ON directory_group_members(tenant_id, idp_id, group_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_directory_group_members_user ON directory_group_members(tenant_id, idp_id, user_id)`,
 	}
 
 	for _, stmt := range stmts {
@@ -270,6 +325,8 @@ func (s *Store) createTables() error {
 		`ALTER TABLE tenants ADD COLUMN domains_json TEXT DEFAULT '[]'`,
 		// Gateway multi-tenant field
 		`ALTER TABLE gateways ADD COLUMN tenant_ids_json TEXT DEFAULT '[]'`,
+		// SCIM provisioning token for tenant-level IdP configs
+		`ALTER TABLE identity_provider_configs ADD COLUMN scim_token TEXT DEFAULT ''`,
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore "duplicate column" errors
@@ -278,6 +335,27 @@ func (s *Store) createTables() error {
 	// Create indexes that depend on migrated columns
 	postMigrationIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_resources_client_id ON resources(client_id)`,
+		`CREATE TABLE IF NOT EXISTS policy_assignments (
+			id TEXT PRIMARY KEY,
+			policy_id TEXT NOT NULL,
+			tenant_id TEXT NOT NULL,
+			gateway_id TEXT DEFAULT '',
+			resource_id TEXT DEFAULT '',
+			enabled INTEGER DEFAULT 1,
+			created_at TEXT DEFAULT '',
+			updated_at TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_policy ON policy_assignments(policy_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_tenant ON policy_assignments(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_gateway ON policy_assignments(gateway_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
+		`INSERT OR IGNORE INTO policy_assignments
+			(id, policy_id, tenant_id, gateway_id, resource_id, enabled, created_at, updated_at)
+			SELECT 'assign_' || id, id, tenant_id, gateway_id, resource_id, enabled, created_at, updated_at
+			FROM policy_rules
+			WHERE tenant_id <> ''
+			   OR gateway_id <> ''
+			   OR resource_id <> ''`,
 	}
 	for _, stmt := range postMigrationIndexes {
 		if _, err := s.db.Exec(stmt); err != nil {

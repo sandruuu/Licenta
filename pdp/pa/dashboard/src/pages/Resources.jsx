@@ -15,6 +15,7 @@ import Modal from '../components/ui/Modal';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui/FormField';
 import { usePublicConfig } from '../config/publicConfig';
 
@@ -53,6 +54,10 @@ export default function Resources() {
   const [error, setError] = useState('');
   const [credModal, setCredModal] = useState(null);
   const [showSecret, setShowSecret] = useState(false);
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [organizationFilter, setOrganizationFilter] = useState('all');
 
   const tenantByID = useMemo(() => new Map(tenants.map((tenant) => [tenant.id, tenant])), [tenants]);
   const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
@@ -211,7 +216,7 @@ export default function Resources() {
       ),
     },
     { key: 'type', label: 'Type', render: (value) => <Badge variant={typeVariant(value)}>{(value || '').toUpperCase()}</Badge> },
-    { key: 'tenant_id', label: 'Tenant', render: (value) => tenantByID.get(value)?.name || value || '-' },
+    { key: 'tenant_id', label: 'Organization', render: (value) => tenantByID.get(value)?.name || value || '-' },
     { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
@@ -248,10 +253,34 @@ export default function Resources() {
       ),
     },
   ];
+  const filteredResources = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return resources.filter((resource) => {
+      if (typeFilter !== 'all' && resource.type !== typeFilter) return false;
+      if (statusFilter === 'enabled' && resource.enabled === false) return false;
+      if (statusFilter === 'disabled' && resource.enabled !== false) return false;
+      if (organizationFilter !== 'all' && resource.tenant_id !== organizationFilter) return false;
+      if (!needle) return true;
+      const organization = tenantByID.get(resource.tenant_id);
+      const gateway = gatewayByID.get(resource.gateway_id);
+      return [
+        resource.name,
+        resource.description,
+        resource.host,
+        resource.external_url,
+        resource.metadata?.catalog_fqdn,
+        resource.id,
+        organization?.name,
+        organization?.domain,
+        gateway?.name,
+      ].some((value) => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [resources, query, typeFilter, statusFilter, organizationFilter, tenantByID, gatewayByID]);
+  const hasFilters = query.trim() || typeFilter !== 'all' || statusFilter !== 'all' || organizationFilter !== 'all';
 
   return (
     <>
-      <PageHeader title="Resources" subtitle="Attach WEB, SSH, and RDP resources to a tenant gateway" createLabel="Add Resource" onCreate={() => openCreate()} />
+      <PageHeader title="Resources" subtitle="Attach WEB, SSH, and RDP resources to an organization gateway" createLabel="Add Resource" onCreate={() => openCreate()} />
 
       {error && (
         <div className="bg-danger-muted border border-danger rounded-md p-3 mb-4 text-sm text-danger">
@@ -259,13 +288,38 @@ export default function Resources() {
         </div>
       )}
 
+      <ListToolbar
+        query={query}
+        onQueryChange={setQuery}
+        placeholder="Search resource, host, gateway, or organization"
+        summary={`${filteredResources.length} of ${resources.length}`}
+      >
+        <ListToolbarSelect value={typeFilter} onChange={setTypeFilter}>
+          <option value="all">All types</option>
+          {typeOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </ListToolbarSelect>
+        <ListToolbarSelect value={statusFilter} onChange={setStatusFilter}>
+          <option value="all">All statuses</option>
+          <option value="enabled">Enabled</option>
+          <option value="disabled">Disabled</option>
+        </ListToolbarSelect>
+        <ListToolbarSelect value={organizationFilter} onChange={setOrganizationFilter} className="min-w-[180px]">
+          <option value="all">All organizations</option>
+          {tenants.map((tenant) => (
+            <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+          ))}
+        </ListToolbarSelect>
+      </ListToolbar>
+
       <DataTable
         columns={columns}
-        data={resources}
+        data={filteredResources}
         loading={loading}
         emptyIcon={Server}
-        emptyTitle="No resources configured"
-        emptyMessage="Create a gateway first, then attach protected resources to it."
+        emptyTitle={hasFilters ? 'No resources match filters' : 'No resources configured'}
+        emptyMessage={hasFilters ? 'Adjust search or filters to find resources.' : 'Create a gateway first, then attach protected resources to it.'}
       />
 
       <Modal
@@ -314,9 +368,9 @@ export default function Resources() {
         }
       >
         <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-3">
-          <FormField label="Tenant" className="mb-0 md:col-span-2">
+          <FormField label="Organization" className="mb-0 md:col-span-2">
             <FormSelect value={form.tenant_id || ''} onChange={(e) => selectTenant(e.target.value)}>
-              <option value="">Select tenant</option>
+              <option value="">Select organization</option>
               {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
             </FormSelect>
           </FormField>

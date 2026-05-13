@@ -91,9 +91,24 @@ func NewVaultClient(cfg VaultConfig) (*VaultClient, error) {
 
 // SignCSR signs a PEM CSR via Vault role-based issuance and returns PEM bundle.
 func (v *VaultClient) SignCSR(csrPEM []byte, role, ttl string) ([]byte, error) {
+	return v.signCSR(csrPEM, role, ttl, "sign")
+}
+
+// SignCSRVerbatim signs a PEM CSR while preserving the CSR subject exactly.
+// This is useful for endpoint identities whose common name is a device ID,
+// not a DNS hostname.
+func (v *VaultClient) SignCSRVerbatim(csrPEM []byte, role, ttl string) ([]byte, error) {
+	return v.signCSR(csrPEM, role, ttl, "sign-verbatim")
+}
+
+func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string) ([]byte, error) {
 	role = strings.TrimSpace(role)
 	if role == "" {
 		return nil, fmt.Errorf("vault role is required")
+	}
+	operation = strings.Trim(strings.TrimSpace(operation), "/")
+	if operation == "" {
+		operation = "sign"
 	}
 
 	reqBody := map[string]string{
@@ -104,7 +119,7 @@ func (v *VaultClient) SignCSR(csrPEM []byte, role, ttl string) ([]byte, error) {
 		reqBody["ttl"] = strings.TrimSpace(ttl)
 	}
 
-	endpoint := fmt.Sprintf("%s/v1/%s/sign/%s", v.baseURL, v.pkiPath, url.PathEscape(role))
+	endpoint := fmt.Sprintf("%s/v1/%s/%s/%s", v.baseURL, v.pkiPath, operation, url.PathEscape(role))
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal vault sign request: %w", err)

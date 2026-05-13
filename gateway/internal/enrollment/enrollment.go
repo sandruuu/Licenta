@@ -2,9 +2,8 @@ package enrollment
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -89,11 +88,8 @@ func Ensure(ctx context.Context, cfg *config.Config) (*Result, error) {
 		return nil, err
 	}
 
-	keyDER, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		return nil, fmt.Errorf("marshal enrollment key: %w", err)
-	}
-	if err := config.AtomicWriteFile(cfg.MTLSKey, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	keyDER := x509.MarshalPKCS1PrivateKey(privateKey)
+	if err := config.AtomicWriteFile(cfg.MTLSKey, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		return nil, fmt.Errorf("write enrollment key: %w", err)
 	}
 	if cfg.MTLSCSR != "" {
@@ -159,8 +155,8 @@ func applyDefaultPaths(cfg *config.Config) {
 	}
 }
 
-func createCSR(gatewayID, tenantID, fqdn string) (*ecdsa.PrivateKey, string, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func createCSR(gatewayID, tenantID, fqdn string) (*rsa.PrivateKey, string, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, "", fmt.Errorf("generate enrollment key: %w", err)
 	}

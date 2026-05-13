@@ -30,6 +30,7 @@ type IdentityProviderConfig struct {
 	Issuer        string `json:"issuer"`
 	ClientID      string `json:"client_id"`
 	ClientSecret  string `json:"client_secret,omitempty"`
+	SCIMToken     string `json:"scim_token,omitempty"`
 	Scopes        string `json:"scopes"`
 	AutoDiscovery bool   `json:"auto_discovery"`
 

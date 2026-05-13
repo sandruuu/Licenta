@@ -31,11 +31,11 @@ function useGatewayCreate(onChanged) {
     setEnrollment(null);
     const fqdn = gatewayFQDN(form.name, tenant);
     if (!tenant?.id) {
-      setError('Tenant is required');
+      setError('Organization is required');
       return;
     }
     if (!tenantDomain(tenant)) {
-      setError('Set a primary domain for this tenant before creating a gateway');
+      setError('Set a primary domain for this organization before creating a gateway');
       return;
     }
     if (!gatewayLabelFromName(form.name)) {

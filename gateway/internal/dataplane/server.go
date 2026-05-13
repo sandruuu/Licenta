@@ -2,9 +2,8 @@ package dataplane
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -632,7 +631,7 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		return
 	}
 
-	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		log.Printf("[GATEWAY] generate renewal key failed: %v", err)
 		return
@@ -670,12 +669,8 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		log.Printf("[GATEWAY] certificate renewal request failed: %v", err)
 		return
 	}
-	keyDER, err := x509.MarshalECPrivateKey(newKey)
-	if err != nil {
-		log.Printf("[GATEWAY] marshal renewal key failed: %v", err)
-		return
-	}
-	if err := config.AtomicWriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	keyDER := x509.MarshalPKCS1PrivateKey(newKey)
+	if err := config.AtomicWriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
 		log.Printf("[GATEWAY] write renewal key failed: %v", err)
 		return
 	}

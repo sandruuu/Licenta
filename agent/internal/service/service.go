@@ -1547,6 +1547,7 @@ func (service *Service) updateAccessToken(payload ipc.UpdateAccessTokenRequest) 
 		return ipc.UpdateAccessTokenResponse{}, ipc.ErrorCodeServiceUnavailable, err
 	}
 	service.setAccessToken(strings.TrimSpace(payload.AccessToken), payload.ExpiresAt.UTC(), userSID, deviceID, now)
+	service.triggerCatalogSyncAfterEnrollment()
 	return ipc.UpdateAccessTokenResponse{Accepted: true, DeviceID: deviceID, UserSID: userSID, ExpiresAt: payload.ExpiresAt.UTC(), ReceivedAt: now}, "", nil
 }
 

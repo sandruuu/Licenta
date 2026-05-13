@@ -111,11 +111,11 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO identity_provider_configs
 		(id, tenant_id, name, type, enabled, domains_json, issuer, client_id, client_secret,
-		 scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 scim_token, scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		cfg.ID, cfg.TenantID, cfg.Name, cfg.Type, b2i(cfg.Enabled),
 		toJSON(cfg.Domains), cfg.Issuer, cfg.ClientID, cfg.ClientSecret,
-		cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
+		cfg.SCIMToken, cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
 		fmtTime(cfg.CreatedAt), fmtTime(cfg.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save IdP config %s: %v", cfg.ID, err)
@@ -124,7 +124,7 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 
 func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderConfig, bool) {
 	row := s.db.QueryRow(`SELECT id, tenant_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE id = ?`, id)
 	return s.scanIdentityProviderConfig(row)
@@ -132,7 +132,7 @@ func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderCo
 
 func (s *Store) ListIdentityProviderConfigsForTenant(tenantID string) []*models.IdentityProviderConfig {
 	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE tenant_id = ? ORDER BY created_at ASC`, tenantID)
 	if err != nil {
@@ -153,7 +153,7 @@ func (s *Store) FindIdentityProviderByDomain(domain string) (*models.IdentityPro
 	}
 
 	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE enabled = 1`)
 	if err != nil {
@@ -225,7 +225,7 @@ func (s *Store) scanIdentityProviderConfig(row interface {
 	var domainsJSON, claimMappingJSON, groupRoleMappingJSON, createdAt, updatedAt string
 
 	err := row.Scan(&cfg.ID, &cfg.TenantID, &cfg.Name, &cfg.Type, &enabled,
-		&domainsJSON, &cfg.Issuer, &cfg.ClientID, &cfg.ClientSecret,
+		&domainsJSON, &cfg.Issuer, &cfg.ClientID, &cfg.ClientSecret, &cfg.SCIMToken,
 		&cfg.Scopes, &autoDiscovery, &claimMappingJSON, &groupRoleMappingJSON,
 		&createdAt, &updatedAt)
 	if err != nil {

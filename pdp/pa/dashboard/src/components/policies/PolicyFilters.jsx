@@ -1,6 +1,6 @@
 import Button from '../ui/Button';
 import FormField, { FormInput, FormSelect } from '../ui/FormField';
-import { scopeOptions } from './policyHelpers';
+import { assignmentFilterOptions } from './policyHelpers';
 
 export default function PolicyFilters({
   filters,
@@ -19,15 +19,14 @@ export default function PolicyFilters({
   return (
     <div className="bg-surface-card border border-border rounded-md shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-4 mb-4">
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-        <FormField label="Scope" className="mb-0 md:col-span-2">
+        <FormField label="Assignment" className="mb-0 md:col-span-2">
           <FormSelect value={filters.scope} onChange={(e) => onScopeChange(e.target.value)}>
-            <option value="all">All scopes</option>
-            {scopeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            {assignmentFilterOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </FormSelect>
         </FormField>
-        <FormField label="Tenant" className="mb-0 md:col-span-2">
+        <FormField label="Organization" className="mb-0 md:col-span-2">
           <FormSelect value={filters.tenant_id} onChange={(e) => onTenantChange(e.target.value)}>
-            <option value="">All tenants</option>
+            <option value="">All organizations</option>
             {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
           </FormSelect>
         </FormField>
@@ -44,7 +43,7 @@ export default function PolicyFilters({
           </FormSelect>
         </FormField>
         <FormField label="Search" className="mb-0 md:col-span-3">
-          <FormInput value={filters.q} onChange={(e) => onSearchChange(e.target.value)} placeholder="policy, tenant, gateway, resource" />
+          <FormInput value={filters.q} onChange={(e) => onSearchChange(e.target.value)} placeholder="policy, organization, gateway, resource" />
         </FormField>
         <div className="md:col-span-1">
           <Button variant="secondary" className="w-full justify-center" onClick={onClear}>Clear</Button>

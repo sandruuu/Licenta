@@ -4,19 +4,36 @@ import "time"
 
 // PolicyRule defines a conditional access rule.
 type PolicyRule struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Priority    int            `json:"priority"`
-	Enabled     bool           `json:"enabled"`
-	TenantID    string         `json:"tenant_id,omitempty"`
-	Scope       string         `json:"scope,omitempty"`
-	GatewayID   string         `json:"gateway_id,omitempty"`
-	ResourceID  string         `json:"resource_id,omitempty"`
-	Conditions  RuleConditions `json:"conditions"`
-	Action      string         `json:"action"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID              string              `json:"id"`
+	Name            string              `json:"name"`
+	Description     string              `json:"description"`
+	Priority        int                 `json:"priority"`
+	Enabled         bool                `json:"enabled"`
+	AssignmentCount int                 `json:"assignment_count,omitempty"`
+	Assignments     []*PolicyAssignment `json:"assignments,omitempty"`
+	TenantID        string              `json:"tenant_id,omitempty"`
+	Scope           string              `json:"scope,omitempty"`
+	GatewayID       string              `json:"gateway_id,omitempty"`
+	ResourceID      string              `json:"resource_id,omitempty"`
+	Conditions      RuleConditions      `json:"conditions"`
+	Action          string              `json:"action"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+}
+
+// PolicyAssignment attaches a reusable policy rule to an organization,
+// gateway, or resource. The policy rule defines the conditions and action;
+// the assignment defines where the policy takes effect.
+type PolicyAssignment struct {
+	ID         string    `json:"id"`
+	PolicyID   string    `json:"policy_id"`
+	TenantID   string    `json:"tenant_id"`
+	GatewayID  string    `json:"gateway_id,omitempty"`
+	ResourceID string    `json:"resource_id,omitempty"`
+	Scope      string    `json:"scope,omitempty"`
+	Enabled    bool      `json:"enabled"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // RuleConditions defines the conditions under which a policy rule applies.
@@ -25,8 +42,9 @@ type RuleConditions struct {
 	RequiredChecks      []string `json:"required_checks,omitempty"`
 	RequiredCheckStatus string   `json:"required_check_status,omitempty"`
 
-	AllowedRoles []string `json:"allowed_roles,omitempty"`
-	AllowedUsers []string `json:"allowed_users,omitempty"`
+	AllowedRoles  []string `json:"allowed_roles,omitempty"`
+	AllowedUsers  []string `json:"allowed_users,omitempty"`
+	AllowedGroups []string `json:"allowed_groups,omitempty"`
 
 	AllowedIPs []string `json:"allowed_ips,omitempty"`
 	BlockedIPs []string `json:"blocked_ips,omitempty"`

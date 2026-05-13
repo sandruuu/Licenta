@@ -8,7 +8,7 @@ export default function TenantFormModal({ mode, form, setForm, saving, onClose, 
           <div className="bg-surface-card rounded-md border border-border shadow-2xl w-full max-w-md mx-4 overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-border">
               <h2 className="text-base font-semibold text-text-primary">
-                {mode === 'create' ? 'Create Tenant' : 'Edit Tenant'}
+                {mode === 'create' ? 'Create Organization' : 'Edit Organization'}
               </h2>
               <button onClick={onClose} className="p-1 text-text-muted hover:text-text-primary rounded-md">
                 <X size={20} />

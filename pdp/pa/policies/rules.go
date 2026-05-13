@@ -46,10 +46,43 @@ func InitDefaultRules(s *store.Store, policyCfg config.PolicyConfig) {
 			continue
 		}
 		s.SavePolicyRule(&rule)
+		seedDefaultRuleAssignments(s, &rule)
 		created++
 	}
 	if created > 0 {
 		log.Printf("[PA] Initialized %d configured policy rules", created)
+	}
+}
+
+func seedDefaultRuleAssignments(s *store.Store, rule *models.PolicyRule) {
+	if s == nil || rule == nil {
+		return
+	}
+	if strings.TrimSpace(rule.TenantID) != "" || strings.TrimSpace(rule.GatewayID) != "" || strings.TrimSpace(rule.ResourceID) != "" {
+		s.SavePolicyAssignment(&models.PolicyAssignment{
+			ID:         "assign_" + rule.ID,
+			PolicyID:   rule.ID,
+			TenantID:   rule.TenantID,
+			GatewayID:  rule.GatewayID,
+			ResourceID: rule.ResourceID,
+			Enabled:    rule.Enabled,
+			CreatedAt:  rule.CreatedAt,
+			UpdatedAt:  rule.UpdatedAt,
+		})
+		return
+	}
+	for _, tenant := range s.ListTenants() {
+		if tenant == nil || !tenant.Enabled {
+			continue
+		}
+		s.SavePolicyAssignment(&models.PolicyAssignment{
+			ID:        "assign_" + rule.ID + "_" + tenant.ID,
+			PolicyID:  rule.ID,
+			TenantID:  tenant.ID,
+			Enabled:   rule.Enabled,
+			CreatedAt: rule.CreatedAt,
+			UpdatedAt: rule.UpdatedAt,
+		})
 	}
 }
 
@@ -82,18 +115,7 @@ func validateRule(rule *models.PolicyRule) error {
 	if rule.Priority < 0 {
 		return fmt.Errorf("priority must be >= 0")
 	}
-	scope := normalizeScope(rule.Scope)
-	switch scope {
-	case "gateway":
-		if strings.TrimSpace(rule.GatewayID) == "" {
-			return fmt.Errorf("gateway_id is required for gateway-scoped policies")
-		}
-	case "resource":
-		if strings.TrimSpace(rule.ResourceID) == "" {
-			return fmt.Errorf("resource_id is required for resource-scoped policies")
-		}
-	}
-	rule.Scope = scope
+	rule.Scope = normalizeScope(rule.Scope)
 	return nil
 }
 
@@ -144,12 +166,63 @@ func (rm *RuleManager) validateScopeBindings(rule *models.PolicyRule) error {
 	return nil
 }
 
+func (rm *RuleManager) validateAssignment(assignment *models.PolicyAssignment) error {
+	if assignment == nil {
+		return fmt.Errorf("assignment is required")
+	}
+	if strings.TrimSpace(assignment.PolicyID) == "" {
+		return fmt.Errorf("policy_id is required")
+	}
+	if _, ok := rm.store.GetPolicyRule(assignment.PolicyID); !ok {
+		return fmt.Errorf("policy not found: %s", assignment.PolicyID)
+	}
+	if strings.TrimSpace(assignment.TenantID) == "" {
+		return fmt.Errorf("organization is required for policy assignment")
+	}
+	tenant, ok := rm.store.GetTenant(assignment.TenantID)
+	if !ok || tenant == nil || !tenant.Enabled {
+		return fmt.Errorf("tenant not found or disabled: %s", assignment.TenantID)
+	}
+	if strings.TrimSpace(assignment.ResourceID) != "" {
+		resource, ok := rm.store.GetResource(assignment.ResourceID)
+		if !ok || resource == nil {
+			return fmt.Errorf("resource not found: %s", assignment.ResourceID)
+		}
+		if resource.TenantID != "" && resource.TenantID != assignment.TenantID {
+			return fmt.Errorf("resource %s does not belong to tenant %s", assignment.ResourceID, assignment.TenantID)
+		}
+		if strings.TrimSpace(assignment.GatewayID) == "" {
+			assignment.GatewayID = resource.GatewayID
+		}
+		if strings.TrimSpace(assignment.GatewayID) != "" && strings.TrimSpace(resource.GatewayID) != "" && assignment.GatewayID != resource.GatewayID {
+			return fmt.Errorf("resource %s is not assigned to gateway %s", assignment.ResourceID, assignment.GatewayID)
+		}
+	}
+	if strings.TrimSpace(assignment.GatewayID) != "" {
+		gateway, ok := rm.store.GetGateway(assignment.GatewayID)
+		if !ok || gateway == nil {
+			return fmt.Errorf("gateway not found: %s", assignment.GatewayID)
+		}
+		if gateway.TenantID != "" && gateway.TenantID != assignment.TenantID {
+			return fmt.Errorf("gateway %s does not belong to tenant %s", assignment.GatewayID, assignment.TenantID)
+		}
+	}
+	if !assignment.Enabled {
+		assignment.Enabled = false
+	}
+	if strings.TrimSpace(assignment.ResourceID) != "" {
+		assignment.Scope = "resource"
+	} else if strings.TrimSpace(assignment.GatewayID) != "" {
+		assignment.Scope = "gateway"
+	} else {
+		assignment.Scope = "tenant"
+	}
+	return nil
+}
+
 // CreateRule adds a new policy rule
 func (rm *RuleManager) CreateRule(rule *models.PolicyRule) error {
 	if err := validateRule(rule); err != nil {
-		return err
-	}
-	if err := rm.validateScopeBindings(rule); err != nil {
 		return err
 	}
 	if rule.ID == "" {
@@ -169,9 +242,6 @@ func (rm *RuleManager) CreateRule(rule *models.PolicyRule) error {
 // UpdateRule modifies an existing policy rule
 func (rm *RuleManager) UpdateRule(rule *models.PolicyRule) error {
 	if err := validateRule(rule); err != nil {
-		return err
-	}
-	if err := rm.validateScopeBindings(rule); err != nil {
 		return err
 	}
 	existing, ok := rm.store.GetPolicyRule(rule.ID)
@@ -208,6 +278,76 @@ func (rm *RuleManager) GetRule(id string) (*models.PolicyRule, error) {
 // ListRules returns all rules sorted by priority
 func (rm *RuleManager) ListRules() []*models.PolicyRule {
 	return rm.store.ListPolicyRules()
+}
+
+func (rm *RuleManager) CreateAssignment(assignment *models.PolicyAssignment) error {
+	if assignment == nil {
+		return fmt.Errorf("assignment is required")
+	}
+	if assignment.ID == "" {
+		id, err := util.GenerateID("assign")
+		if err != nil {
+			return err
+		}
+		assignment.ID = id
+	}
+	if !assignment.Enabled {
+		assignment.Enabled = false
+	} else {
+		assignment.Enabled = true
+	}
+	if err := rm.validateAssignment(assignment); err != nil {
+		return err
+	}
+	now := time.Now()
+	assignment.CreatedAt = now
+	assignment.UpdatedAt = now
+	rm.store.SavePolicyAssignment(assignment)
+	log.Printf("[PA] Policy assignment created: policy=%s assignment=%s", assignment.PolicyID, assignment.ID)
+	return nil
+}
+
+func (rm *RuleManager) UpdateAssignment(assignment *models.PolicyAssignment) error {
+	if assignment == nil || strings.TrimSpace(assignment.ID) == "" {
+		return fmt.Errorf("assignment ID is required")
+	}
+	existing, ok := rm.store.GetPolicyAssignment(assignment.ID)
+	if !ok {
+		return fmt.Errorf("assignment not found: %s", assignment.ID)
+	}
+	if !assignment.Enabled {
+		assignment.Enabled = false
+	} else {
+		assignment.Enabled = true
+	}
+	if err := rm.validateAssignment(assignment); err != nil {
+		return err
+	}
+	assignment.CreatedAt = existing.CreatedAt
+	assignment.UpdatedAt = time.Now()
+	rm.store.SavePolicyAssignment(assignment)
+	log.Printf("[PA] Policy assignment updated: policy=%s assignment=%s", assignment.PolicyID, assignment.ID)
+	return nil
+}
+
+func (rm *RuleManager) DeleteAssignment(id string) error {
+	if !rm.store.DeletePolicyAssignment(id) {
+		return fmt.Errorf("assignment not found: %s", id)
+	}
+	log.Printf("[PA] Policy assignment deleted: %s", id)
+	return nil
+}
+
+func (rm *RuleManager) GetAssignment(id string) (*models.PolicyAssignment, error) {
+	assignment, ok := rm.store.GetPolicyAssignment(id)
+	if !ok {
+		return nil, fmt.Errorf("assignment not found: %s", id)
+	}
+	return assignment, nil
+}
+
+func (rm *RuleManager) ListAssignments() []*models.PolicyAssignment {
+	return rm.store.ListPolicyAssignments()
 }
 
 // generateRuleID creates a unique rule ID

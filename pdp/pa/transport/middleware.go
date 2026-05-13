@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pdp/models"
+	paenrollment "pdp/pa/enrollment"
 )
 
 // contextKey is an unexported type for context keys in this package.
@@ -84,7 +85,7 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 			}
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 
@@ -186,9 +187,9 @@ func (s *Server) authenticateDeviceCertificate(peerCert *x509.Certificate) (*mod
 		return nil, http.StatusUnauthorized, "client certificate required for device authentication"
 	}
 
-	deviceID := strings.TrimSpace(peerCert.Subject.CommonName)
+	deviceID := paenrollment.CertificateDeviceID(peerCert)
 	if deviceID == "" {
-		return nil, http.StatusUnauthorized, "client certificate has no CommonName"
+		return nil, http.StatusUnauthorized, "client certificate has no device identity"
 	}
 
 	enrollment, found := s.pa.Store.GetDeviceEnrollmentByComponent(deviceID, "endpoint")

@@ -57,11 +57,14 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, e
 			CommonName:   pdpFQDN,
 			Organization: []string{"ZTNA PDP"},
 		},
-		DNSNames: []string{pdpFQDN},
+		DNSNames: []string{pdpFQDN, "localhost"},
+		IPAddresses: []net.IP{
+			net.ParseIP("127.0.0.1"),
+		},
 	}
 	if ip := net.ParseIP(pdpFQDN); ip != nil {
 		tmpl.DNSNames = nil
-		tmpl.IPAddresses = []net.IP{ip}
+		tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
 	if err != nil {

@@ -1,19 +1,33 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { X } from 'lucide-react';
-import { createRule, deleteRule, getGateways, getResources, getRules, getTenants, updateRule } from '../api';
+import {
+  createPolicyAssignment,
+  createRule,
+  deletePolicyAssignment,
+  deleteRule,
+  getDirectoryGroups,
+  getDirectoryUsers,
+  getGateways,
+  getPolicyAssignments,
+  getResources,
+  getRules,
+  getTenants,
+  updateRule,
+} from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import PolicyFilters from '../components/policies/PolicyFilters';
 import PolicyForm from '../components/policies/PolicyForm';
 import PolicyTable from '../components/policies/PolicyTable';
+import PolicyAssignmentModal from '../components/policies/PolicyAssignmentModal';
 import {
+  assignmentFilterOptions,
+  assignmentScopeMode,
   conditionsToForm,
   createBlankConditions,
   includesText,
-  ruleScopeMode,
-  scopeOptions,
   splitIntList,
   splitList,
 } from '../components/policies/policyHelpers';
@@ -21,18 +35,24 @@ import {
 export default function Policies() {
   const [searchParams] = useSearchParams();
   const [rules, setRules] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [gateways, setGateways] = useState([]);
   const [resources, setResources] = useState([]);
+  const [directoryUsers, setDirectoryUsers] = useState([]);
+  const [directoryGroups, setDirectoryGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
+  const [assignmentPolicy, setAssignmentPolicy] = useState(null);
+  const [assignmentForm, setAssignmentForm] = useState({});
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [error, setError] = useState('');
   const [filters, setFilters] = useState(() => {
     const scope = searchParams.get('scope');
     return {
-      scope: scopeOptions.some((option) => option.value === scope) ? scope : 'all',
+      scope: assignmentFilterOptions.some((option) => option.value === scope) ? scope : 'all',
       tenant_id: searchParams.get('tenant_id') || '',
       gateway_id: searchParams.get('gateway_id') || '',
       resource_id: searchParams.get('resource_id') || '',
@@ -43,6 +63,14 @@ export default function Policies() {
   const tenantByID = useMemo(() => new Map(tenants.map((tenant) => [tenant.id, tenant])), [tenants]);
   const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
   const resourceByID = useMemo(() => new Map(resources.map((resource) => [resource.id, resource])), [resources]);
+  const assignmentsByPolicy = useMemo(() => {
+    const map = new Map();
+    assignments.forEach((assignment) => {
+      if (!map.has(assignment.policy_id)) map.set(assignment.policy_id, []);
+      map.get(assignment.policy_id).push(assignment);
+    });
+    return map;
+  }, [assignments]);
 
   const gatewaysForTenant = (tenantID) => gateways.filter((gateway) => !tenantID || gateway.tenant_id === tenantID);
   const resourcesForTenant = (tenantID) => resources.filter((resource) => !tenantID || resource.tenant_id === tenantID);
@@ -55,16 +83,22 @@ export default function Policies() {
     setLoading(true);
     setError('');
     try {
-      const [ruleData, tenantData, gatewayData, resourceData] = await Promise.all([
+      const [ruleData, assignmentData, tenantData, gatewayData, resourceData, directoryUserData, directoryGroupData] = await Promise.all([
         getRules(),
+        getPolicyAssignments(),
         getTenants(),
         getGateways(),
         getResources(),
+        getDirectoryUsers(),
+        getDirectoryGroups(),
       ]);
       setRules(Array.isArray(ruleData) ? ruleData : []);
+      setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
       setTenants(Array.isArray(tenantData) ? tenantData : []);
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
       setResources(Array.isArray(resourceData) ? resourceData : []);
+      setDirectoryUsers(Array.isArray(directoryUserData) ? directoryUserData : []);
+      setDirectoryGroups(Array.isArray(directoryGroupData) ? directoryGroupData : []);
     } catch (e) {
       setError(e.message || 'Failed to load policy data');
     } finally {
@@ -77,32 +111,13 @@ export default function Policies() {
   }, []);
 
   const openCreate = () => {
-    const filteredScope = filters.scope !== 'all' ? filters.scope : 'tenant';
-    const scopeMode = scopeOptions.some((option) => option.value === filteredScope) ? filteredScope : 'tenant';
-    const tenantID = scopeMode === 'global' ? '' : filters.tenant_id || tenants[0]?.id || '';
-    const gatewayID = scopeMode === 'gateway' || scopeMode === 'resource'
-      ? filters.gateway_id || gatewaysForTenant(tenantID)[0]?.id || ''
-      : '';
-    const resourceID = scopeMode === 'resource'
-      ? filters.resource_id || resourcesForGateway(tenantID, gatewayID)[0]?.id || ''
-      : '';
-    const selectedResource = resourceByID.get(resourceID);
-
     setForm({
       name: '',
       description: '',
-      tenant_id: tenantID,
-      scope_mode: scopeMode,
-      scope: scopeMode === 'gateway' || scopeMode === 'resource' ? scopeMode : 'global',
-      gateway_id: gatewayID,
-      resource_id: resourceID,
       action: 'allow',
       priority: 100,
       enabled: true,
-      conditions: createBlankConditions({
-        target_resources: resourceID,
-        target_ports: selectedResource?.port ? String(selectedResource.port) : '',
-      }),
+      conditions: createBlankConditions(),
     });
     setModal('create');
   };
@@ -110,8 +125,10 @@ export default function Policies() {
   const openEdit = (rule) => {
     setForm({
       ...rule,
-      scope_mode: ruleScopeMode(rule),
-      scope: rule.scope || 'global',
+      tenant_id: '',
+      gateway_id: '',
+      resource_id: '',
+      scope: 'global',
       conditions: conditionsToForm(rule.conditions),
     });
     setModal('edit');
@@ -119,6 +136,10 @@ export default function Policies() {
 
   const updateCondition = (key, value) => {
     setForm({ ...form, conditions: { ...form.conditions, [key]: value } });
+  };
+
+  const resetFilters = () => {
+    setFilters({ scope: 'all', tenant_id: '', gateway_id: '', resource_id: '', q: '' });
   };
 
   const setFilterTenant = (tenantID) => {
@@ -145,105 +166,20 @@ export default function Policies() {
     });
   };
 
-  const resetFilters = () => {
-    setFilters({ scope: 'all', tenant_id: '', gateway_id: '', resource_id: '', q: '' });
-  };
-
-  const selectScopeMode = (scopeMode) => {
-    if (scopeMode === 'global') {
-      setForm({ ...form, scope_mode: scopeMode, tenant_id: '', gateway_id: '', resource_id: '' });
-      return;
-    }
-
-    const tenantID = form.tenant_id || tenants[0]?.id || '';
-    const gatewayID = scopeMode === 'gateway' || scopeMode === 'resource'
-      ? form.gateway_id || gatewaysForTenant(tenantID)[0]?.id || ''
-      : '';
-    const resourceID = scopeMode === 'resource'
-      ? form.resource_id || resourcesForGateway(tenantID, gatewayID)[0]?.id || ''
-      : '';
-
-    setForm({
-      ...form,
-      scope_mode: scopeMode,
-      tenant_id: tenantID,
-      gateway_id: gatewayID,
-      resource_id: resourceID,
-    });
-  };
-
-  const selectTenant = (tenantID) => {
-    const scopeMode = form.scope_mode || 'tenant';
-    const gatewayID = scopeMode === 'gateway' || scopeMode === 'resource'
-      ? gatewaysForTenant(tenantID)[0]?.id || ''
-      : '';
-    const resourceID = scopeMode === 'resource' && gatewayID
-      ? resourcesForGateway(tenantID, gatewayID)[0]?.id || ''
-      : '';
-    setForm({ ...form, tenant_id: tenantID, gateway_id: gatewayID, resource_id: resourceID });
-  };
-
-  const selectGateway = (gatewayID) => {
-    const gateway = gatewayByID.get(gatewayID);
-    const tenantID = gateway?.tenant_id || form.tenant_id || '';
-    const resourceID = form.scope_mode === 'resource' && gatewayID
-      ? resourcesForGateway(tenantID, gatewayID)[0]?.id || ''
-      : '';
-    setForm({ ...form, tenant_id: tenantID, gateway_id: gatewayID, resource_id: resourceID });
-  };
-
-  const selectResource = (resourceID) => {
-    const resource = resourceByID.get(resourceID);
-    setForm({
-      ...form,
-      tenant_id: resource?.tenant_id || form.tenant_id || '',
-      gateway_id: resource?.gateway_id || form.gateway_id || '',
-      resource_id: resourceID,
-      conditions: {
-        ...form.conditions,
-        target_resources: resourceID,
-        target_ports: resource?.port ? String(resource.port) : form.conditions?.target_ports || '',
-      },
-    });
-  };
-
-  const formIsReady = () => {
-    if (!form.name?.trim()) return false;
-    switch (form.scope_mode) {
-      case 'global':
-        return true;
-      case 'tenant':
-        return !!form.tenant_id;
-      case 'gateway':
-        return !!form.tenant_id && !!form.gateway_id;
-      case 'resource':
-        return !!form.tenant_id && !!form.gateway_id && !!form.resource_id;
-      default:
-        return false;
-    }
-  };
+  const formIsReady = () => !!form.name?.trim();
 
   const handleSave = async () => {
     setSaving(true);
     setError('');
 
-    const scopeMode = form.scope_mode || 'tenant';
-    const backendScope = scopeMode === 'gateway' || scopeMode === 'resource' ? scopeMode : 'global';
-    const selectedResource = resourceByID.get(form.resource_id);
-    const targetResources = scopeMode === 'resource' && form.resource_id
-      ? [form.resource_id]
-      : splitList(form.conditions?.target_resources);
-
     const data = {
       id: form.id,
       name: form.name?.trim(),
       description: form.description?.trim(),
-      tenant_id: scopeMode === 'global' ? '' : form.tenant_id || '',
-      scope: backendScope,
-      gateway_id: scopeMode === 'gateway' || scopeMode === 'resource'
-        ? form.gateway_id || selectedResource?.gateway_id || ''
-        : '',
-      resource_id: scopeMode === 'resource' ? form.resource_id || '' : '',
+      tenant_id: '',
+      scope: 'global',
+      gateway_id: '',
+      resource_id: '',
       action: form.action || 'allow',
       priority: parseInt(form.priority, 10) || 100,
       enabled: form.enabled !== false,
@@ -251,11 +187,13 @@ export default function Policies() {
         min_health_score: parseInt(form.conditions?.min_health_score, 10) || 0,
         required_checks: splitList(form.conditions?.required_checks),
         allowed_roles: splitList(form.conditions?.allowed_roles),
+        allowed_users: splitList(form.conditions?.allowed_users),
+        allowed_groups: splitList(form.conditions?.allowed_groups),
         allowed_ips: splitList(form.conditions?.allowed_ips),
         allowed_time_start: form.conditions?.allowed_time_start || '',
         allowed_time_end: form.conditions?.allowed_time_end || '',
         allowed_days: splitList(form.conditions?.allowed_days),
-        target_resources: targetResources,
+        target_resources: splitList(form.conditions?.target_resources),
         target_ports: splitIntList(form.conditions?.target_ports),
         max_risk_score: parseInt(form.conditions?.max_risk_score, 10) || 100,
       },
@@ -263,86 +201,169 @@ export default function Policies() {
 
     try {
       if (modal === 'create') {
-        await createRule(data);
+        const created = await createRule(data);
+        setModal(null);
+        await load();
+        const createdID = created?.id || data.id;
+        const createdPolicy = createdID ? { ...data, id: createdID } : null;
+        if (createdPolicy) openAssign(createdPolicy);
       } else {
         await updateRule(form.id, data);
+        setModal(null);
+        await load();
       }
-      setModal(null);
-      await load();
     } catch (e) {
-      setError(e.message || 'Failed to save rule');
+      setError(e.message || 'Failed to save policy');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this policy rule?')) return;
+    if (!confirm('Delete this policy and all of its assignments?')) return;
     setError('');
     try {
       await deleteRule(id);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to delete rule');
+      setError(e.message || 'Failed to delete policy');
     }
   };
 
-  const filteredRules = useMemo(() => {
-    const query = filters.q.trim().toLowerCase();
+  const defaultAssignmentForm = (policy) => {
+    const selectedResource = filters.resource_id ? resourceByID.get(filters.resource_id) : null;
+    const selectedGateway = filters.gateway_id ? gatewayByID.get(filters.gateway_id) : null;
+    const scope = selectedResource ? 'resource' : selectedGateway ? 'gateway' : 'tenant';
+    const tenantID = selectedResource?.tenant_id || selectedGateway?.tenant_id || filters.tenant_id || tenants[0]?.id || '';
+    const gatewayID = scope === 'resource'
+      ? selectedResource?.gateway_id || ''
+      : scope === 'gateway'
+        ? selectedGateway?.id || gatewaysForTenant(tenantID)[0]?.id || ''
+        : '';
+    const resourceID = scope === 'resource' ? selectedResource?.id || '' : '';
+
+    return {
+      policy_id: policy?.id || '',
+      scope,
+      tenant_id: tenantID,
+      gateway_id: gatewayID,
+      resource_id: resourceID,
+      enabled: true,
+    };
+  };
+
+  const openAssign = (policy) => {
+    setAssignmentPolicy(policy);
+    setAssignmentForm(defaultAssignmentForm(policy));
+  };
+
+  const saveAssignment = async () => {
+    if (!assignmentPolicy) return;
+    setAssignmentSaving(true);
+    setError('');
+    try {
+      await createPolicyAssignment({
+        policy_id: assignmentPolicy.id,
+        tenant_id: assignmentForm.tenant_id || '',
+        gateway_id: assignmentForm.scope === 'gateway' || assignmentForm.scope === 'resource' ? assignmentForm.gateway_id || '' : '',
+        resource_id: assignmentForm.scope === 'resource' ? assignmentForm.resource_id || '' : '',
+        enabled: assignmentForm.enabled !== false,
+      });
+      await load();
+      setAssignmentForm(defaultAssignmentForm(assignmentPolicy));
+    } catch (e) {
+      setError(e.message || 'Failed to assign policy');
+    } finally {
+      setAssignmentSaving(false);
+    }
+  };
+
+  const removeAssignment = async (assignmentID) => {
+    if (!confirm('Remove this policy assignment?')) return;
+    setError('');
+    try {
+      await deletePolicyAssignment(assignmentID);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to remove policy assignment');
+    }
+  };
+
+  const assignmentMatchesTarget = (assignment) => {
+    if (!assignment) return false;
+    if (filters.scope !== 'all' && filters.scope !== 'unassigned' && assignmentScopeMode(assignment) !== filters.scope) {
+      return false;
+    }
+
     const selectedResource = filters.resource_id ? resourceByID.get(filters.resource_id) : null;
     const selectedGateway = filters.gateway_id
       ? gatewayByID.get(filters.gateway_id)
       : selectedResource ? gatewayByID.get(selectedResource.gateway_id) : null;
     const selectedTenantID = filters.tenant_id || selectedResource?.tenant_id || selectedGateway?.tenant_id || '';
 
+    if (filters.resource_id) {
+      if (assignment.resource_id) return assignment.resource_id === filters.resource_id;
+      if (assignment.gateway_id) return assignment.gateway_id === selectedResource?.gateway_id;
+      return assignment.tenant_id === selectedResource?.tenant_id;
+    }
+    if (filters.gateway_id) {
+      if (assignment.resource_id) return resourceByID.get(assignment.resource_id)?.gateway_id === filters.gateway_id;
+      if (assignment.gateway_id) return assignment.gateway_id === filters.gateway_id;
+      return assignment.tenant_id === selectedGateway?.tenant_id;
+    }
+    if (selectedTenantID) {
+      if (assignment.resource_id) return resourceByID.get(assignment.resource_id)?.tenant_id === selectedTenantID;
+      if (assignment.gateway_id) return gatewayByID.get(assignment.gateway_id)?.tenant_id === selectedTenantID;
+      return assignment.tenant_id === selectedTenantID;
+    }
+    return true;
+  };
+
+  const assignmentSearchText = (assignment) => {
+    const tenant = tenantByID.get(assignment.tenant_id);
+    const gateway = gatewayByID.get(assignment.gateway_id);
+    const resource = resourceByID.get(assignment.resource_id);
+    return [
+      assignmentScopeMode(assignment),
+      tenant?.name,
+      tenant?.domain,
+      tenant?.id,
+      gateway?.name,
+      gateway?.fqdn,
+      gateway?.id,
+      resource?.name,
+      resource?.host,
+      resource?.id,
+    ];
+  };
+
+  const filteredRules = useMemo(() => {
+    const query = filters.q.trim().toLowerCase();
+    const hasAssignmentFilters = filters.scope !== 'all' || filters.tenant_id || filters.gateway_id || filters.resource_id;
+
     return rules.filter((rule) => {
-      const mode = ruleScopeMode(rule);
-      const resource = resourceByID.get(rule.resource_id);
-      const gateway = gatewayByID.get(rule.gateway_id || resource?.gateway_id);
-      const tenant = tenantByID.get(rule.tenant_id || resource?.tenant_id || gateway?.tenant_id);
-      const effectiveTenantID = rule.tenant_id || resource?.tenant_id || gateway?.tenant_id || '';
-      const effectiveGatewayID = rule.gateway_id || resource?.gateway_id || '';
-
-      if (filters.scope !== 'all' && mode !== filters.scope) return false;
-
-      if (filters.resource_id) {
-        if (mode === 'resource' && rule.resource_id !== filters.resource_id) return false;
-        if (mode === 'gateway' && effectiveGatewayID !== selectedResource?.gateway_id) return false;
-        if (mode === 'tenant' && effectiveTenantID !== selectedResource?.tenant_id) return false;
-      } else if (filters.gateway_id) {
-        if (mode === 'resource' && resource?.gateway_id !== filters.gateway_id) return false;
-        if (mode === 'gateway' && effectiveGatewayID !== filters.gateway_id) return false;
-        if (mode === 'tenant' && effectiveTenantID !== selectedGateway?.tenant_id) return false;
-      } else if (selectedTenantID) {
-        if (mode !== 'global' && effectiveTenantID !== selectedTenantID) return false;
-      }
+      const ruleAssignments = assignmentsByPolicy.get(rule.id) || [];
+      if (filters.scope === 'unassigned' && ruleAssignments.length > 0) return false;
+      if (filters.scope !== 'unassigned' && hasAssignmentFilters && !ruleAssignments.some(assignmentMatchesTarget)) return false;
 
       if (!query) return true;
-
       return [
         rule.name,
         rule.description,
         rule.action,
-        mode,
-        tenant?.name,
-        tenant?.domain,
-        tenant?.id,
-        gateway?.name,
-        gateway?.fqdn,
-        gateway?.id,
-        resource?.name,
-        resource?.host,
-        resource?.id,
+        ...(rule.conditions?.allowed_users || []),
+        ...(rule.conditions?.allowed_groups || []),
+        ...ruleAssignments.flatMap(assignmentSearchText),
       ].some((value) => includesText(value, query));
     });
-  }, [rules, filters, tenantByID, gatewayByID, resourceByID]);
+  }, [rules, filters, assignmentsByPolicy, tenantByID, gatewayByID, resourceByID]);
 
   return (
     <>
-      <PageHeader title="Policies" subtitle="Scope access rules globally or per tenant, gateway, and resource" createLabel="Add Rule" onCreate={openCreate} />
+      <PageHeader title="Policies" subtitle="Define reusable access rules, then assign them to organizations, gateways, or resources" createLabel="Create Policy" onCreate={openCreate} />
 
       {error && (
-        <div className="flex items-center justify-between px-4 py-3 mb-4 bg-danger-muted border border-danger rounded-md text-danger text-sm">
+        <div className="mb-4 flex items-center justify-between rounded-md border border-danger bg-danger-muted px-4 py-3 text-sm text-danger">
           <span>{error}</span>
           <Button variant="ghost" className="!p-1 !shadow-none" onClick={() => setError('')}><X size={14} /></Button>
         </div>
@@ -369,35 +390,55 @@ export default function Policies() {
         tenantByID={tenantByID}
         gatewayByID={gatewayByID}
         resourceByID={resourceByID}
+        assignmentsByPolicy={assignmentsByPolicy}
         onEdit={openEdit}
+        onAssign={openAssign}
         onDelete={handleDelete}
       />
 
       <Modal
         open={!!modal}
         onClose={() => setModal(null)}
-        title={modal === 'create' ? 'Add Policy Rule' : 'Edit Policy Rule'}
+        title={modal === 'create' ? 'Create Policy' : 'Edit Policy'}
         size="3xl"
-        footer={
+        footer={(
           <>
             <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving || !formIsReady()}>
-              {saving ? 'Saving...' : modal === 'create' ? 'Create Rule' : 'Save Changes'}
+              {saving ? 'Saving...' : modal === 'create' ? 'Create Policy' : 'Save Changes'}
             </Button>
           </>
-        }
+        )}
       >
         <PolicyForm
           form={form}
           setForm={setForm}
-          tenants={tenants}
-          gateways={gatewaysForTenant(form.tenant_id)}
-          resources={resourcesForGateway(form.tenant_id, form.gateway_id)}
-          onScopeChange={selectScopeMode}
-          onTenantChange={selectTenant}
-          onGatewayChange={selectGateway}
-          onResourceChange={selectResource}
+          directoryUsers={directoryUsers}
+          directoryGroups={directoryGroups}
           onConditionChange={updateCondition}
+        />
+      </Modal>
+
+      <Modal
+        open={!!assignmentPolicy}
+        onClose={() => setAssignmentPolicy(null)}
+        title="Assign Policy"
+        size="3xl"
+      >
+        <PolicyAssignmentModal
+          policy={assignmentPolicy}
+          assignments={assignmentPolicy ? assignmentsByPolicy.get(assignmentPolicy.id) || [] : []}
+          form={assignmentForm}
+          setForm={setAssignmentForm}
+          tenants={tenants}
+          gateways={gateways}
+          resources={resources}
+          tenantByID={tenantByID}
+          gatewayByID={gatewayByID}
+          resourceByID={resourceByID}
+          saving={assignmentSaving}
+          onSave={saveAssignment}
+          onDelete={removeAssignment}
         />
       </Modal>
     </>

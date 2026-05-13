@@ -162,6 +162,74 @@ func TestPolicyMatchesAllowedRoleFromContext(t *testing.T) {
 	}
 }
 
+func TestPolicyMatchesAllowedSCIMGroupFromContext(t *testing.T) {
+	s := newTestStore(t)
+	s.SavePolicyRule(&models.PolicyRule{
+		ID:       "rule-allow-finance",
+		Name:     "Allow Finance",
+		Priority: 1,
+		Enabled:  true,
+		Conditions: models.RuleConditions{
+			AllowedGroups: []string{"grp-finance"},
+		},
+		Action:    "allow",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			SourceIP:     "192.0.2.10",
+			Resource:     "10.0.0.10",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Rules:             s.ListPolicyRules(),
+		DirectoryGroupIDs: []string{"grp-finance"},
+		Now:               businessHoursTime(),
+	})
+
+	if decision.Decision != "allow" || decision.MatchedRule != "rule-allow-finance" {
+		t.Fatalf("Decision = %+v, want allow from SCIM group context", decision)
+	}
+}
+
+func TestPolicyMatchesAllowedSCIMUserFromContext(t *testing.T) {
+	s := newTestStore(t)
+	s.SavePolicyRule(&models.PolicyRule{
+		ID:       "rule-allow-directory-user",
+		Name:     "Allow Directory User",
+		Priority: 1,
+		Enabled:  true,
+		Conditions: models.RuleConditions{
+			AllowedUsers: []string{"dir-user-1"},
+		},
+		Action:    "allow",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			SourceIP:     "192.0.2.10",
+			Resource:     "10.0.0.10",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Rules:           s.ListPolicyRules(),
+		DirectoryUserID: "dir-user-1",
+		Now:             businessHoursTime(),
+	})
+
+	if decision.Decision != "allow" || decision.MatchedRule != "rule-allow-directory-user" {
+		t.Fatalf("Decision = %+v, want allow from SCIM user context", decision)
+	}
+}
+
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	s := store.New(t.TempDir())

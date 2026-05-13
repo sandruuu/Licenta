@@ -38,8 +38,25 @@ func TestCreateCSRWithIdentityAddsSANs(t *testing.T) {
 	if err := csr.CheckSignature(); err != nil {
 		t.Fatalf("CSR signature invalid: %v", err)
 	}
-	if csr.Subject.CommonName != "device-1" || len(csr.DNSNames) != 1 || csr.DNSNames[0] != "host-1" || len(csr.EmailAddresses) != 1 || csr.EmailAddresses[0] != "user@example.com" {
-		t.Fatalf("CSR identity = subject=%+v dns=%v emails=%v", csr.Subject, csr.DNSNames, csr.EmailAddresses)
+	if csr.Subject.CommonName != "device-1" || len(csr.DNSNames) != 1 || csr.DNSNames[0] != "host-1" || len(csr.EmailAddresses) != 1 || csr.EmailAddresses[0] != "user@example.com" || len(csr.URIs) != 1 || csr.URIs[0].String() != "spiffe://ztna.local/device/device-1" {
+		t.Fatalf("CSR identity = subject=%+v dns=%v emails=%v uris=%v", csr.Subject, csr.DNSNames, csr.EmailAddresses, csr.URIs)
+	}
+
+	longDeviceID := "2050b1864ca3647164fea13ac86d759e7f8bfb5ede15e202cc0869aa12671972"
+	longCSRPEM, err := CreateCSRWithIdentity(key, CSRIdentity{DeviceID: longDeviceID})
+	if err != nil {
+		t.Fatalf("CreateCSRWithIdentity long device returned error: %v", err)
+	}
+	block, _ = pem.Decode(longCSRPEM)
+	if block == nil {
+		t.Fatalf("long CSR was not PEM encoded")
+	}
+	longCSR, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParseCertificateRequest long returned error: %v", err)
+	}
+	if len(longCSR.Subject.CommonName) > 63 || !strings.HasPrefix(longCSR.Subject.CommonName, "ztna-device-") || len(longCSR.URIs) != 1 || longCSR.URIs[0].String() != "spiffe://ztna.local/device/"+longDeviceID {
+		t.Fatalf("long CSR identity = subject=%+v uris=%v", longCSR.Subject, longCSR.URIs)
 	}
 	if _, err := CreateCSRWithIdentity(key, CSRIdentity{DeviceID: "device-1", UserEmail: "User <user@example.com>"}); err == nil {
 		t.Fatalf("CreateCSRWithIdentity accepted display-name email")
@@ -96,8 +113,8 @@ func TestRunnerCreatesCSRCallsESTAndInstaller(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseCertificateRequest returned error: %v", err)
 		}
-		if csr.Subject.CommonName != "device-1" || len(csr.DNSNames) != 1 || csr.DNSNames[0] != "host-1" || len(csr.EmailAddresses) != 1 || csr.EmailAddresses[0] != "user@example.com" {
-			t.Fatalf("CSR = subject=%+v dns=%v emails=%v", csr.Subject, csr.DNSNames, csr.EmailAddresses)
+		if csr.Subject.CommonName != "device-1" || len(csr.DNSNames) != 1 || csr.DNSNames[0] != "host-1" || len(csr.EmailAddresses) != 1 || csr.EmailAddresses[0] != "user@example.com" || len(csr.URIs) != 1 || csr.URIs[0].String() != "spiffe://ztna.local/device/device-1" {
+			t.Fatalf("CSR = subject=%+v dns=%v emails=%v uris=%v", csr.Subject, csr.DNSNames, csr.EmailAddresses, csr.URIs)
 		}
 		if request.PublicKeyFingerprint != fingerprint {
 			t.Fatalf("fingerprint = %q, want %q", request.PublicKeyFingerprint, fingerprint)

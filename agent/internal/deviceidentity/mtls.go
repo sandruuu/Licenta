@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -47,7 +48,7 @@ func selectMachineCertificate(candidates []*x509.Certificate, deviceID string, p
 		if cert == nil {
 			continue
 		}
-		if strings.TrimSpace(cert.Subject.CommonName) != deviceID {
+		if certificateDeviceID(cert) != deviceID {
 			continue
 		}
 		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
@@ -67,6 +68,37 @@ func selectMachineCertificate(candidates []*x509.Certificate, deviceID string, p
 		return nil, fmt.Errorf("no valid endpoint client certificate found in LocalMachine\\My for device_id %q", deviceID)
 	}
 	return selected, nil
+}
+
+func certificateDeviceID(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	for _, uri := range cert.URIs {
+		if id := deviceIDFromIdentityURI(uri); id != "" {
+			return id
+		}
+	}
+	return strings.TrimSpace(cert.Subject.CommonName)
+}
+
+func deviceIDFromIdentityURI(uri *url.URL) string {
+	if uri == nil {
+		return ""
+	}
+	if !strings.EqualFold(uri.Scheme, "spiffe") || !strings.EqualFold(uri.Host, "ztna.local") {
+		return ""
+	}
+	const prefix = "/device/"
+	escapedPath := uri.EscapedPath()
+	if !strings.HasPrefix(escapedPath, prefix) {
+		return ""
+	}
+	value, err := url.PathUnescape(strings.TrimPrefix(escapedPath, prefix))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func certificateAllowsClientAuth(cert *x509.Certificate) bool {

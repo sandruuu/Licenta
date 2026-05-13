@@ -94,6 +94,9 @@ func (s *Server) deviceRole(_ string) string {
 func (s *Server) signCSR(csrPEM []byte, validDays int, vaultRole string) ([]byte, error) {
 	if s.externalPKI != nil {
 		ttl := fmt.Sprintf("%dh", validDays*24)
+		if strings.TrimSpace(vaultRole) == strings.TrimSpace(s.pa.Cfg.PKIRoleDevice) {
+			return s.externalPKI.SignCSRVerbatim(csrPEM, vaultRole, ttl)
+		}
 		return s.externalPKI.SignCSR(csrPEM, vaultRole, ttl)
 	}
 	return nil, fmt.Errorf("PKI signer not initialized")

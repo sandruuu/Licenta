@@ -12,6 +12,7 @@ import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 
 function formatDate(value) {
   if (!value) return '-';
@@ -46,6 +47,9 @@ export default function Gateways() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [enrollmentInfo, setEnrollmentInfo] = useState(null);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [organizationFilter, setOrganizationFilter] = useState('all');
 
   const tenantByID = useMemo(() => {
     const result = new Map();
@@ -125,7 +129,7 @@ export default function Gateways() {
     },
     {
       key: 'tenant_id',
-      label: 'Tenant',
+      label: 'Organization',
       render: (value) => tenantByID.get(value)?.name || value || '-',
     },
     { key: 'fqdn', label: 'FQDN', render: (value) => <span className="text-mono">{value || '-'}</span> },
@@ -175,10 +179,31 @@ export default function Gateways() {
       ),
     },
   ];
+  const filteredGateways = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return gateways.filter((gateway) => {
+      const status = String(gateway.status || '').toLowerCase();
+      const isActiveStatus = status === 'active' || status === 'enrolled';
+      if (statusFilter === 'active' && !isActiveStatus) return false;
+      if (statusFilter !== 'all' && statusFilter !== 'active' && status !== statusFilter) return false;
+      if (organizationFilter !== 'all' && gateway.tenant_id !== organizationFilter) return false;
+      if (!needle) return true;
+      const organization = tenantByID.get(gateway.tenant_id);
+      return [
+        gateway.name,
+        gateway.fqdn,
+        gateway.id,
+        gateway.tenant_id,
+        organization?.name,
+        organization?.domain,
+      ].some((value) => String(value || '').toLowerCase().includes(needle));
+    });
+  }, [gateways, query, statusFilter, organizationFilter, tenantByID]);
+  const hasFilters = query.trim() || statusFilter !== 'all' || organizationFilter !== 'all';
 
   return (
     <>
-      <PageHeader title="Gateways" subtitle="Enroll edge gateways under one tenant and attach resources to them" />
+      <PageHeader title="Gateways" subtitle="Enroll edge gateways under one organization and attach resources to them" />
 
       {error && (
         <div className="bg-danger-muted border border-danger rounded-md p-3 mb-4 text-sm text-danger">
@@ -195,7 +220,7 @@ export default function Gateways() {
               <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.gateway_id || '-'}</code>
             </div>
             <div>
-              <div className="text-[10px] font-semibold uppercase text-text-muted">Tenant ID</div>
+              <div className="text-[10px] font-semibold uppercase text-text-muted">Organization ID</div>
               <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.tenant_id || '-'}</code>
             </div>
             <div>
@@ -212,13 +237,33 @@ export default function Gateways() {
         </div>
       )}
 
+      <ListToolbar
+        query={query}
+        onQueryChange={setQuery}
+        placeholder="Search gateway name, FQDN, or organization"
+        summary={`${filteredGateways.length} of ${gateways.length}`}
+      >
+        <ListToolbarSelect value={statusFilter} onChange={setStatusFilter}>
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="pending">Pending</option>
+          <option value="revoked">Revoked</option>
+        </ListToolbarSelect>
+        <ListToolbarSelect value={organizationFilter} onChange={setOrganizationFilter} className="min-w-[180px]">
+          <option value="all">All organizations</option>
+          {tenants.map((tenant) => (
+            <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+          ))}
+        </ListToolbarSelect>
+      </ListToolbar>
+
       <DataTable
         columns={columns}
-        data={gateways}
+        data={filteredGateways}
         loading={loading}
         emptyIcon={Router}
-        emptyTitle="No gateways created yet"
-        emptyMessage="Create a tenant first, then enroll its first gateway."
+        emptyTitle={hasFilters ? 'No gateways match filters' : 'No gateways created yet'}
+        emptyMessage={hasFilters ? 'Adjust search or filters to find gateways.' : 'Create an organization first, then enroll its first gateway.'}
       />
     </>
   );

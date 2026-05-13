@@ -17,13 +17,18 @@ import (
 // PA is responsible for loading rules, user attributes, risk signals, and
 // posture before calling the engine.
 type AccessContext struct {
-	Request            models.AccessRequest
-	Rules              []*models.PolicyRule
-	UserRole           string
-	FailedAttempts     int
-	Now                time.Time
-	GeoVelocity        float64
-	IsImpossibleTravel bool
+	Request             models.AccessRequest
+	Rules               []*models.PolicyRule
+	UserRole            string
+	UserEmail           string
+	DirectoryUserID     string
+	DirectoryUserName   string
+	DirectoryGroupIDs   []string
+	DirectoryGroupNames []string
+	FailedAttempts      int
+	Now                 time.Time
+	GeoVelocity         float64
+	IsImpossibleTravel  bool
 }
 
 // Engine is the Policy Engine. It evaluates normalized access context and
@@ -107,7 +112,13 @@ func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskSco
 	}
 
 	if len(cond.AllowedUsers) > 0 {
-		if !containsString(cond.AllowedUsers, req.UserID) {
+		if !containsAnyString(cond.AllowedUsers, req.UserID, req.Username, ctx.UserEmail, ctx.DirectoryUserID, ctx.DirectoryUserName) {
+			return false
+		}
+	}
+
+	if len(cond.AllowedGroups) > 0 {
+		if !intersectsString(cond.AllowedGroups, append(ctx.DirectoryGroupIDs, ctx.DirectoryGroupNames...)) {
 			return false
 		}
 	}
@@ -277,8 +288,30 @@ func (e *Engine) defaultDecision(req models.AccessRequest, riskScore int) *model
 }
 
 func containsString(slice []string, item string) bool {
+	item = strings.TrimSpace(item)
+	if item == "" {
+		return false
+	}
 	for _, s := range slice {
-		if strings.EqualFold(s, item) {
+		if strings.EqualFold(strings.TrimSpace(s), item) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyString(slice []string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if containsString(slice, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectsString(left, right []string) bool {
+	for _, candidate := range right {
+		if containsString(left, candidate) {
 			return true
 		}
 	}

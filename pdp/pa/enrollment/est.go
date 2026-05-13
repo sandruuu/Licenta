@@ -40,8 +40,8 @@ func (s *Service) CompleteESTEnrollment(req models.EnrollmentRequest, identity E
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
-	if csr.Subject.CommonName != deviceID {
-		return nil, fmt.Errorf("%w: CSR common name must match device_id", ErrInvalidCSR)
+	if err := ValidateCSRDeviceIdentity(csr, deviceID); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
 	username := strings.TrimSpace(identity.Username)
 	if err := ValidateCSREmailIdentity(csr, username); err != nil {

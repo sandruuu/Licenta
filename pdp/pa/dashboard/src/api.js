@@ -36,10 +36,21 @@ async function apiFetch(path, options = {}) {
     throw new Error('Unauthorized');
   }
 
-  const json = await res.json();
+  const text = await res.text();
+  let json = null;
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      if (!res.ok) {
+        throw new Error(text || res.statusText);
+      }
+      throw new Error(`Invalid JSON response from ${path}`);
+    }
+  }
 
   if (!res.ok) {
-    throw new Error(json.error || res.statusText);
+    throw new Error(json?.error || res.statusText);
   }
 
   // Unwrap APIResponse envelope: { success, data, message } -> data
@@ -49,7 +60,7 @@ async function apiFetch(path, options = {}) {
   return json;
 }
 
-// ─── Tenants ────────────────────────────────
+// Organizations. The backend contract still uses /admin/tenants.
 
 export async function getTenants() {
   return apiFetch('/admin/tenants');
@@ -232,10 +243,46 @@ export async function deleteRule(id) {
   });
 }
 
-// ─── Users ──────────────────────────────────
+export async function getPolicyAssignments() {
+  return apiFetch('/admin/policy-assignments');
+}
 
-export async function getUsers() {
-  return apiFetch('/admin/users');
+export async function createPolicyAssignment(data) {
+  return apiFetch('/admin/policy-assignments', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updatePolicyAssignment(id, data) {
+  return apiFetch(`/admin/policy-assignments/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePolicyAssignment(id) {
+  return apiFetch(`/admin/policy-assignments/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+// Directory principals provisioned by organization IdPs through SCIM.
+
+export async function getDirectoryUsers(tenantId = '', idpId = '') {
+  const params = new URLSearchParams();
+  if (tenantId) params.set('tenant_id', tenantId);
+  if (idpId) params.set('idp_id', idpId);
+  const query = params.toString();
+  return apiFetch(`/admin/directory/users${query ? `?${query}` : ''}`);
+}
+
+export async function getDirectoryGroups(tenantId = '', idpId = '') {
+  const params = new URLSearchParams();
+  if (tenantId) params.set('tenant_id', tenantId);
+  if (idpId) params.set('idp_id', idpId);
+  const query = params.toString();
+  return apiFetch(`/admin/directory/groups${query ? `?${query}` : ''}`);
 }
 
 // ─── Sessions ───────────────────────────────
@@ -256,7 +303,7 @@ export async function getAuditLog(limit = 100) {
   return apiFetch(`/admin/audit?limit=${limit}`);
 }
 
-// ─── Identity Providers (per Tenant) ────────
+// Identity Providers (per Organization)
 
 export async function getIdPs(tenantId) {
   return apiFetch(`/admin/tenants/idps?tenant_id=${encodeURIComponent(tenantId)}`);

@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/url"
 	"testing"
 	"time"
 
@@ -71,6 +72,7 @@ func (a *testCertificateAuthority) signCSR(csrPEM []byte, validDays int, role st
 		Subject:        csr.Subject,
 		DNSNames:       csr.DNSNames,
 		EmailAddresses: csr.EmailAddresses,
+		URIs:           csr.URIs,
 		NotBefore:      now.Add(-time.Minute),
 		NotAfter:       now.Add(time.Duration(validDays) * 24 * time.Hour),
 		KeyUsage:       x509.KeyUsageDigitalSignature,
@@ -104,6 +106,24 @@ func testEnrollmentKey(t *testing.T) *ecdsa.PrivateKey {
 func testEnrollmentCSRPEMWithKey(t *testing.T, key *ecdsa.PrivateKey, commonName, email string) string {
 	t.Helper()
 	request := &x509.CertificateRequest{Subject: pkix.Name{CommonName: commonName}}
+	if email != "" {
+		request.EmailAddresses = []string{email}
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, request, key)
+	if err != nil {
+		t.Fatalf("create CSR: %v", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
+}
+
+func testEnrollmentCSRPEMWithDeviceURI(t *testing.T, key *ecdsa.PrivateKey, commonName, deviceID, email string) string {
+	t.Helper()
+	request := &x509.CertificateRequest{Subject: pkix.Name{CommonName: commonName}}
+	deviceURI, err := url.Parse(DeviceIdentityURI(deviceID))
+	if err != nil {
+		t.Fatalf("parse device URI: %v", err)
+	}
+	request.URIs = []*url.URL{deviceURI}
 	if email != "" {
 		request.EmailAddresses = []string{email}
 	}

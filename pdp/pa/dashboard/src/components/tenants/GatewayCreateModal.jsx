@@ -14,7 +14,7 @@ export default function GatewayCreateModal({ tenant, form, setForm, error, enrol
             <div className="flex items-center justify-between px-6 py-4 border-b border-border">
               <div>
                 <h2 className="text-base font-semibold text-text-primary">Create Gateway</h2>
-                <p className="text-[11px] text-text-muted mt-0.5">{tenant?.name || 'Tenant'}</p>
+                <p className="text-[11px] text-text-muted mt-0.5">{tenant?.name || 'Organization'}</p>
               </div>
               <button onClick={onClose} className="p-1 text-text-muted hover:text-text-primary rounded-md">
                 <X size={20} />
@@ -27,7 +27,7 @@ export default function GatewayCreateModal({ tenant, form, setForm, error, enrol
               )}
 
               <div>
-                <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">Tenant</label>
+                <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">Organization</label>
                 <input type="text" value={tenant?.name || ''} readOnly
                   className="w-full px-3 py-2 bg-surface-secondary border border-border rounded-md text-[13px] text-text-primary font-sans" />
               </div>
@@ -45,7 +45,7 @@ export default function GatewayCreateModal({ tenant, form, setForm, error, enrol
                   <input type="text" value={gatewayDNSLabel} readOnly
                     className="min-w-0 flex-1 px-3 py-2 bg-surface-secondary border border-border rounded-l-md text-[13px] text-text-primary font-mono" />
                   <span className="inline-flex items-center max-w-[55%] px-3 py-2 bg-surface-secondary border border-l-0 border-border rounded-r-md text-[13px] text-text-secondary font-mono truncate">
-                    {gatewayDomain ? `.${gatewayDomain}` : '.tenant-domain'}
+                    {gatewayDomain ? `.${gatewayDomain}` : '.organization-domain'}
                   </span>
                 </div>
                 <input type="text" value={gatewayGeneratedFQDN || ''} readOnly className="sr-only" aria-label="Generated gateway FQDN" />
