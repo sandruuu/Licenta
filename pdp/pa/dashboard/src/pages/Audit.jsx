@@ -1,29 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { FileText } from 'lucide-react';
 import { getAuditLog } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
-import { FileText } from 'lucide-react';
-
-function formatDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
+import { FormSelect } from '../components/ui/FormField';
+import { formatDateTime } from '../utils/format';
 
 export default function Audit() {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(true);
   const [limit, setLimit] = useState(50);
 
-  const load = () => {
+  const handleLimitChange = (event) => {
     setLoading(true);
-    getAuditLog(limit)
-      .then((data) => setEntries(Array.isArray(data) ? data : []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    setLimit(parseInt(event.target.value, 10));
   };
 
-  useEffect(() => { load(); }, [limit]);
+  useEffect(() => {
+    let cancelled = false;
+    getAuditLog(limit)
+      .then((data) => {
+        if (!cancelled) setEntries(Array.isArray(data) ? data : []);
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [limit]);
 
   const eventBadgeVariant = (type) => {
     if (!type) return 'neutral';
@@ -34,11 +41,11 @@ export default function Audit() {
   };
 
   const columns = [
-    { key: 'timestamp', label: 'Time', render: (v) => <span className="text-mono text-xs whitespace-nowrap">{formatDate(v)}</span> },
+    { key: 'timestamp', label: 'Time', render: (v) => <span className="text-mono text-xs whitespace-nowrap">{formatDateTime(v)}</span> },
     { key: 'event_type', label: 'Event', render: (v) => <Badge variant={eventBadgeVariant(v)}>{v}</Badge> },
-    { key: 'username', label: 'User', render: (v) => <span className="text-text-primary">{v || '—'}</span> },
-    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '—'}</span> },
-    { key: 'resource', label: 'Resource', render: (v) => <span className="text-xs">{v || '—'}</span> },
+    { key: 'username', label: 'User', render: (v) => <span className="text-text-primary">{v || '-'}</span> },
+    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '-'}</span> },
+    { key: 'resource', label: 'Resource', render: (v) => <span className="text-xs">{v || '-'}</span> },
     { key: 'decision', label: 'Decision', render: (v, row) => {
       if (v) return <Badge variant={v === 'allow' ? 'success' : v === 'deny' ? 'danger' : 'warning'}>{v}</Badge>;
       return <Badge variant={row.success ? 'success' : 'danger'}>{row.success ? 'OK' : 'FAIL'}</Badge>;
@@ -51,16 +58,16 @@ export default function Audit() {
       <PageHeader title="Audit Log" subtitle="Security events and access decisions" />
 
       <div className="mb-4 flex justify-end">
-        <select
-          className="bg-surface-card border border-border rounded-md px-3 py-1.5 text-xs text-text-secondary"
+        <FormSelect
+          className="w-[150px]"
           value={limit}
-          onChange={(e) => setLimit(parseInt(e.target.value))}
+          onChange={handleLimitChange}
         >
           <option value={25}>Last 25</option>
           <option value={50}>Last 50</option>
           <option value={100}>Last 100</option>
           <option value={500}>Last 500</option>
-        </select>
+        </FormSelect>
       </div>
 
       <DataTable columns={columns} data={entries} loading={loading} emptyIcon={FileText} emptyTitle="No audit entries found" />

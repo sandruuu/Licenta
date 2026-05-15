@@ -6,7 +6,7 @@ function AccessResult({ kind, message }) {
 
   return (
     <div className="text-center">
-      <div className={`w-[72px] h-[72px] rounded-full ${granted ? 'bg-success' : 'bg-danger'} flex items-center justify-center mx-auto mb-5 text-white`}>
+      <div className={`w-[72px] h-[72px] rounded-full ${granted ? 'bg-success' : 'bg-danger'} flex items-center justify-center mx-auto mb-5 text-white-smoke`}>
         <Icon size={36} />
       </div>
       <h2 className="text-xl font-bold text-text-primary mb-2">

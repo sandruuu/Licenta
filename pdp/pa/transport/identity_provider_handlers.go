@@ -48,6 +48,12 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 
 	case http.MethodPost:
 		appCfg := s.appConfig()
+		existingConfigs := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID)
+		if len(existingConfigs) > 0 {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "organization already has an identity provider"})
+			return
+		}
+
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})

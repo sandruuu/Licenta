@@ -4,6 +4,7 @@ import { Shield } from 'lucide-react';
 import { login, verifyMFA, setToken } from '../../api';
 import Button from '../ui/Button';
 import FormField, { FormInput } from '../ui/FormField';
+import ThemeToggle from '../ui/ThemeToggle';
 
 function AdminLogin() {
   const navigate = useNavigate();
@@ -61,7 +62,8 @@ function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface p-4">
+    <div className="relative min-h-screen flex items-center justify-center bg-surface p-4">
+      <ThemeToggle className="absolute right-4 top-4" />
       <div className="bg-surface-card border border-border rounded-md shadow-xl w-full max-w-[400px] p-8 animate-[cardFadeIn_0.35s_ease-out_both]">
         <div className="text-center mb-5">
           <div className="w-12 h-12 rounded-xl bg-accent-muted flex items-center justify-center mx-auto mb-3">

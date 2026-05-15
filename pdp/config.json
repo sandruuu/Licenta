@@ -98,80 +98,6 @@
     "suspicious_travel_speed_kmh": 500,
     "impossible_travel_speed_kmh": 900
   },
-  "policies": {
-    "seed_default_rules": true,
-    "default_rules": [
-      {
-        "id": "rule_default_deny_unhealthy",
-        "name": "Deny Unhealthy Devices",
-        "description": "Block access for devices with critical health issues",
-        "priority": 10,
-        "enabled": true,
-        "conditions": {
-          "min_health_score": 40
-        },
-        "action": "deny"
-      },
-      {
-        "id": "rule_mfa_rdp",
-        "name": "Require MFA for RDP",
-        "description": "All RDP connections require multi-factor authentication",
-        "priority": 20,
-        "enabled": true,
-        "conditions": {
-          "target_ports": [3389]
-        },
-        "action": "mfa_required"
-      },
-      {
-        "id": "rule_mfa_ssh",
-        "name": "Require MFA for SSH",
-        "description": "All SSH connections require multi-factor authentication",
-        "priority": 25,
-        "enabled": true,
-        "conditions": {
-          "target_ports": [22]
-        },
-        "action": "mfa_required"
-      },
-      {
-        "id": "rule_block_high_risk",
-        "name": "Block High Risk Access",
-        "description": "Deny access when risk score exceeds threshold",
-        "priority": 15,
-        "enabled": true,
-        "conditions": {
-          "max_risk_score": 75
-        },
-        "action": "deny"
-      },
-      {
-        "id": "rule_allow_admin",
-        "name": "Allow Admin Full Access",
-        "description": "Administrators have full access to all resources",
-        "priority": 5,
-        "enabled": true,
-        "conditions": {
-          "allowed_roles": ["admin"]
-        },
-        "action": "allow"
-      },
-      {
-        "id": "rule_business_hours_web",
-        "name": "Allow Web During Business Hours",
-        "description": "Web access allowed during business hours for all users",
-        "priority": 30,
-        "enabled": true,
-        "conditions": {
-          "target_ports": [80, 443],
-          "allowed_time_start": "08:00",
-          "allowed_time_end": "18:00",
-          "allowed_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-        },
-        "action": "allow"
-      }
-    ]
-  },
   "risk": {
     "posture_critical_after": 1800000000000,
     "posture_stale_after": 600000000000,
@@ -216,8 +142,6 @@
     "suspicious_geo_velocity_kmh": 500,
     "suspicious_geo_velocity_points": 15,
     "max_anomaly_points": 25,
-    "max_score": 100,
-    "default_deny_risk_threshold": 80,
-    "default_mfa_risk_threshold": 50
+    "max_score": 100
   }
 }

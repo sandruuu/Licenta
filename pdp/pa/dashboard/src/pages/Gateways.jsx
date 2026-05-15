@@ -1,69 +1,58 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Ban, Copy, RefreshCw, Router, Server, Trash2 } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Edit2, Router, Trash2 } from 'lucide-react';
 import {
   deleteGateway,
   getGateways,
-  getTenants,
-  regenerateGatewayToken,
-  revokeGateway,
+  getOrganizations,
+  updateGateway,
 } from '../api';
 import PageHeader from '../components/ui/PageHeader';
-import DataTable from '../components/ui/DataTable';
+import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
-
-function formatDate(value) {
-  if (!value) return '-';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString('ro-RO', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+import Modal from '../components/ui/Modal';
+import FormField, { FormInput, FormSelect } from '../components/ui/FormField';
+import Pagination from '../components/ui/Pagination';
+import { usePaginatedTable } from '../components/ui/usePaginatedTable';
+import { formatDateTime } from '../utils/format';
 
 function statusVariant(status) {
   const value = (status || '').toLowerCase();
   if (value === 'enrolled' || value === 'active') return 'success';
   if (value === 'revoked') return 'danger';
-  if (value === 'pending') return 'info';
+  if (value === 'pending') return 'warning';
   return 'neutral';
-}
-
-function copyText(text) {
-  if (!text) return;
-  navigator.clipboard.writeText(text).catch(() => {});
 }
 
 export default function Gateways() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [gateways, setGateways] = useState([]);
-  const [tenants, setTenants] = useState([]);
+  const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [enrollmentInfo, setEnrollmentInfo] = useState(null);
-  const [query, setQuery] = useState('');
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState({});
+  const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [organizationFilter, setOrganizationFilter] = useState('all');
+  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('tenant_id') || 'all');
 
-  const tenantByID = useMemo(() => {
+  const organizationByID = useMemo(() => {
     const result = new Map();
-    tenants.forEach((tenant) => result.set(tenant.id, tenant));
+    organizations.forEach((organization) => result.set(organization.id, organization));
     return result;
-  }, [tenants]);
+  }, [organizations]);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [gatewayData, tenantData] = await Promise.all([getGateways(), getTenants()]);
+      const [gatewayData, organizationData] = await Promise.all([getGateways(), getOrganizations()]);
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
-      setTenants(Array.isArray(tenantData) ? tenantData : []);
+      setOrganizations(Array.isArray(organizationData) ? organizationData : []);
     } catch (e) {
       setError(e.message || 'Failed to load gateways');
     } finally {
@@ -75,33 +64,31 @@ export default function Gateways() {
     load();
   }, []);
 
-  const handleRegenerateToken = async (id) => {
-    setError('');
-    try {
-      const gateway = gateways.find((item) => item.id === id);
-      const result = await regenerateGatewayToken(id);
-      if (result?.enrollment_token) {
-        setEnrollmentInfo({
-          token: result.enrollment_token,
-          gateway_id: result.id || id,
-          tenant_id: result.tenant_id || gateway?.tenant_id || '',
-          expires_at: result.token_expires_at,
-        });
-      }
-      await load();
-    } catch (e) {
-      setError(e.message || 'Failed to regenerate enrollment token');
-    }
+  const openEdit = (gateway) => {
+    setForm({
+      id: gateway.id,
+      name: gateway.name || '',
+      fqdn: gateway.fqdn || '',
+      tenant_id: gateway.tenant_id || '',
+    });
+    setModal('edit');
   };
 
-  const handleRevoke = async (id) => {
-    if (!confirm('Revoke this gateway?')) return;
+  const handleSave = async () => {
+    setSaving(true);
     setError('');
     try {
-      await revokeGateway(id);
+      await updateGateway(form.id, {
+        name: form.name?.trim(),
+        fqdn: form.fqdn?.trim(),
+        tenant_id: form.tenant_id,
+      });
+      setModal(null);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to revoke gateway');
+      setError(e.message || 'Failed to update gateway');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -123,59 +110,32 @@ export default function Gateways() {
       render: (_, row) => (
         <div>
           <strong className="text-text-primary">{row.name || '-'}</strong>
-          <div className="text-mono text-text-muted">{row.id}</div>
         </div>
       ),
     },
     {
       key: 'tenant_id',
       label: 'Organization',
-      render: (value) => tenantByID.get(value)?.name || value || '-',
+      render: (value) => organizationByID.get(value)?.name || value || '-',
     },
     { key: 'fqdn', label: 'FQDN', render: (value) => <span className="text-mono">{value || '-'}</span> },
     { key: 'status', label: 'Status', render: (value) => <Badge variant={statusVariant(value)}>{value || 'unknown'}</Badge> },
-    { key: 'token_expires_at', label: 'Token Expires', render: (value) => <span className="text-mono">{formatDate(value)}</span> },
-    { key: 'cert_expires_at', label: 'Cert Expires', render: (value) => <span className="text-mono">{formatDate(value)}</span> },
-    { key: 'last_seen_at', label: 'Last Seen', render: (value) => <span className="text-mono">{formatDate(value)}</span> },
+    { key: 'token_expires_at', label: 'Token Expires', render: (value) => <span className="text-mono">{formatDateTime(value)}</span> },
+    { key: 'cert_expires_at', label: 'Cert Expires', render: (value) => <span className="text-mono">{formatDateTime(value)}</span> },
     {
       key: 'actions',
       label: 'Actions',
       align: 'right',
       render: (_, row) => (
-        <div className="flex justify-end gap-1.5">
-          <Button
-            variant="ghost"
-            className="!p-1.5 !shadow-none"
-            onClick={() => navigate(`/dashboard/resources?tenant_id=${row.tenant_id}&gateway_id=${row.id}`)}
-            title="Add resources"
-          >
-            <Server size={13} />
-          </Button>
-          <Button
-            variant="ghost"
-            className="!p-1.5 !shadow-none"
-            onClick={() => handleRegenerateToken(row.id)}
-            title="Regenerate enrollment token"
-          >
-            <RefreshCw size={13} />
-          </Button>
-          <Button
-            variant="ghost"
-            className="!p-1.5 !shadow-none"
-            onClick={() => handleRevoke(row.id)}
-            title="Revoke gateway"
-          >
-            <Ban size={13} />
-          </Button>
-          <Button
-            variant="ghost"
-            className="!p-1.5 !shadow-none !text-danger hover:!bg-danger-muted"
+        <TableActions>
+          <TableIconButton icon={Edit2} label="Edit gateway" onClick={() => openEdit(row)} />
+          <TableIconButton
+            icon={Trash2}
+            label="Delete gateway"
+            danger
             onClick={() => handleDelete(row.id)}
-            title="Delete gateway"
-          >
-            <Trash2 size={13} />
-          </Button>
-        </div>
+          />
+        </TableActions>
       ),
     },
   ];
@@ -188,7 +148,7 @@ export default function Gateways() {
       if (statusFilter !== 'all' && statusFilter !== 'active' && status !== statusFilter) return false;
       if (organizationFilter !== 'all' && gateway.tenant_id !== organizationFilter) return false;
       if (!needle) return true;
-      const organization = tenantByID.get(gateway.tenant_id);
+      const organization = organizationByID.get(gateway.tenant_id);
       return [
         gateway.name,
         gateway.fqdn,
@@ -198,8 +158,24 @@ export default function Gateways() {
         organization?.domain,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [gateways, query, statusFilter, organizationFilter, tenantByID]);
+  }, [gateways, query, statusFilter, organizationFilter, organizationByID]);
   const hasFilters = query.trim() || statusFilter !== 'all' || organizationFilter !== 'all';
+  const gatewayPagination = usePaginatedTable(filteredGateways);
+
+  const handleQueryChange = (value) => {
+    setQuery(value);
+    gatewayPagination.resetPage();
+  };
+
+  const handleStatusFilterChange = (value) => {
+    setStatusFilter(value);
+    gatewayPagination.resetPage();
+  };
+
+  const handleOrganizationFilterChange = (value) => {
+    setOrganizationFilter(value);
+    gatewayPagination.resetPage();
+  };
 
   return (
     <>
@@ -211,60 +187,76 @@ export default function Gateways() {
         </div>
       )}
 
-      {enrollmentInfo?.token && (
-        <div className="bg-surface-card border border-warning/30 rounded-md p-4 mb-4 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-          <div className="text-xs font-semibold text-text-primary mb-2">Gateway Enrollment Token</div>
-          <div className="grid gap-2 md:grid-cols-3">
-            <div>
-              <div className="text-[10px] font-semibold uppercase text-text-muted">Gateway ID</div>
-              <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.gateway_id || '-'}</code>
-            </div>
-            <div>
-              <div className="text-[10px] font-semibold uppercase text-text-muted">Organization ID</div>
-              <code className="text-mono [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.tenant_id || '-'}</code>
-            </div>
-            <div>
-              <div className="text-[10px] font-semibold uppercase text-text-muted">Expires</div>
-              <code className="text-mono text-text-primary">{formatDate(enrollmentInfo.expires_at)}</code>
-            </div>
-          </div>
-          <div className="mt-3 flex gap-2 items-center">
-            <code className="text-mono flex-1 [overflow-wrap:anywhere] text-text-primary">{enrollmentInfo.token}</code>
-            <Button variant="secondary" onClick={() => copyText(enrollmentInfo.token)} className="text-xs px-2 py-1">
-              <Copy size={12} /> Copy Token
-            </Button>
-          </div>
-        </div>
-      )}
-
       <ListToolbar
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={handleQueryChange}
         placeholder="Search gateway name, FQDN, or organization"
         summary={`${filteredGateways.length} of ${gateways.length}`}
       >
-        <ListToolbarSelect value={statusFilter} onChange={setStatusFilter}>
+        <ListToolbarSelect value={statusFilter} onChange={handleStatusFilterChange}>
           <option value="all">All statuses</option>
           <option value="active">Active</option>
           <option value="pending">Pending</option>
           <option value="revoked">Revoked</option>
         </ListToolbarSelect>
-        <ListToolbarSelect value={organizationFilter} onChange={setOrganizationFilter} className="min-w-[180px]">
+        <ListToolbarSelect value={organizationFilter} onChange={handleOrganizationFilterChange} className="min-w-[180px]">
           <option value="all">All organizations</option>
-          {tenants.map((tenant) => (
-            <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+          {organizations.map((organization) => (
+            <option key={organization.id} value={organization.id}>{organization.name}</option>
           ))}
         </ListToolbarSelect>
       </ListToolbar>
 
       <DataTable
         columns={columns}
-        data={filteredGateways}
+        data={gatewayPagination.pageItems}
         loading={loading}
+        minRows={gatewayPagination.pageSize}
         emptyIcon={Router}
         emptyTitle={hasFilters ? 'No gateways match filters' : 'No gateways created yet'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find gateways.' : 'Create an organization first, then enroll its first gateway.'}
+        onRowClick={(row) => navigate(`/dashboard/gateways/${encodeURIComponent(row.id)}`)}
       />
+
+      {/* <div className="pt-6">
+        <Pagination
+          currentPage={gatewayPagination.currentPage}
+          totalPages={gatewayPagination.totalPages}
+          onPageChange={gatewayPagination.setCurrentPage}
+        />
+      </div> */}
+
+      <Modal
+        open={!!modal}
+        onClose={() => setModal(null)}
+        title="Edit Gateway"
+        size="lg"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving || !form.name?.trim() || !form.tenant_id}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </>
+        )}
+      >
+        <div className="grid gap-4">
+          <FormField label="Organization" className="mb-0">
+            <FormSelect value={form.tenant_id || ''} onChange={(event) => setForm({ ...form, tenant_id: event.target.value })}>
+              <option value="">Select organization</option>
+              {organizations.map((organization) => (
+                <option key={organization.id} value={organization.id}>{organization.name}</option>
+              ))}
+            </FormSelect>
+          </FormField>
+          <FormField label="Gateway name" className="mb-0">
+            <FormInput value={form.name || ''} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          </FormField>
+          <FormField label="FQDN" className="mb-0">
+            <FormInput value={form.fqdn || ''} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="gateway.example.com" />
+          </FormField>
+        </div>
+      </Modal>
     </>
   );
 }

@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import { createGateway as createGatewayRequest } from '../../api';
-import { gatewayFQDN, gatewayLabelFromName, tenantDomain } from './tenantUtils';
+import { gatewayFQDN, gatewayLabelFromName, organizationDomain } from './organizationUtils';
 
 function useGatewayCreate(onChanged) {
-  const [tenant, setTenant] = useState(null);
+  const [organization, setOrganization] = useState(null);
   const [form, setForm] = useState({ name: '' });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [enrollment, setEnrollment] = useState(null);
   const [open, setOpen] = useState(false);
 
-  const openGatewayCreate = (selectedTenant) => {
-    setTenant(selectedTenant);
+  const openGatewayCreate = (selectedOrganization) => {
+    setOrganization(selectedOrganization);
     setForm({ name: '' });
     setError('');
     setEnrollment(null);
@@ -20,7 +20,7 @@ function useGatewayCreate(onChanged) {
 
   const closeGatewayCreate = () => {
     setOpen(false);
-    setTenant(null);
+    setOrganization(null);
     setForm({ name: '' });
     setError('');
     setEnrollment(null);
@@ -29,12 +29,12 @@ function useGatewayCreate(onChanged) {
   const handleGatewayCreate = async () => {
     setError('');
     setEnrollment(null);
-    const fqdn = gatewayFQDN(form.name, tenant);
-    if (!tenant?.id) {
+    const fqdn = gatewayFQDN(form.name, organization);
+    if (!organization?.id) {
       setError('Organization is required');
       return;
     }
-    if (!tenantDomain(tenant)) {
+    if (!organizationDomain(organization)) {
       setError('Set a primary domain for this organization before creating a gateway');
       return;
     }
@@ -46,7 +46,7 @@ function useGatewayCreate(onChanged) {
     setSaving(true);
     try {
       const result = await createGatewayRequest({
-        tenant_id: tenant.id,
+        tenant_id: organization.id,
         name: form.name.trim(),
         fqdn,
         auth_mode: 'builtin',
@@ -71,7 +71,7 @@ function useGatewayCreate(onChanged) {
 
   return {
     open,
-    tenant,
+    organization,
     form,
     setForm,
     saving,

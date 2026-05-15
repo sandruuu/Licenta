@@ -1,8 +1,3 @@
-export function formatDate(d) {
-  if (!d) return '-';
-  return new Date(d).toLocaleDateString('ro-RO');
-}
-
 export function copyText(text) {
   if (!text) return;
   navigator.clipboard.writeText(text).catch(() => {});
@@ -19,12 +14,12 @@ export function gatewayLabelFromName(name) {
     .slice(0, 63);
 }
 
-export function tenantDomain(tenant) {
-  return (tenant?.domain || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+export function organizationDomain(organization) {
+  return (organization?.domain || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '');
 }
 
-export function gatewayFQDN(name, tenant) {
+export function gatewayFQDN(name, organization) {
   const label = gatewayLabelFromName(name);
-  const domain = tenantDomain(tenant);
+  const domain = organizationDomain(organization);
   return label && domain ? `${label}.${domain}` : '';
 }

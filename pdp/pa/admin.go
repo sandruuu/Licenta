@@ -24,7 +24,6 @@ type PolicyAdministrator struct {
 	Auth       *auth.Service
 	Engine     *evaluation.Engine
 	Geo        *policies.GeoLocator
-	Rules      *policies.RuleManager
 	Catalog    *catalog.Service
 	Devices    *devices.Service
 	Enrollment *enrollment.Service
@@ -44,7 +43,6 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 		Auth:    auth.New(cfg, s),
 		Engine:  evaluation.NewEngine(cfg.Risk),
 		Geo:     policies.NewGeoLocator(s, cfg.Geo),
-		Rules:   policies.NewRuleManager(s),
 		Catalog: catalog.NewService(s, cfg.Runtime.CatalogTTLSeconds),
 		Devices: devices.NewService(s, auditLogger),
 		Enrollment: enrollment.NewService(s, enrollment.Config{
@@ -61,8 +59,6 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 		Store:     s,
 		Cfg:       cfg,
 	}
-
-	policies.InitDefaultRules(s, cfg.Policies)
 
 	return pa
 }

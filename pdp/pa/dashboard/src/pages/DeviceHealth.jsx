@@ -173,7 +173,7 @@ export default function DeviceHealth() {
       </div>
 
       {/* Device List */}
-      <div className="bg-surface-card border border-border rounded-md shadow-[0_1px_3px_rgba(0,0,0,0.06)] mb-5">
+      <div className="bg-surface-card border border-border rounded-md shadow-surface mb-5">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h3 className="text-sm font-semibold text-text-primary">Reported Devices</h3>
           <Button variant="secondary" onClick={loadList} disabled={loadingList || loadingDetail}>
@@ -197,7 +197,7 @@ export default function DeviceHealth() {
       </div>
 
       {/* Selected Device Details */}
-      <div className="bg-surface-card border border-border rounded-md shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+      <div className="bg-surface-card border border-border rounded-md shadow-surface">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <h3 className="text-sm font-semibold text-text-primary">Selected Device Details</h3>
           <span className="text-xs text-text-muted">{selectedDevice || 'No device selected'}</span>

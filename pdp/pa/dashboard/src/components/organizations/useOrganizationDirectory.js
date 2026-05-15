@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createTenant, deleteTenant, getTenants, updateTenant } from '../../api';
+import { createOrganization, deleteOrganization, getOrganizations, updateOrganization } from '../../api';
 
-function useTenantDirectory() {
-  const [tenants, setTenants] = useState([]);
+function useOrganizationDirectory() {
+  const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
@@ -10,8 +10,8 @@ function useTenantDirectory() {
 
   const load = useCallback(() => {
     setLoading(true);
-    getTenants()
-      .then((data) => setTenants(Array.isArray(data) ? data : []))
+    getOrganizations()
+      .then((data) => setOrganizations(Array.isArray(data) ? data : []))
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -25,10 +25,10 @@ function useTenantDirectory() {
     setModal('create');
   };
 
-  const openEdit = (tenant) => {
+  const openEdit = (organization) => {
     setForm({
-      ...tenant,
-      domains: Array.isArray(tenant.domains) ? tenant.domains : [],
+      ...organization,
+      domains: Array.isArray(organization.domains) ? organization.domains : [],
     });
     setModal('edit');
   };
@@ -45,9 +45,9 @@ function useTenantDirectory() {
     };
     try {
       if (modal === 'create') {
-        await createTenant(payload);
+        await createOrganization(payload);
       } else {
-        await updateTenant(form.id, payload);
+        await updateOrganization(form.id, payload);
       }
       setModal(null);
       load();
@@ -59,13 +59,13 @@ function useTenantDirectory() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('Delete this organization? All associated gateways, resources, and policies will be orphaned.')) return;
-    await deleteTenant(id);
+    if (!confirm('Delete this organization? All associated gateways and resources will be orphaned.')) return;
+    await deleteOrganization(id);
     load();
   };
 
   return {
-    tenants,
+    organizations,
     loading,
     modal,
     form,
@@ -80,4 +80,4 @@ function useTenantDirectory() {
   };
 }
 
-export default useTenantDirectory;
+export default useOrganizationDirectory;

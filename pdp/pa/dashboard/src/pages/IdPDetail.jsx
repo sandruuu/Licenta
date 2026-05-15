@@ -2,75 +2,49 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  ChevronDown,
-  ChevronRight,
-  Globe,
+  Building2,
+  Edit2,
   Key,
-  Shield,
+  Search,
   UserRoundCheck,
   Users,
 } from 'lucide-react';
-import { getDirectoryGroups, getDirectoryUsers, getIdPs, getTenants } from '../api';
+import { getDirectoryGroups, getDirectoryUsers, getIdPs, getOrganizations, updateIdP } from '../api';
 import Badge from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import Modal from '../components/ui/Modal';
+import FormField, { FormCheckbox, FormInput } from '../components/ui/FormField';
+import {
+  BackIconButton,
+  DetailDivider,
+  DetailEmptyState as EmptyState,
+  DetailSummaryItem,
+  detailSectionTitleClass,
+  InlineBackButton,
+} from '../components/ui/Detail';
+import { formatDateTime } from '../utils/format';
 
-function formatDate(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '-';
-  return date.toLocaleString('ro-RO', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function EmptyState({ icon: Icon, title, message }) {
+function DetailValue({ label, value, mono = false }) {
   return (
-    <div className="py-8 text-center text-text-muted">
-      <Icon size={32} className="mx-auto mb-3 opacity-35" />
-      <p className="text-sm font-semibold text-text-primary">{title}</p>
-      {message && <p className="mt-1 text-xs">{message}</p>}
-    </div>
+    <DetailSummaryItem>
+      <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</span>
+      <span className={`mt-1 block truncate text-base font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
+        {value || '-'}
+      </span>
+    </DetailSummaryItem>
   );
 }
 
-function CollapsibleSection({ icon: Icon, title, subtitle, count, open, onToggle, children }) {
+function SearchField({ value, onChange, placeholder }) {
   return (
-    <section className="border-b border-border-light pb-5">
-      <button type="button" onClick={onToggle} className="group flex w-full items-start gap-3 bg-transparent p-0 text-left">
-        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-secondary text-text-secondary group-hover:bg-[rgba(255,95,31,0.12)] group-hover:text-accent-orange">
-          <Icon size={17} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex flex-wrap items-center gap-2 text-base font-semibold text-text-primary">
-            {title}
-            {typeof count === 'number' && <Badge variant="neutral">{count}</Badge>}
-            {open ? <ChevronDown size={16} className="text-text-muted" /> : <ChevronRight size={16} className="text-text-muted" />}
-          </span>
-          {subtitle && <span className="mt-1 block text-xs text-text-muted">{subtitle}</span>}
-        </span>
-      </button>
-      {open && <div className="mt-4">{children}</div>}
-    </section>
-  );
-}
-
-function FieldLine({ label, value, mono = false }) {
-  const displayValue = value === 0 || value === false ? String(value) : value || '-';
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</div>
-      <div className={`mt-1 truncate text-sm font-medium text-text-primary ${mono ? 'text-mono' : ''}`}>{displayValue}</div>
-    </div>
-  );
-}
-
-function DataRow({ children, className = '' }) {
-  return (
-    <div className={`grid items-center gap-4 rounded-md border border-border-light bg-surface-card px-4 py-3 ${className}`}>
-      {children}
+    <div className="relative">
+      <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-10 w-full rounded-md border border-border bg-surface-secondary pl-9 pr-3 text-sm font-semibold text-text-primary placeholder:text-text-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-muted"
+      />
     </div>
   );
 }
@@ -87,25 +61,25 @@ export default function IdPDetail() {
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [openSections, setOpenSections] = useState({ config: true, groups: true, users: true });
-
-  const toggleSection = (key) => {
-    setOpenSections((current) => ({ ...current, [key]: !current[key] }));
-  };
+  const [groupQuery, setGroupQuery] = useState('');
+  const [userQuery, setUserQuery] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [tenantData, idpData, userData, groupData] = await Promise.all([
-        getTenants(),
+      const [organizationData, idpData, userData, groupData] = await Promise.all([
+        getOrganizations(),
         getIdPs(organizationID),
         getDirectoryUsers(organizationID, idpID),
         getDirectoryGroups(organizationID, idpID),
       ]);
-      const tenants = Array.isArray(tenantData) ? tenantData : [];
+      const organizations = Array.isArray(organizationData) ? organizationData : [];
       const idps = Array.isArray(idpData) ? idpData : [];
-      setOrganization(tenants.find((tenant) => tenant.id === organizationID) || null);
+      setOrganization(organizations.find((item) => item.id === organizationID) || null);
       setIdP(idps.find((provider) => provider.id === idpID) || null);
       setUsers(Array.isArray(userData) ? userData : []);
       setGroups(Array.isArray(groupData) ? groupData : []);
@@ -131,6 +105,75 @@ export default function IdPDetail() {
     return map;
   }, [groups]);
 
+  const filteredGroups = useMemo(() => {
+    const needle = groupQuery.trim().toLowerCase();
+    if (!needle) return groups;
+
+    return groups.filter((group) => [
+      group.display_name,
+      group.external_id,
+      group.id,
+      `${(group.member_ids || []).length} members`,
+    ].some((value) => String(value || '').toLowerCase().includes(needle)));
+  }, [groups, groupQuery]);
+
+  const filteredUsers = useMemo(() => {
+    const needle = userQuery.trim().toLowerCase();
+    if (!needle) return users;
+
+    return users.filter((user) => [
+      user.display_name,
+      user.user_name,
+      user.email,
+      user.id,
+      ...(groupsByUserID.get(user.id) || []),
+      user.active ? 'active' : 'disabled',
+    ].some((value) => String(value || '').toLowerCase().includes(needle)));
+  }, [users, userQuery, groupsByUserID]);
+
+  const openEdit = () => {
+    setEditForm({
+      ...idp,
+      claim_username: idp.claim_mapping?.username || '',
+      claim_email: idp.claim_mapping?.email || '',
+      claim_groups: idp.claim_mapping?.groups || '',
+      client_secret: '',
+      scim_token: '',
+    });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    setEditSaving(true);
+    setError('');
+    try {
+      await updateIdP(idp.id, {
+        name: editForm.name?.trim(),
+        type: editForm.type || idp.type || 'oidc',
+        issuer: editForm.issuer?.trim(),
+        client_id: editForm.client_id?.trim(),
+        client_secret: editForm.client_secret || undefined,
+        scim_token: editForm.scim_token || undefined,
+        scopes: (editForm.scopes || '').trim(),
+        enabled: editForm.enabled !== false,
+        auto_discovery: editForm.auto_discovery !== false,
+        claim_mapping: {
+          username: (editForm.claim_username || '').trim(),
+          email: (editForm.claim_email || '').trim(),
+          groups: (editForm.claim_groups || '').trim(),
+        },
+        group_role_mapping: editForm.group_role_mapping || [],
+        is_default: editForm.is_default === true,
+      });
+      setEditOpen(false);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to update IdP');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="py-16 text-center text-text-muted">
@@ -143,14 +186,10 @@ export default function IdPDetail() {
   if (!idp) {
     return (
       <div className="space-y-4">
-        <button
-          type="button"
-          onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}
-          className="inline-flex items-center gap-2 rounded-md bg-transparent px-0 py-0 text-sm font-semibold text-text-secondary hover:text-accent-orange"
-        >
+        <InlineBackButton onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}>
           <ArrowLeft size={15} />
           Organization
-        </button>
+        </InlineBackButton>
         <EmptyState icon={Key} title="IdP not found" message={error || 'The selected identity provider no longer exists.'} />
       </div>
     );
@@ -160,97 +199,187 @@ export default function IdPDetail() {
     <div className="space-y-7">
       {error && <div className="rounded-md border border-danger bg-danger-muted p-3 text-sm text-danger">{error}</div>}
 
-      <header className="flex flex-col gap-4 border-b border-border-light pb-6 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <button
-            type="button"
-            title="Back to organization"
-            onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}
-            className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-surface-card text-text-secondary shadow-sm transition-colors hover:border-accent-orange hover:bg-[rgba(255,95,31,0.08)] hover:text-accent-orange"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-bold leading-tight text-text-primary">{idp.name || idp.id}</h1>
-              <Badge variant={idp.enabled === false ? 'danger' : 'success'}>{idp.enabled === false ? 'Disabled' : 'Enabled'}</Badge>
-              {idp.is_default && <Badge variant="info">Default</Badge>}
+      <section className="p-5">
+        <div className="space-y-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-start gap-3">
+                <BackIconButton compact title="Back to organization" onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}>
+                  <ArrowLeft size={16} />
+                </BackIconButton>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h1 className="text-2xl font-bold leading-tight text-text-primary">{idp.name}</h1>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
+                    <span>{organization?.name || organizationID}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-              <span className="inline-flex items-center gap-1">
-                <Globe size={13} />
-                {organization?.name || organizationID}
-              </span>
-              <span className="text-mono">{idp.id}</span>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <Button onClick={openEdit}>
+                <Edit2 size={14} />
+              </Button>
+            </div>
+          </div>
+
+          <DetailDivider />
+
+          <div>
+            <p className={detailSectionTitleClass}>Configuration</p>
+            <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              <DetailValue label="Issuer" value={idp.issuer} mono />
+              <DetailValue label="Client ID" value={idp.client_id} mono />
+              <DetailValue label="Type" value={(idp.type || 'oidc').toUpperCase()} />
+              <DetailValue label="Scopes" value={idp.scopes || 'openid profile email groups'} mono />
+              <DetailValue label="SCIM token" value={idp.has_scim_token ? 'Configured' : 'Not configured'} />
+              <DetailValue label="Updated" value={formatDateTime(idp.updated_at)} />
+            </div>
+          </div>
+
+          <DetailDivider />
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className={detailSectionTitleClass}>Groups ({filteredGroups.length} of {groups.length})</p>
+                <div className="w-full sm:max-w-[260px]">
+                  <SearchField value={groupQuery} onChange={setGroupQuery} placeholder="Search groups" />
+                </div>
+              </div>
+              {groups.length === 0 ? (
+                <EmptyState icon={Users} title="No groups" message="When the IdP provisions groups through SCIM, they appear here." />
+              ) : filteredGroups.length === 0 ? (
+                <EmptyState icon={Users} title="No groups match" message="Adjust search to find a SCIM group." />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[520px] border-collapse">
+                    <thead>
+                      <tr className="border-b border-border text-left text-[10px] font-bold uppercase tracking-[0.12em] text-text-muted">
+                        <th className="px-3 py-3">Group</th>
+                        <th className="px-3 py-3">Members</th>
+                        <th className="px-3 py-3">Updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredGroups.map((group) => (
+                        <tr key={group.id} className="border-b border-border-light last:border-b-0">
+                          <td className="px-3 py-3 align-top">
+                            <p className="truncate text-sm font-semibold text-text-primary">{group.display_name || group.id}</p>
+                            <p className="mt-1 truncate text-xs text-text-secondary">{group.external_id || group.id}</p>
+                          </td>
+                          <td className="px-3 py-3 align-top">
+                            <Badge variant="accent">{(group.member_ids || []).length} members</Badge>
+                          </td>
+                          <td className="px-3 py-3 align-top text-xs font-semibold text-text-secondary">
+                            {formatDateTime(group.updated_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
+              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className={detailSectionTitleClass}>Users ({filteredUsers.length} of {users.length})</p>
+                <div className="w-full sm:max-w-[260px]">
+                  <SearchField value={userQuery} onChange={setUserQuery} placeholder="Search users" />
+                </div>
+              </div>
+              {users.length === 0 ? (
+                <EmptyState icon={UserRoundCheck} title="No users" message="When the IdP provisions users through SCIM, they appear here." />
+              ) : filteredUsers.length === 0 ? (
+                <EmptyState icon={UserRoundCheck} title="No users match" message="Adjust search to find a SCIM user." />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] border-collapse">
+                    <thead>
+                      <tr className="border-b border-border text-left text-[10px] font-bold uppercase tracking-[0.12em] text-text-muted">
+                        <th className="px-3 py-3">User</th>
+                        <th className="px-3 py-3">Groups</th>
+                        <th className="px-3 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredUsers.map((user) => (
+                        <tr key={user.id} className="border-b border-border-light last:border-b-0">
+                          <td className="px-3 py-3 align-top">
+                            <p className="truncate text-sm font-semibold text-text-primary">{user.display_name || user.user_name || user.id}</p>
+                            <p className="mt-1 truncate text-xs text-text-secondary">{user.email || user.user_name || '-'}</p>
+                          </td>
+                          <td className="px-3 py-3 align-top text-xs font-semibold text-text-secondary">
+                            <span className="line-clamp-2">{(groupsByUserID.get(user.id) || []).join(', ') || 'No groups'}</span>
+                          </td>
+                          <td className="px-3 py-3 align-top">
+                            <Badge variant={user.active ? 'success' : 'danger'}>{user.active ? 'Active' : 'Disabled'}</Badge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         </div>
-      </header>
+      </section>
 
-      <CollapsibleSection
-        icon={Shield}
-        title="Configuration"
-        subtitle="OIDC and SCIM settings exposed to the administrator"
-        open={openSections.config}
-        onToggle={() => toggleSection('config')}
+      <Modal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        title="Edit Primary Authenticator"
+        size="2xl"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={saveEdit} disabled={editSaving || !editForm.name?.trim() || !editForm.issuer?.trim() || !editForm.client_id?.trim()}>
+              {editSaving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </>
+        )}
       >
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <FieldLine label="Issuer" value={idp.issuer} mono />
-          <FieldLine label="Client ID" value={idp.client_id} mono />
-          <FieldLine label="Type" value={(idp.type || 'oidc').toUpperCase()} />
-          <FieldLine label="Scopes" value={idp.scopes || 'openid profile email groups'} mono />
-          <FieldLine label="SCIM token" value={idp.has_scim_token ? 'Configured' : 'Not configured'} />
-          <FieldLine label="Updated" value={formatDate(idp.updated_at)} />
+        <div className="grid gap-x-4 gap-y-1 md:grid-cols-2">
+          <FormField label="Provider name" className="mb-3">
+            <FormInput value={editForm.name || ''} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} />
+          </FormField>
+          <FormField label="OIDC client ID" className="mb-3">
+            <FormInput value={editForm.client_id || ''} onChange={(event) => setEditForm({ ...editForm, client_id: event.target.value })} className="font-mono" />
+          </FormField>
+          <FormField label="Issuer URL" className="mb-3 md:col-span-2">
+            <FormInput value={editForm.issuer || ''} onChange={(event) => setEditForm({ ...editForm, issuer: event.target.value })} className="font-mono" />
+          </FormField>
+          <FormField label="OIDC client secret" className="mb-3">
+            <FormInput type="password" value={editForm.client_secret || ''} onChange={(event) => setEditForm({ ...editForm, client_secret: event.target.value })} placeholder="Leave blank to keep unchanged" />
+          </FormField>
+          <FormField label="SCIM provisioning token" className="mb-3">
+            <FormInput type="password" value={editForm.scim_token || ''} onChange={(event) => setEditForm({ ...editForm, scim_token: event.target.value })} placeholder="Leave blank to keep unchanged" />
+          </FormField>
+          <FormField label="Scopes" className="mb-3 md:col-span-2">
+            <FormInput value={editForm.scopes || ''} onChange={(event) => setEditForm({ ...editForm, scopes: event.target.value })} className="font-mono" />
+          </FormField>
         </div>
-      </CollapsibleSection>
 
-      <CollapsibleSection
-        icon={Users}
-        title="SCIM Groups"
-        subtitle="Groups provisioned by this IdP"
-        count={groups.length}
-        open={openSections.groups}
-        onToggle={() => toggleSection('groups')}
-      >
-        {groups.length === 0 ? (
-          <EmptyState icon={Users} title="No groups" message="When the IdP provisions groups through SCIM, they appear here." />
-        ) : (
-          <div className="space-y-2">
-            {groups.map((group) => (
-              <DataRow key={group.id} className="md:grid-cols-[1.4fr_0.7fr_1.2fr_0.9fr]">
-                <FieldLine label="Group" value={group.display_name || group.id} />
-                <Badge variant="accent">{(group.member_ids || []).length} members</Badge>
-                <FieldLine label="External ID" value={group.external_id || group.id} mono />
-                <FieldLine label="Updated" value={formatDate(group.updated_at)} />
-              </DataRow>
-            ))}
-          </div>
-        )}
-      </CollapsibleSection>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-y border-border-light py-3">
+          <FormCheckbox id="idp-detail-enabled" checked={editForm.enabled !== false} onChange={(event) => setEditForm({ ...editForm, enabled: event.target.checked })} label="Enabled" />
+          <FormCheckbox id="idp-detail-discovery" checked={editForm.auto_discovery !== false} onChange={(event) => setEditForm({ ...editForm, auto_discovery: event.target.checked })} label="Auto-discovery" />
+        </div>
 
-      <CollapsibleSection
-        icon={UserRoundCheck}
-        title="SCIM Users"
-        subtitle="Users provisioned by this IdP"
-        count={users.length}
-        open={openSections.users}
-        onToggle={() => toggleSection('users')}
-      >
-        {users.length === 0 ? (
-          <EmptyState icon={UserRoundCheck} title="No users" message="When the IdP provisions users through SCIM, they appear here." />
-        ) : (
-          <div className="space-y-2">
-            {users.map((user) => (
-              <DataRow key={user.id} className="md:grid-cols-[1.2fr_1.3fr_1fr_0.7fr]">
-                <FieldLine label="User" value={user.display_name || user.user_name || user.id} />
-                <FieldLine label="Email" value={user.email || user.user_name} />
-                <FieldLine label="Groups" value={(groupsByUserID.get(user.id) || []).join(', ') || '-'} />
-                <Badge variant={user.active ? 'success' : 'danger'}>{user.active ? 'Active' : 'Disabled'}</Badge>
-              </DataRow>
-            ))}
-          </div>
-        )}
-      </CollapsibleSection>
+        <div className="grid gap-x-4 gap-y-1 md:grid-cols-3">
+          <FormField label="Username claim" className="mb-3">
+            <FormInput value={editForm.claim_username || ''} onChange={(event) => setEditForm({ ...editForm, claim_username: event.target.value })} className="font-mono" />
+          </FormField>
+          <FormField label="Email claim" className="mb-3">
+            <FormInput value={editForm.claim_email || ''} onChange={(event) => setEditForm({ ...editForm, claim_email: event.target.value })} className="font-mono" />
+          </FormField>
+          <FormField label="Groups claim" className="mb-3">
+            <FormInput value={editForm.claim_groups || ''} onChange={(event) => setEditForm({ ...editForm, claim_groups: event.target.value })} className="font-mono" />
+          </FormField>
+        </div>
+      </Modal>
     </div>
   );
 }

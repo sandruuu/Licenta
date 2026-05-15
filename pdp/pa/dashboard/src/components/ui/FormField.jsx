@@ -1,3 +1,6 @@
+import { Check } from 'lucide-react';
+import SelectDropdown from './SelectDropdown';
+
 export default function FormField({ label, children, hint, htmlFor, className = '' }) {
   return (
     <div className={`mb-4 ${className}`}>
@@ -26,14 +29,13 @@ export function FormInput({ className = '', ...props }) {
 
 export function FormSelect({ children, className = '', ...props }) {
   return (
-    <select
+    <SelectDropdown
       {...props}
-      className={`w-full px-3 py-2 bg-surface border border-border rounded-md text-[13px] text-text-primary
-                  focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted
-                  transition font-sans ${className}`}
+      className={`w-full ${className}`}
+      buttonClassName="min-h-10 rounded-md px-3 py-2 text-[13px]"
     >
       {children}
-    </select>
+    </SelectDropdown>
   );
 }
 
@@ -57,16 +59,28 @@ export function FormRow({ children, className = '' }) {
   );
 }
 
-export function FormCheckbox({ id, label, className = '', ...props }) {
+export function FormCheckbox({ id, label, className = '', disabled = false, ...props }) {
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <label
+      htmlFor={id}
+      className={`inline-flex select-none items-center gap-2 text-[13px] font-medium text-text-secondary transition-colors ${
+        disabled ? 'cursor-not-allowed opacity-55' : 'cursor-pointer hover:text-text-primary'
+      } ${className}`}
+    >
       <input
         type="checkbox"
         id={id}
+        disabled={disabled}
         {...props}
-        className="rounded border-border text-accent focus:ring-accent w-4 h-4"
+        className="peer sr-only"
       />
-      <label htmlFor={id} className="text-[13px] text-text-secondary">{label}</label>
-    </div>
+      <span
+        aria-hidden="true"
+        className="grid h-5 w-5 shrink-0 place-items-center rounded-md border border-border bg-surface text-transparent shadow-sm transition-colors peer-checked:border-accent peer-checked:bg-accent peer-checked:text-white-smoke peer-focus-visible:ring-[3px] peer-focus-visible:ring-accent-muted peer-disabled:bg-surface-secondary"
+      >
+        <Check size={14} strokeWidth={3} />
+      </span>
+      <span>{label}</span>
+    </label>
   );
 }

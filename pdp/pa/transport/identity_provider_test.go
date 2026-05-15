@@ -125,10 +125,11 @@ func TestResolveIdentityProviderUsesTenantDomainForDefaultIdP(t *testing.T) {
 	}
 }
 
-func TestAdminIdentityProvidersAllowMultipleAndDefaultSelection(t *testing.T) {
+func TestAdminIdentityProvidersAllowOnePerTenant(t *testing.T) {
 	dataStore := newIdentityProviderTestStore(t)
 	now := time.Now()
 	dataStore.SaveTenant(&models.Tenant{ID: "tenant-1", Name: "Tenant 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	dataStore.SaveTenant(&models.Tenant{ID: "tenant-2", Name: "Tenant 2", Enabled: true, CreatedAt: now, UpdatedAt: now})
 	server := newIdentityProviderTestServer(dataStore)
 
 	body := `{"id":"idp-1","name":"IdP 1","issuer":"https://idp1.example.test","client_id":"client-1"}`
@@ -143,17 +144,25 @@ func TestAdminIdentityProvidersAllowMultipleAndDefaultSelection(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPost, "/api/admin/tenants/idps?tenant_id=tenant-1", strings.NewReader(body))
 	server.handleAdminIdentityProviders(recorder, request)
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("second IdP status = %d, body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("second IdP status = %d, want %d, body=%s", recorder.Code, http.StatusConflict, recorder.Body.String())
 	}
 
 	cfgs := dataStore.ListIdentityProviderConfigsForTenant("tenant-1")
-	if len(cfgs) != 2 {
-		t.Fatalf("IdP count = %d, want 2", len(cfgs))
+	if len(cfgs) != 1 {
+		t.Fatalf("IdP count = %d, want 1", len(cfgs))
 	}
 	tenant, _ := dataStore.GetTenant("tenant-1")
-	if tenant.DefaultIdPID != "idp-2" {
-		t.Fatalf("default IdP = %q, want idp-2", tenant.DefaultIdPID)
+	if tenant.DefaultIdPID != "idp-1" {
+		t.Fatalf("default IdP = %q, want idp-1", tenant.DefaultIdPID)
+	}
+
+	body = `{"id":"idp-2","name":"IdP 2","issuer":"https://idp2.example.test","client_id":"client-2"}`
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/admin/tenants/idps?tenant_id=tenant-2", strings.NewReader(body))
+	server.handleAdminIdentityProviders(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("second tenant IdP status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

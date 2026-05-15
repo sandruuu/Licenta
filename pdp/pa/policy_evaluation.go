@@ -49,17 +49,17 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 	}
 
 	if pa.Store != nil {
-		if strings.TrimSpace(req.TenantID) != "" || strings.TrimSpace(req.GatewayID) != "" || strings.TrimSpace(req.Resource) != "" {
-			ctx.Rules = pa.Store.ListPolicyRulesForAccess(req.TenantID, req.GatewayID, req.Resource)
-		} else {
-			ctx.Rules = pa.Store.ListPolicyRules()
-		}
 		ctx.FailedAttempts = pa.Store.GetFailedAttempts(req.Username)
 		if user != nil {
 			ctx.UserRole = user.Role
 			if decision := pa.populateDirectoryContext(&ctx, user); decision != nil {
 				return decision
 			}
+		}
+		if strings.TrimSpace(req.TenantID) != "" || strings.TrimSpace(req.Resource) != "" {
+			ctx.Rules = pa.Store.ListPolicyRulesForAccessGroups(req.TenantID, req.Resource, ctx.DirectoryGroupIDs, ctx.DirectoryGroupNames)
+		} else {
+			ctx.Rules = pa.Store.ListPolicyRules()
 		}
 	}
 

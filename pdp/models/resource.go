@@ -17,7 +17,9 @@ type Resource struct {
 	TenantID    string            `json:"tenant_id,omitempty"`
 	GatewayID   string            `json:"gateway_id,omitempty"`
 
-	ClientID     string `json:"client_id"`
+	// Deprecated: protected resources are not OIDC clients. These fields are
+	// kept only for databases created before the resource/client split.
+	ClientID     string `json:"client_id,omitempty"`
 	ClientSecret string `json:"client_secret,omitempty"`
 
 	CertMode   string `json:"cert_mode"`

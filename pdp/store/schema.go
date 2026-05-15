@@ -1,7 +1,9 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
+	"log"
 
 	_ "modernc.org/sqlite"
 )
@@ -33,6 +35,10 @@ func (s *Store) createTables() error {
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS schema_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS policy_rules (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
@@ -51,16 +57,19 @@ func (s *Store) createTables() error {
 		`CREATE TABLE IF NOT EXISTS policy_assignments (
 			id TEXT PRIMARY KEY,
 			policy_id TEXT NOT NULL,
+			level TEXT DEFAULT 'organization',
 			tenant_id TEXT NOT NULL,
 			gateway_id TEXT DEFAULT '',
 			resource_id TEXT DEFAULT '',
+			group_id TEXT DEFAULT '',
+			group_name TEXT DEFAULT '',
+			priority INTEGER NOT NULL DEFAULT 100,
 			enabled INTEGER DEFAULT 1,
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_policy ON policy_assignments(policy_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_tenant ON policy_assignments(tenant_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_gateway ON policy_assignments(gateway_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
@@ -311,6 +320,10 @@ func (s *Store) createTables() error {
 		`ALTER TABLE policy_rules ADD COLUMN scope TEXT DEFAULT 'global'`,
 		`ALTER TABLE policy_rules ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE policy_rules ADD COLUMN resource_id TEXT DEFAULT ''`,
+		`ALTER TABLE policy_assignments ADD COLUMN level TEXT DEFAULT 'organization'`,
+		`ALTER TABLE policy_assignments ADD COLUMN group_id TEXT DEFAULT ''`,
+		`ALTER TABLE policy_assignments ADD COLUMN group_name TEXT DEFAULT ''`,
+		`ALTER TABLE policy_assignments ADD COLUMN priority INTEGER NOT NULL DEFAULT 100`,
 		`ALTER TABLE sessions ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE resources ADD COLUMN tenant_id TEXT DEFAULT ''`,
@@ -332,30 +345,36 @@ func (s *Store) createTables() error {
 		s.db.Exec(m) // ignore "duplicate column" errors
 	}
 
+	if err := s.enforceSingleIdentityProviderPerTenant(); err != nil {
+		return err
+	}
+	if err := s.reconcileSingleIdentityProviderDefaults(); err != nil {
+		return err
+	}
+
 	// Create indexes that depend on migrated columns
 	postMigrationIndexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_resources_client_id ON resources(client_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_idp_single_tenant ON identity_provider_configs(tenant_id) WHERE tenant_id <> ''`,
 		`CREATE TABLE IF NOT EXISTS policy_assignments (
 			id TEXT PRIMARY KEY,
 			policy_id TEXT NOT NULL,
+			level TEXT DEFAULT 'organization',
 			tenant_id TEXT NOT NULL,
 			gateway_id TEXT DEFAULT '',
 			resource_id TEXT DEFAULT '',
+			group_id TEXT DEFAULT '',
+			group_name TEXT DEFAULT '',
+			priority INTEGER NOT NULL DEFAULT 100,
 			enabled INTEGER DEFAULT 1,
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_policy ON policy_assignments(policy_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_level ON policy_assignments(level)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_tenant ON policy_assignments(tenant_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_gateway ON policy_assignments(gateway_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
-		`INSERT OR IGNORE INTO policy_assignments
-			(id, policy_id, tenant_id, gateway_id, resource_id, enabled, created_at, updated_at)
-			SELECT 'assign_' || id, id, tenant_id, gateway_id, resource_id, enabled, created_at, updated_at
-			FROM policy_rules
-			WHERE tenant_id <> ''
-			   OR gateway_id <> ''
-			   OR resource_id <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_group ON policy_assignments(group_id)`,
 	}
 	for _, stmt := range postMigrationIndexes {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -363,5 +382,216 @@ func (s *Store) createTables() error {
 		}
 	}
 
+	if err := s.cleanupLegacyPolicyDataOnce(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (s *Store) cleanupLegacyPolicyDataOnce() error {
+	const marker = "legacy_policy_cleanup_v1"
+
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, marker).Scan(&value)
+	if err == nil && value == "done" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("query legacy policy cleanup marker: %w", err)
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin legacy policy cleanup: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM policy_assignments`); err != nil {
+		return fmt.Errorf("delete legacy policy assignments: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM policy_rules`); err != nil {
+		return fmt.Errorf("delete legacy policy rules: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, 'done')`, marker); err != nil {
+		return fmt.Errorf("write legacy policy cleanup marker: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit legacy policy cleanup: %w", err)
+	}
+
+	log.Printf("[STORE] Removed legacy policy rules and assignments")
+	return nil
+}
+
+func (s *Store) enforceSingleIdentityProviderPerTenant() error {
+	rows, err := s.db.Query(`SELECT tenant_id
+		FROM identity_provider_configs
+		WHERE tenant_id <> ''
+		GROUP BY tenant_id
+		HAVING COUNT(*) > 1`)
+	if err != nil {
+		return fmt.Errorf("query duplicate tenant IdPs: %w", err)
+	}
+
+	var tenantIDs []string
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan duplicate tenant IdP: %w", err)
+		}
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate duplicate tenant IdPs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close duplicate tenant IdPs: %w", err)
+	}
+
+	for _, tenantID := range tenantIDs {
+		keepID, err := s.identityProviderToKeep(tenantID)
+		if err != nil {
+			return err
+		}
+		if keepID == "" {
+			continue
+		}
+		removed, err := s.deleteIdentityProvidersExcept(tenantID, keepID)
+		if err != nil {
+			return err
+		}
+		if removed > 0 {
+			log.Printf("[STORE] Kept IdP %s for tenant %s and removed %d extra IdP config(s)", keepID, tenantID, removed)
+		}
+	}
+	return nil
+}
+
+func (s *Store) identityProviderToKeep(tenantID string) (string, error) {
+	var keepID string
+	err := s.db.QueryRow(`SELECT cfg.id
+		FROM identity_provider_configs cfg
+		JOIN tenants t ON t.id = cfg.tenant_id
+		WHERE cfg.tenant_id = ? AND cfg.id = t.default_idp_id AND cfg.enabled = 1
+		LIMIT 1`, tenantID).Scan(&keepID)
+	if err == nil {
+		return keepID, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", fmt.Errorf("query default tenant IdP: %w", err)
+	}
+
+	err = s.db.QueryRow(`SELECT id
+		FROM identity_provider_configs
+		WHERE tenant_id = ? AND enabled = 1
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1`, tenantID).Scan(&keepID)
+	if err == nil {
+		return keepID, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", fmt.Errorf("query first enabled tenant IdP: %w", err)
+	}
+
+	err = s.db.QueryRow(`SELECT id
+		FROM identity_provider_configs
+		WHERE tenant_id = ?
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1`, tenantID).Scan(&keepID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("query first tenant IdP: %w", err)
+	}
+	return keepID, nil
+}
+
+func (s *Store) reconcileSingleIdentityProviderDefaults() error {
+	_, err := s.db.Exec(`UPDATE tenants
+		SET default_idp_id = COALESCE((
+			SELECT cfg.id
+			FROM identity_provider_configs cfg
+			WHERE cfg.tenant_id = tenants.id AND cfg.enabled = 1
+			ORDER BY cfg.created_at ASC, cfg.id ASC
+			LIMIT 1
+		), '')
+		WHERE EXISTS (
+			SELECT 1 FROM identity_provider_configs cfg
+			WHERE cfg.tenant_id = tenants.id
+		)
+		AND (
+			default_idp_id = ''
+			OR NOT EXISTS (
+				SELECT 1 FROM identity_provider_configs cfg
+				WHERE cfg.tenant_id = tenants.id
+					AND cfg.id = tenants.default_idp_id
+					AND cfg.enabled = 1
+			)
+		)`)
+	if err != nil {
+		return fmt.Errorf("reconcile tenant default IdP: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) deleteIdentityProvidersExcept(tenantID, keepID string) (int, error) {
+	rows, err := s.db.Query(`SELECT id
+		FROM identity_provider_configs
+		WHERE tenant_id = ? AND id <> ?`, tenantID, keepID)
+	if err != nil {
+		return 0, fmt.Errorf("query extra tenant IdPs: %w", err)
+	}
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan extra tenant IdP: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterate extra tenant IdPs: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, fmt.Errorf("close extra tenant IdPs: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tenant IdP cleanup: %w", err)
+	}
+	defer tx.Rollback()
+
+	for _, id := range ids {
+		if _, err := tx.Exec(`DELETE FROM directory_group_members WHERE tenant_id = ? AND idp_id = ?`, tenantID, id); err != nil {
+			return 0, fmt.Errorf("delete directory group members for IdP %s: %w", id, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM directory_groups WHERE tenant_id = ? AND idp_id = ?`, tenantID, id); err != nil {
+			return 0, fmt.Errorf("delete directory groups for IdP %s: %w", id, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM directory_users WHERE tenant_id = ? AND idp_id = ?`, tenantID, id); err != nil {
+			return 0, fmt.Errorf("delete directory users for IdP %s: %w", id, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM identity_provider_configs WHERE tenant_id = ? AND id = ?`, tenantID, id); err != nil {
+			return 0, fmt.Errorf("delete IdP %s: %w", id, err)
+		}
+	}
+
+	if _, err := tx.Exec(`UPDATE tenants SET default_idp_id = ? WHERE id = ?`, keepID, tenantID); err != nil {
+		return 0, fmt.Errorf("update tenant default IdP: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit tenant IdP cleanup: %w", err)
+	}
+	return len(ids), nil
 }

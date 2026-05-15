@@ -15,16 +15,14 @@ import (
 // ─────────────────────────────────────────────
 
 func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
-	row := s.db.QueryRow(`SELECT id, name, description, priority, enabled, tenant_id,
-		scope, gateway_id, resource_id, conditions_json,
+	row := s.db.QueryRow(`SELECT id, name, description, priority, enabled, conditions_json,
 		action, created_at, updated_at FROM policy_rules WHERE id = ?`, id)
 
 	r := &models.PolicyRule{}
 	var enabled int
 	var condJSON, createdAt, updatedAt string
 
-	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled,
-		&r.TenantID, &r.Scope, &r.GatewayID, &r.ResourceID, &condJSON,
+	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled, &condJSON,
 		&r.Action, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
@@ -39,11 +37,9 @@ func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
 
 func (s *Store) SavePolicyRule(rule *models.PolicyRule) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO policy_rules
-		(id, name, description, priority, enabled, tenant_id, scope, gateway_id, resource_id,
-		 conditions_json, action, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, name, description, priority, enabled, conditions_json, action, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rule.ID, rule.Name, rule.Description, rule.Priority, b2i(rule.Enabled),
-		rule.TenantID, normalizedRuleScope(rule.Scope), rule.GatewayID, rule.ResourceID,
 		toJSON(rule.Conditions), rule.Action, fmtTime(rule.CreatedAt), fmtTime(rule.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save policy rule %s: %v", rule.ID, err)
@@ -51,8 +47,7 @@ func (s *Store) SavePolicyRule(rule *models.PolicyRule) {
 }
 
 func (s *Store) ListPolicyRules() []*models.PolicyRule {
-	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, tenant_id,
-		scope, gateway_id, resource_id, conditions_json,
+	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, conditions_json,
 		action, created_at, updated_at FROM policy_rules ORDER BY priority ASC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy rules: %v", err)
@@ -64,42 +59,17 @@ func (s *Store) ListPolicyRules() []*models.PolicyRule {
 	return rules
 }
 
-func (s *Store) ListPolicyRulesForAccess(tenantID, gatewayID, resourceID string) []*models.PolicyRule {
-	assignments := s.ListPolicyAssignmentsForAccess(tenantID, gatewayID, resourceID)
-	if len(assignments) > 0 {
-		rules := make([]*models.PolicyRule, 0, len(assignments))
-		for _, assignment := range assignments {
-			rule, ok := s.GetPolicyRule(assignment.PolicyID)
-			if !ok || rule == nil || !rule.Enabled {
-				continue
-			}
-			rules = append(rules, materializePolicyRuleAssignment(rule, assignment))
+func (s *Store) ListPolicyRulesForAccessGroups(tenantID, resourceID string, groupIDs, groupNames []string) []*models.PolicyRule {
+	assignments := s.ListPolicyAssignmentsForAccessGroups(tenantID, resourceID, groupIDs, groupNames)
+	rules := make([]*models.PolicyRule, 0, len(assignments))
+	for _, assignment := range assignments {
+		rule, ok := s.GetPolicyRule(assignment.PolicyID)
+		if !ok || rule == nil || !rule.Enabled {
+			continue
 		}
-		return rules
+		rules = append(rules, materializePolicyRuleAssignment(rule, assignment))
 	}
-
-	rows, err := s.db.Query(`SELECT id, name, description, priority, enabled, tenant_id,
-		scope, gateway_id, resource_id, conditions_json,
-		action, created_at, updated_at FROM policy_rules
-		WHERE (tenant_id = ? OR tenant_id = '')
-		  AND (
-			(COALESCE(NULLIF(scope, ''), 'global') = 'resource' AND resource_id = ?)
-			OR (COALESCE(NULLIF(scope, ''), 'global') = 'gateway' AND gateway_id = ?)
-			OR (COALESCE(NULLIF(scope, ''), 'global') = 'global' AND tenant_id <> '')
-		  )
-		ORDER BY
-		  CASE COALESCE(NULLIF(scope, ''), 'global')
-			WHEN 'resource' THEN 1
-			WHEN 'gateway' THEN 2
-			ELSE 3
-		  END,
-		  priority ASC`, tenantID, resourceID, gatewayID)
-	if err != nil {
-		log.Printf("[STORE] Failed to list scoped policy rules: %v", err)
-		return nil
-	}
-	defer rows.Close()
-	return scanPolicyRules(rows)
+	return rules
 }
 
 func scanPolicyRules(rows *sql.Rows) []*models.PolicyRule {
@@ -108,13 +78,11 @@ func scanPolicyRules(rows *sql.Rows) []*models.PolicyRule {
 		r := &models.PolicyRule{}
 		var enabled int
 		var condJSON, createdAt, updatedAt string
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled,
-			&r.TenantID, &r.Scope, &r.GatewayID, &r.ResourceID, &condJSON,
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Priority, &enabled, &condJSON,
 			&r.Action, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		r.Enabled = i2b(enabled)
-		r.Scope = normalizedRuleScope(r.Scope)
 		r.Conditions = fromJSON[models.RuleConditions](condJSON)
 		r.CreatedAt = parseTime(createdAt)
 		r.UpdatedAt = parseTime(updatedAt)
@@ -123,33 +91,28 @@ func scanPolicyRules(rows *sql.Rows) []*models.PolicyRule {
 	return rules
 }
 
-func normalizedRuleScope(scope string) string {
-	switch strings.ToLower(strings.TrimSpace(scope)) {
-	case "resource", "gateway":
-		return strings.ToLower(strings.TrimSpace(scope))
-	default:
-		return "global"
-	}
-}
-
 func (s *Store) DeletePolicyRule(id string) {
 	s.DeletePolicyAssignmentsForPolicy(id)
 	s.db.Exec("DELETE FROM policy_rules WHERE id = ?", id)
 }
 
 func (s *Store) GetPolicyAssignment(id string) (*models.PolicyAssignment, bool) {
-	row := s.db.QueryRow(`SELECT id, policy_id, tenant_id, gateway_id, resource_id,
-		enabled, created_at, updated_at FROM policy_assignments WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT id, policy_id, level, tenant_id, resource_id,
+		group_id, group_name, priority, enabled, created_at, updated_at FROM policy_assignments
+		WHERE id = ?
+		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
+		  AND COALESCE(gateway_id, '') = ''`, id)
 
 	assignment := &models.PolicyAssignment{}
 	var enabled int
 	var createdAt, updatedAt string
-	if err := row.Scan(&assignment.ID, &assignment.PolicyID, &assignment.TenantID,
-		&assignment.GatewayID, &assignment.ResourceID, &enabled, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.TenantID,
+		&assignment.ResourceID, &assignment.GroupID, &assignment.GroupName,
+		&assignment.Priority, &enabled, &createdAt, &updatedAt); err != nil {
 		return nil, false
 	}
 	assignment.Enabled = i2b(enabled)
-	assignment.Scope = assignmentScope(assignment)
+	normalizePolicyAssignment(assignment)
 	assignment.CreatedAt = parseTime(createdAt)
 	assignment.UpdatedAt = parseTime(updatedAt)
 	return assignment, true
@@ -159,20 +122,33 @@ func (s *Store) SavePolicyAssignment(assignment *models.PolicyAssignment) {
 	if assignment == nil {
 		return
 	}
+	normalizePolicyAssignment(assignment)
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO policy_assignments
-		(id, policy_id, tenant_id, gateway_id, resource_id, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		assignment.ID, assignment.PolicyID, assignment.TenantID, assignment.GatewayID,
-		assignment.ResourceID, b2i(assignment.Enabled), fmtTime(assignment.CreatedAt), fmtTime(assignment.UpdatedAt))
+		(id, policy_id, level, tenant_id, resource_id, group_id, group_name, priority,
+		 enabled, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		assignment.ID, assignment.PolicyID, assignment.Level, assignment.TenantID,
+		assignment.ResourceID, assignment.GroupID, assignment.GroupName, assignment.Priority,
+		b2i(assignment.Enabled), fmtTime(assignment.CreatedAt), fmtTime(assignment.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save policy assignment %s: %v", assignment.ID, err)
 	}
 }
 
 func (s *Store) ListPolicyAssignments() []*models.PolicyAssignment {
-	rows, err := s.db.Query(`SELECT id, policy_id, tenant_id, gateway_id, resource_id,
-		enabled, created_at, updated_at FROM policy_assignments
-		ORDER BY created_at ASC`)
+	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+		group_id, group_name, priority, enabled, created_at, updated_at FROM policy_assignments
+		WHERE COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
+		  AND COALESCE(gateway_id, '') = ''
+		ORDER BY tenant_id ASC,
+		  CASE COALESCE(NULLIF(level, ''), 'organization')
+			WHEN 'resource_group' THEN 1
+			WHEN 'resource' THEN 2
+			WHEN 'group' THEN 3
+			WHEN 'organization' THEN 4
+			ELSE 5
+		  END,
+		  priority ASC, created_at ASC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy assignments: %v", err)
 		return nil
@@ -182,10 +158,20 @@ func (s *Store) ListPolicyAssignments() []*models.PolicyAssignment {
 }
 
 func (s *Store) ListPolicyAssignmentsForPolicy(policyID string) []*models.PolicyAssignment {
-	rows, err := s.db.Query(`SELECT id, policy_id, tenant_id, gateway_id, resource_id,
-		enabled, created_at, updated_at FROM policy_assignments
+	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+		group_id, group_name, priority, enabled, created_at, updated_at FROM policy_assignments
 		WHERE policy_id = ?
-		ORDER BY created_at ASC`, policyID)
+		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
+		  AND COALESCE(gateway_id, '') = ''
+		ORDER BY
+		  CASE COALESCE(NULLIF(level, ''), 'organization')
+			WHEN 'resource_group' THEN 1
+			WHEN 'resource' THEN 2
+			WHEN 'group' THEN 3
+			WHEN 'organization' THEN 4
+			ELSE 5
+		  END,
+		  priority ASC, created_at ASC`, policyID)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy assignments for policy %s: %v", policyID, err)
 		return nil
@@ -194,33 +180,39 @@ func (s *Store) ListPolicyAssignmentsForPolicy(policyID string) []*models.Policy
 	return scanPolicyAssignments(rows)
 }
 
-func (s *Store) ListPolicyAssignmentsForAccess(tenantID, gatewayID, resourceID string) []*models.PolicyAssignment {
+func (s *Store) ListPolicyAssignmentsForAccessGroups(tenantID, resourceID string, groupIDs, groupNames []string) []*models.PolicyAssignment {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT id, policy_id, tenant_id, gateway_id, resource_id,
-		enabled, created_at, updated_at FROM policy_assignments
+	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+		group_id, group_name, priority, enabled, created_at, updated_at FROM policy_assignments
 		WHERE enabled = 1
 		  AND tenant_id = ?
-		  AND (
-			(resource_id <> '' AND resource_id = ?)
-			OR (resource_id = '' AND gateway_id <> '' AND gateway_id = ?)
-			OR (resource_id = '' AND gateway_id = '')
-		  )
+		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
+		  AND COALESCE(gateway_id, '') = ''
 		ORDER BY
-		  CASE
-			WHEN resource_id <> '' THEN 1
-			WHEN gateway_id <> '' THEN 2
-			ELSE 3
+		  CASE COALESCE(NULLIF(level, ''), 'organization')
+			WHEN 'resource_group' THEN 1
+			WHEN 'resource' THEN 2
+			WHEN 'group' THEN 3
+			WHEN 'organization' THEN 4
+			ELSE 5
 		  END,
-		  created_at ASC`, tenantID, strings.TrimSpace(resourceID), strings.TrimSpace(gatewayID))
+		  priority ASC, created_at ASC`, tenantID)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy assignments for access: %v", err)
 		return nil
 	}
 	defer rows.Close()
-	return scanPolicyAssignments(rows)
+	assignments := scanPolicyAssignments(rows)
+	applicable := make([]*models.PolicyAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		if policyAssignmentApplies(assignment, resourceID, groupIDs, groupNames) {
+			applicable = append(applicable, assignment)
+		}
+	}
+	return applicable
 }
 
 func (s *Store) DeletePolicyAssignment(id string) bool {
@@ -243,12 +235,13 @@ func scanPolicyAssignments(rows *sql.Rows) []*models.PolicyAssignment {
 		assignment := &models.PolicyAssignment{}
 		var enabled int
 		var createdAt, updatedAt string
-		if err := rows.Scan(&assignment.ID, &assignment.PolicyID, &assignment.TenantID,
-			&assignment.GatewayID, &assignment.ResourceID, &enabled, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.TenantID,
+			&assignment.ResourceID, &assignment.GroupID, &assignment.GroupName,
+			&assignment.Priority, &enabled, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		assignment.Enabled = i2b(enabled)
-		assignment.Scope = assignmentScope(assignment)
+		normalizePolicyAssignment(assignment)
 		assignment.CreatedAt = parseTime(createdAt)
 		assignment.UpdatedAt = parseTime(updatedAt)
 		assignments = append(assignments, assignment)
@@ -274,22 +267,107 @@ func materializePolicyRuleAssignment(rule *models.PolicyRule, assignment *models
 	copyRule := *rule
 	copyRule.Assignments = nil
 	copyRule.AssignmentCount = 0
-	copyRule.TenantID = assignment.TenantID
-	copyRule.GatewayID = assignment.GatewayID
-	copyRule.ResourceID = assignment.ResourceID
-	copyRule.Scope = assignmentScope(assignment)
 	return &copyRule
 }
 
-func assignmentScope(assignment *models.PolicyAssignment) string {
+func normalizePolicyAssignment(assignment *models.PolicyAssignment) {
 	if assignment == nil {
-		return "global"
+		return
 	}
-	if strings.TrimSpace(assignment.ResourceID) != "" {
+	assignment.TenantID = strings.TrimSpace(assignment.TenantID)
+	assignment.ResourceID = strings.TrimSpace(assignment.ResourceID)
+	assignment.GroupID = strings.TrimSpace(assignment.GroupID)
+	assignment.GroupName = strings.TrimSpace(assignment.GroupName)
+	assignment.Level = normalizedAssignmentLevel(assignment)
+	if assignment.Priority <= 0 {
+		assignment.Priority = 100
+	}
+}
+
+func normalizedAssignmentLevel(assignment *models.PolicyAssignment) string {
+	if assignment == nil {
+		return "organization"
+	}
+	level := strings.ToLower(strings.TrimSpace(assignment.Level))
+	hasResource := strings.TrimSpace(assignment.ResourceID) != ""
+	hasGroup := strings.TrimSpace(assignment.GroupID) != "" || strings.TrimSpace(assignment.GroupName) != ""
+	if level == "" || (level == "organization" && (hasResource || hasGroup)) {
+		switch {
+		case hasResource && hasGroup:
+			return "resource_group"
+		case hasResource:
+			return "resource"
+		case hasGroup:
+			return "group"
+		}
+	}
+	switch level {
+	case "tenant", "global":
+		level = "organization"
+	case "application_group":
+		level = "resource_group"
+	}
+	switch level {
+	case "organization", "group", "resource", "resource_group":
+		return level
+	case "gateway", "legacy_gateway":
+		return "unsupported"
+	}
+	if hasResource {
+		if hasGroup {
+			return "resource_group"
+		}
 		return "resource"
 	}
-	if strings.TrimSpace(assignment.GatewayID) != "" {
-		return "gateway"
+	if hasGroup {
+		return "group"
 	}
-	return "global"
+	return "organization"
+}
+
+func policyAssignmentApplies(assignment *models.PolicyAssignment, resourceID string, groupIDs, groupNames []string) bool {
+	if assignment == nil || !assignment.Enabled {
+		return false
+	}
+	resourceID = strings.TrimSpace(resourceID)
+	switch normalizedAssignmentLevel(assignment) {
+	case "organization":
+		return true
+	case "group":
+		return assignmentGroupMatches(assignment, groupIDs, groupNames)
+	case "resource":
+		return resourceID != "" && strings.EqualFold(strings.TrimSpace(assignment.ResourceID), resourceID)
+	case "resource_group":
+		return resourceID != "" &&
+			strings.EqualFold(strings.TrimSpace(assignment.ResourceID), resourceID) &&
+			assignmentGroupMatches(assignment, groupIDs, groupNames)
+	default:
+		return false
+	}
+}
+
+func assignmentGroupMatches(assignment *models.PolicyAssignment, groupIDs, groupNames []string) bool {
+	if assignment == nil {
+		return false
+	}
+	groupID := strings.TrimSpace(assignment.GroupID)
+	groupName := strings.TrimSpace(assignment.GroupName)
+	if groupID == "" && groupName == "" {
+		return false
+	}
+	return containsFold(groupIDs, groupID) || containsFold(groupIDs, groupName) ||
+		containsFold(groupNames, groupID) || containsFold(groupNames, groupName)
+}
+
+func containsFold(values []string, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), candidate) {
+			return true
+		}
+	}
+	return false
 }

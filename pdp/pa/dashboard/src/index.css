@@ -1,68 +1,215 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@import "tailwindcss";
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+/* ZTNA PDP Dashboard - palette and semantic tokens */
+@theme {
+  --color-white-smoke: #f2f2f0;
+  --color-cool-steel: #a0a6a8;
+  --color-stormy-teal: #2c6164;
+  --color-graphite: #2a2a2a;
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+  --color-surface: #fafafa;
+  --color-surface-card: color-mix(in srgb, var(--color-white-smoke) 94%, var(--color-cool-steel));
+  --color-surface-hover: color-mix(in srgb, var(--color-white-smoke) 80%, var(--color-cool-steel));
+  --color-surface-secondary: color-mix(in srgb, var(--color-white-smoke) 70%, var(--color-cool-steel));
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
+  --color-border: color-mix(in srgb, var(--color-cool-steel) 54%, var(--color-white-smoke));
+  --color-border-light: color-mix(in srgb, var(--color-cool-steel) 24%, var(--color-white-smoke));
 
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
+  --color-text-primary: var(--color-graphite);
+  --color-text-secondary: color-mix(in srgb, var(--color-graphite) 64%, var(--color-cool-steel));
+  --color-text-muted: color-mix(in srgb, var(--color-graphite) 36%, var(--color-cool-steel));
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
+  --color-accent: var(--color-stormy-teal);
+  --color-accent-hover: color-mix(in srgb, var(--color-stormy-teal) 74%, var(--color-graphite));
+  --color-accent-muted: color-mix(in srgb, var(--color-stormy-teal) 14%, transparent);
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  --color-success: #2f7d32;
+  --color-success-muted: color-mix(in srgb, var(--color-success) 14%, transparent);
+  --color-warning: #9a6500;
+  --color-warning-muted: color-mix(in srgb, #f2c94c 28%, transparent);
+  --color-danger: #b42318;
+  --color-danger-muted: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  --color-info: var(--color-stormy-teal);
+  --color-info-muted: color-mix(in srgb, var(--color-stormy-teal) 14%, transparent);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+html[data-theme='dark'] {
+  --color-surface: var(--color-graphite);
+  --color-surface-card: color-mix(in srgb, var(--color-graphite) 88%, var(--color-cool-steel));
+  --color-surface-hover: color-mix(in srgb, var(--color-graphite) 76%, var(--color-cool-steel));
+  --color-surface-secondary: color-mix(in srgb, var(--color-graphite) 68%, var(--color-cool-steel));
+
+  --color-border: color-mix(in srgb, var(--color-cool-steel) 38%, var(--color-graphite));
+  --color-border-light: color-mix(in srgb, var(--color-cool-steel) 24%, var(--color-graphite));
+
+  --color-text-primary: var(--color-white-smoke);
+  --color-text-secondary: var(--color-cool-steel);
+  --color-text-muted: color-mix(in srgb, var(--color-cool-steel) 72%, var(--color-graphite));
+
+  --color-accent: color-mix(in srgb, var(--color-stormy-teal) 80%, var(--color-cool-steel));
+  --color-accent-hover: color-mix(in srgb, var(--color-stormy-teal) 54%, var(--color-white-smoke));
+  --color-accent-muted: color-mix(in srgb, var(--color-stormy-teal) 34%, transparent);
+
+  --color-success: #7fcf83;
+  --color-success-muted: color-mix(in srgb, var(--color-success) 22%, transparent);
+  --color-warning: #ffd166;
+  --color-warning-muted: color-mix(in srgb, var(--color-warning) 20%, transparent);
+  --color-danger: #ff8a80;
+  --color-danger-muted: color-mix(in srgb, var(--color-danger) 18%, transparent);
+  --color-info: var(--color-cool-steel);
+  --color-info-muted: color-mix(in srgb, var(--color-cool-steel) 20%, transparent);
+}
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
   }
+
+  html,
+  body,
+  #root {
+    min-width: 320px;
+    min-height: 100vh;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--color-surface);
+    color: var(--color-text-primary);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a {
+    color: var(--color-accent);
+    text-decoration: inherit;
+  }
+
   a:hover {
-    color: #747bff;
+    color: var(--color-accent-hover);
   }
-  button {
-    background-color: #f9f9f9;
+
+  button,
+  input,
+  select,
+  textarea {
+    color-scheme: inherit;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-muted);
+  }
+}
+
+@layer components {
+  .shadow-surface {
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--color-graphite) 10%, transparent);
+  }
+
+  .shadow-panel {
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--color-graphite) 14%, transparent);
+  }
+
+  .shadow-accent {
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-graphite) 22%, transparent);
+  }
+
+  .sidebar-shell {
+    background: color-mix(in srgb, var(--color-cool-steel) 24%, var(--color-white-smoke) 76%);
+    border: 1px solid color-mix(in srgb, var(--color-border) 42%, transparent);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--color-graphite) 8%, transparent);
+    backdrop-filter: blur(10px);
+  }
+
+  html[data-theme='dark'] .sidebar-shell {
+    background: color-mix(in srgb, var(--color-graphite) 92%, var(--color-cool-steel) 8%);
+    border-color: color-mix(in srgb, var(--color-border) 24%, transparent);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--color-graphite) 34%, transparent);
+  }
+
+  .sidebar-panel {
+    background: #fafafa;
+    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--color-white-smoke) 34%, transparent),
+      0 8px 20px color-mix(in srgb, var(--color-graphite) 7%, transparent);
+  }
+
+  html[data-theme='dark'] .sidebar-panel {
+    background: var(--color-surface-card);
+    border-color: color-mix(in srgb, var(--color-cool-steel) 20%, var(--color-graphite));
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--color-cool-steel) 7%, transparent),
+      0 8px 20px color-mix(in srgb, var(--color-graphite) 26%, transparent);
+  }
+
+  .spinner {
+    @apply inline-block w-5 h-5 border-2 border-border rounded-full;
+    border-top-color: var(--color-accent);
+    animation: spin 0.6s linear infinite;
+  }
+
+  .spinner-icon {
+    animation: spin 1s linear infinite;
+  }
+
+  .text-mono {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 12px;
+  }
+
+  .loading {
+    @apply flex items-center justify-center py-12 text-text-muted;
+  }
+
+  .react-flow__controls {
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--color-graphite) 14%, transparent);
+  }
+
+  .react-flow__controls-button {
+    background: var(--color-surface-card);
+    border-color: var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  .react-flow__controls-button:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+
+  @keyframes cardFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }

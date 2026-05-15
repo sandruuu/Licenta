@@ -1,15 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { Radio, XCircle } from 'lucide-react';
 import { getSessions, revokeSession } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import { Radio, XCircle } from 'lucide-react';
-
-function formatDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleString('ro-RO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
+import { formatDateTime } from '../utils/format';
 
 export default function Sessions() {
   const [sessions, setSessions] = useState([]);
@@ -31,17 +27,17 @@ export default function Sessions() {
     load();
   };
 
-  const isExpired = (s) => new Date(s.expires_at) < new Date();
-  const getStatus = (s) => {
-    if (s.revoked) return 'revoked';
-    if (isExpired(s)) return 'expired';
+  const isExpired = (session) => new Date(session.expires_at) < new Date();
+  const getStatus = (session) => {
+    if (session.revoked) return 'revoked';
+    if (isExpired(session)) return 'expired';
     return 'active';
   };
 
   const columns = [
     { key: 'username', label: 'User', render: (v) => <span className="font-medium text-text-primary">{v}</span> },
-    { key: 'resource', label: 'Resource', render: (v) => <span className="text-mono">{v || '—'}</span> },
-    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '—'}</span> },
+    { key: 'resource', label: 'Resource', render: (v) => <span className="text-mono">{v || '-'}</span> },
+    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '-'}</span> },
     { key: 'risk_score', label: 'Risk', render: (v) => (
       <span className={v > 70 ? 'text-danger' : v > 40 ? 'text-warning' : 'text-success'}>{v}</span>
     )},
@@ -49,8 +45,8 @@ export default function Sessions() {
       const status = getStatus(row);
       return <Badge variant={status === 'active' ? 'success' : status === 'revoked' ? 'danger' : 'neutral'}>{status}</Badge>;
     }},
-    { key: 'created_at', label: 'Created', render: (v) => <span className="text-mono text-xs">{formatDate(v)}</span> },
-    { key: 'expires_at', label: 'Expires', render: (v) => <span className="text-mono text-xs">{formatDate(v)}</span> },
+    { key: 'created_at', label: 'Created', render: (v) => <span className="text-mono text-xs">{formatDateTime(v)}</span> },
+    { key: 'expires_at', label: 'Expires', render: (v) => <span className="text-mono text-xs">{formatDateTime(v)}</span> },
     { key: 'actions', label: 'Actions', align: 'right', render: (_, row) => {
       const status = getStatus(row);
       return status === 'active' ? (

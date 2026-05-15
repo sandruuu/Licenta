@@ -108,24 +108,31 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 				"rdp": 3389,
 			},
 		},
-		Policies: config.PolicyConfig{
-			SeedDefaultRules: true,
-			DefaultRules: []models.PolicyRule{
-				{
-					ID:          "rule_allow_admin",
-					Name:        "Allow Admin Full Access",
-					Description: "Administrators have full access to all resources",
-					Priority:    5,
-					Enabled:     true,
-					Conditions: models.RuleConditions{
-						AllowedRoles: []string{"admin"},
-					},
-					Action: "allow",
-				},
-			},
-		},
 	}
 	policyAdmin := pa.NewPolicyAdministrator(cfg, dataStore)
+	now := time.Now()
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:        "test_allow_admin_access",
+		Name:      "Allow admin access in transport tests",
+		Priority:  1,
+		Enabled:   true,
+		Action:    "allow",
+		CreatedAt: now,
+		UpdatedAt: now,
+		Conditions: models.RuleConditions{
+			AllowedRoles: []string{"admin"},
+		},
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:        "assign_test_allow_admin_access",
+		PolicyID:  "test_allow_admin_access",
+		TenantID:  transportTestTenantID,
+		Level:     "organization",
+		Priority:  1,
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
 	server := &Server{pa: policyAdmin, mtlsCAPool: x509.NewCertPool(), sessionGateways: make(map[string]string)}
 	server.wireSessionDeleteSink()
 	return server, dataStore

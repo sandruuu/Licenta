@@ -78,7 +78,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			continue
 		}
 
-		if e.matchesRule(rule, ctx, riskScore, now) {
+		if e.matchesRule(rule, ctx, now) {
 			log.Printf("[PE] Rule matched: %s (%s) -> action=%s", rule.Name, rule.ID, rule.Action)
 
 			decision := &models.AccessDecision{
@@ -97,13 +97,9 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 	return e.defaultDecision(req, riskScore)
 }
 
-func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskScore int, now time.Time) bool {
+func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, now time.Time) bool {
 	req := ctx.Request
 	cond := rule.Conditions
-
-	if !matchesRuleScope(rule, req) {
-		return false
-	}
 
 	if len(cond.AllowedRoles) > 0 {
 		if strings.TrimSpace(ctx.UserRole) == "" || !containsString(cond.AllowedRoles, ctx.UserRole) {
@@ -133,6 +129,10 @@ func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskSco
 		if matchesIPList(req.SourceIP, cond.BlockedIPs) {
 			return false
 		}
+	}
+
+	if !matchesEndpointTrust(cond, req) {
+		return false
 	}
 
 	loc := time.UTC
@@ -222,68 +222,15 @@ func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, riskSco
 		}
 	}
 
-	if cond.MaxRiskScore > 0 {
-		if riskScore > cond.MaxRiskScore {
-			return false
-		}
-	}
-
 	return true
 }
 
-func matchesRuleScope(rule *models.PolicyRule, req models.AccessRequest) bool {
-	if rule == nil {
-		return false
-	}
-
-	ruleTenantID := strings.TrimSpace(rule.TenantID)
-	requestTenantID := strings.TrimSpace(req.TenantID)
-	if ruleTenantID != "" && !strings.EqualFold(ruleTenantID, requestTenantID) {
-		return false
-	}
-
-	switch strings.ToLower(strings.TrimSpace(rule.Scope)) {
-	case "resource":
-		resourceID := strings.TrimSpace(rule.ResourceID)
-		if resourceID == "" {
-			return false
-		}
-		return strings.EqualFold(resourceID, strings.TrimSpace(req.Resource)) ||
-			strings.EqualFold(resourceID, strings.TrimSpace(req.AppID))
-	case "gateway":
-		gatewayID := strings.TrimSpace(rule.GatewayID)
-		if gatewayID == "" {
-			return false
-		}
-		return strings.EqualFold(gatewayID, strings.TrimSpace(req.GatewayID))
-	default:
-		return true
-	}
-}
-
 func (e *Engine) defaultDecision(req models.AccessRequest, riskScore int) *models.AccessDecision {
-	switch {
-	case riskScore >= e.riskConfig.DefaultDenyRiskThreshold:
-		log.Printf("[PE] Default decision: DENY (risk=%d)", riskScore)
-		return &models.AccessDecision{
-			Decision:  "deny",
-			Reason:    fmt.Sprintf("High risk score (%d/100) - access denied by default policy", riskScore),
-			RiskScore: riskScore,
-		}
-	case riskScore >= e.riskConfig.DefaultMFARiskThreshold:
-		log.Printf("[PE] Default decision: MFA_REQUIRED (risk=%d)", riskScore)
-		return &models.AccessDecision{
-			Decision:  "mfa_required",
-			Reason:    fmt.Sprintf("Elevated risk score (%d/100) - additional verification required", riskScore),
-			RiskScore: riskScore,
-		}
-	default:
-		log.Printf("[PE] Default decision: DENY (risk=%d, zero-trust default)", riskScore)
-		return &models.AccessDecision{
-			Decision:  "deny",
-			Reason:    fmt.Sprintf("No matching policy rule (risk=%d/100) - denied by zero-trust default", riskScore),
-			RiskScore: riskScore,
-		}
+	log.Printf("[PE] Default decision: DENY (no matching rule, risk=%d)", riskScore)
+	return &models.AccessDecision{
+		Decision:  "deny",
+		Reason:    "No matching access rule - denied by zero-trust default",
+		RiskScore: riskScore,
 	}
 }
 
@@ -355,6 +302,57 @@ func matchesProcessConditions(cond models.RuleConditions, action string, process
 		return false
 	}
 	return true
+}
+
+func matchesEndpointTrust(cond models.RuleConditions, req models.AccessRequest) bool {
+	policy := strings.ToLower(strings.TrimSpace(cond.EndpointTrustPolicy))
+	if policy == "" || policy == "allow_all" || policy == "skip" {
+		return true
+	}
+	if len(cond.EndpointTrustBypassIPs) > 0 && matchesIPList(req.SourceIP, cond.EndpointTrustBypassIPs) {
+		return true
+	}
+	if cond.BlockCompromisedEndpoints && endpointHasStatus(req.DeviceHealth, []string{"compromised", "secure_endpoint", "endpoint_protection"}, []string{"critical", "fail", "failed", "compromised"}) {
+		return false
+	}
+	if policy == "require_trusted" && !endpointIsTrusted(req.DeviceHealth) {
+		return false
+	}
+	if cond.TreatMobileEndpointsDifferently && isMobileOS(req.DeviceHealth) {
+		mobilePolicy := strings.ToLower(strings.TrimSpace(cond.MobileEndpointTrustPolicy))
+		if mobilePolicy == "require_trusted" && !endpointIsTrusted(req.DeviceHealth) {
+			return false
+		}
+	}
+	return true
+}
+
+func endpointIsTrusted(report *models.DeviceHealthReport) bool {
+	return endpointHasStatus(
+		report,
+		[]string{"trusted_endpoint", "managed_device", "device_trust", "endpoint_trust"},
+		[]string{"pass", "ok", "healthy", "trusted", "managed"},
+	)
+}
+
+func endpointHasStatus(report *models.DeviceHealthReport, names, statuses []string) bool {
+	if report == nil {
+		return false
+	}
+	for _, check := range report.Checks {
+		if containsString(names, check.Name) && containsString(statuses, check.Status) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMobileOS(report *models.DeviceHealthReport) bool {
+	if report == nil {
+		return false
+	}
+	os := strings.ToLower(report.OS)
+	return strings.Contains(os, "ios") || strings.Contains(os, "android") || strings.Contains(os, "ipad")
 }
 
 func processNameMatches(allowed []string, process *models.ProcessIdentity) bool {

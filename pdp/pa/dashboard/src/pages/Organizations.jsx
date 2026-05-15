@@ -1,81 +1,93 @@
 import { useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import GatewayCreateModal from '../components/tenants/GatewayCreateModal';
-import TenantFormModal from '../components/tenants/TenantFormModal';
-import TenantTable from '../components/tenants/TenantTable';
-import useGatewayCreate from '../components/tenants/useGatewayCreate';
-import useTenantDirectory from '../components/tenants/useTenantDirectory';
+import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
+import OrganizationFormModal from '../components/organizations/OrganizationFormModal';
+import OrganizationTable from '../components/organizations/OrganizationTable';
+import useGatewayCreate from '../components/organizations/useGatewayCreate';
+import useOrganizationDirectory from '../components/organizations/useOrganizationDirectory';
 import ListToolbar from '../components/ui/ListToolbar';
+import PageHeader from '../components/ui/PageHeader';
+import Pagination from '../components/ui/Pagination';
+import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 
 export default function Organizations() {
   const navigate = useNavigate();
-  const tenantDirectory = useTenantDirectory();
-  const gatewayCreate = useGatewayCreate(tenantDirectory.load);
+  const organizationDirectory = useOrganizationDirectory();
+  const gatewayCreate = useGatewayCreate(organizationDirectory.load);
   const [query, setQuery] = useState('');
 
-  const openOrganization = (tenant) => {
-    if (tenant?.id) navigate(`/dashboard/organizations/${encodeURIComponent(tenant.id)}`);
+  const openOrganization = (organization) => {
+    if (organization?.id) navigate(`/dashboard/organizations/${encodeURIComponent(organization.id)}`);
   };
-  const filteredTenants = useMemo(() => {
+
+  const filteredOrganizations = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return tenantDirectory.tenants.filter((tenant) => {
+    return organizationDirectory.organizations.filter((organization) => {
       if (!needle) return true;
       return [
-        tenant.name,
-        tenant.domain,
-        tenant.description,
-        tenant.id,
+        organization.name,
+        organization.domain,
+        organization.description,
+        organization.id,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [tenantDirectory.tenants, query]);
+  }, [organizationDirectory.organizations, query]);
+
   const hasFilters = query.trim();
+  const organizationPagination = usePaginatedTable(filteredOrganizations);
+
+  const handleQueryChange = (value) => {
+    setQuery(value);
+    organizationPagination.resetPage();
+  };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[18px] font-bold tracking-[-0.3px] text-text-primary">Organizations</h1>
-          <p className="text-xs text-text-secondary mt-0.5 font-medium">Manage organizations, identity providers, and gateways</p>
-        </div>
-        <button
-          onClick={tenantDirectory.openCreate}
-          className="inline-flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-md hover:bg-accent-hover transition-colors font-semibold text-xs shadow-sm"
-        >
-          <Plus size={16} />
-          Create Organization
-        </button>
-      </div>
+    <div className="pb-8">
+      <PageHeader
+        title="Organizations"
+        subtitle="Manage organizations, identity providers, and gateways"
+        createLabel="Add Organization"
+        onCreate={organizationDirectory.openCreate}
+      />
 
       <ListToolbar
         query={query}
-        onQueryChange={setQuery}
-        placeholder="Search name or domain"
+        onQueryChange={handleQueryChange}
+        placeholder="Search organization or domain"
       />
 
-      <TenantTable
-        loading={tenantDirectory.loading}
-        tenants={filteredTenants}
+      <OrganizationTable
+        loading={organizationDirectory.loading}
+        organizations={organizationPagination.pageItems}
+        pageSize={organizationPagination.pageSize}
         onCreateGateway={gatewayCreate.openGatewayCreate}
         onOpen={openOrganization}
-        onEdit={tenantDirectory.openEdit}
-        onDelete={tenantDirectory.handleDelete}
+        onEdit={organizationDirectory.openEdit}
+        onDelete={organizationDirectory.handleDelete}
         emptyTitle={hasFilters ? 'No organizations match filters' : 'No organizations yet'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find organizations.' : 'Create the first organization to start managing gateways and resources.'}
       />
 
-      <TenantFormModal
-        mode={tenantDirectory.modal}
-        form={tenantDirectory.form}
-        setForm={tenantDirectory.setForm}
-        saving={tenantDirectory.saving}
-        onClose={tenantDirectory.closeModal}
-        onSave={tenantDirectory.handleSave}
+      {/* <div className="pt-6">
+        <Pagination
+          currentPage={organizationPagination.currentPage}
+          totalPages={organizationPagination.totalPages}
+          onPageChange={organizationPagination.setCurrentPage}
+        />
+      </div> */}
+
+      <OrganizationFormModal
+        mode={organizationDirectory.modal}
+        form={organizationDirectory.form}
+        setForm={organizationDirectory.setForm}
+        saving={organizationDirectory.saving}
+        onClose={organizationDirectory.closeModal}
+        onSave={organizationDirectory.handleSave}
       />
 
       {gatewayCreate.open ? (
         <GatewayCreateModal
-          tenant={gatewayCreate.tenant}
+          organization={gatewayCreate.organization}
           form={gatewayCreate.form}
           setForm={gatewayCreate.setForm}
           error={gatewayCreate.error}

@@ -11,26 +11,25 @@ type PolicyRule struct {
 	Enabled         bool                `json:"enabled"`
 	AssignmentCount int                 `json:"assignment_count,omitempty"`
 	Assignments     []*PolicyAssignment `json:"assignments,omitempty"`
-	TenantID        string              `json:"tenant_id,omitempty"`
-	Scope           string              `json:"scope,omitempty"`
-	GatewayID       string              `json:"gateway_id,omitempty"`
-	ResourceID      string              `json:"resource_id,omitempty"`
-	Conditions      RuleConditions      `json:"conditions"`
-	Action          string              `json:"action"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
+
+	Conditions RuleConditions `json:"conditions"`
+	Action     string         `json:"action"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
-// PolicyAssignment attaches a reusable policy rule to an organization,
-// gateway, or resource. The policy rule defines the conditions and action;
-// the assignment defines where the policy takes effect.
+// PolicyAssignment attaches a reusable policy rule to a Duo-style access layer.
+// Supported levels are organization, group, resource, and resource_group.
 type PolicyAssignment struct {
-	ID         string    `json:"id"`
-	PolicyID   string    `json:"policy_id"`
-	TenantID   string    `json:"tenant_id"`
-	GatewayID  string    `json:"gateway_id,omitempty"`
+	ID        string `json:"id"`
+	PolicyID  string `json:"policy_id"`
+	TenantID  string `json:"tenant_id"`
+	Level     string `json:"level"`
+	GroupID   string `json:"group_id,omitempty"`
+	GroupName string `json:"group_name,omitempty"`
+
 	ResourceID string    `json:"resource_id,omitempty"`
-	Scope      string    `json:"scope,omitempty"`
+	Priority   int       `json:"priority"`
 	Enabled    bool      `json:"enabled"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -49,6 +48,12 @@ type RuleConditions struct {
 	AllowedIPs []string `json:"allowed_ips,omitempty"`
 	BlockedIPs []string `json:"blocked_ips,omitempty"`
 
+	EndpointTrustPolicy             string   `json:"endpoint_trust_policy,omitempty"`
+	EndpointTrustBypassIPs          []string `json:"endpoint_trust_bypass_ips,omitempty"`
+	BlockCompromisedEndpoints       bool     `json:"block_compromised_endpoints,omitempty"`
+	TreatMobileEndpointsDifferently bool     `json:"treat_mobile_endpoints_differently,omitempty"`
+	MobileEndpointTrustPolicy       string   `json:"mobile_endpoint_trust_policy,omitempty"`
+
 	AllowedTimeStart string   `json:"allowed_time_start,omitempty"`
 	AllowedTimeEnd   string   `json:"allowed_time_end,omitempty"`
 	AllowedDays      []string `json:"allowed_days,omitempty"`
@@ -65,6 +70,4 @@ type RuleConditions struct {
 	BlockedProcessNames    []string `json:"blocked_process_names,omitempty"`
 	AllowedProcessHashes   []string `json:"allowed_process_hashes,omitempty"`
 	BlockedProcessHashes   []string `json:"blocked_process_hashes,omitempty"`
-
-	MaxRiskScore int `json:"max_risk_score,omitempty"`
 }

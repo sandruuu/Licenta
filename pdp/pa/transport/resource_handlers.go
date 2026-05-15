@@ -26,9 +26,6 @@ func writeResourceAdminError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": resourceClientMessage(err)})
 	case errors.Is(err, paresources.ErrResourceNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "resource not found"})
-	case errors.Is(err, paresources.ErrCredentialIssue):
-		log.Printf("[PDP] Resource credential generation failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate credentials"})
 	default:
 		log.Printf("[PDP] Resource operation failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to manage resource"})
@@ -118,38 +115,6 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
-}
-
-// handleRegenerateSecret generates a new ClientSecret for a resource (ClientID stays the same).
-func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	id := strings.TrimPrefix(r.URL.Path, "/api/admin/resources-regenerate-secret/")
-	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "resource ID required"})
-		return
-	}
-
-	res, err := s.pa.Resources.RegenerateSecret(id)
-	if err != nil {
-		if errors.Is(err, paresources.ErrCredentialIssue) {
-			log.Printf("[PDP] Resource secret generation failed: %v", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate secret"})
-			return
-		}
-		writeResourceAdminError(w, err)
-		return
-	}
-
-	log.Printf("[PDP] Secret regenerated for resource: %s (%s)", res.ID, res.Name)
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"client_id":     res.ClientID,
-		"client_secret": res.ClientSecret,
-	})
 }
 
 func (s *Server) handleAdminDeviceHealth(w http.ResponseWriter, r *http.Request) {
@@ -242,7 +207,6 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	users := s.pa.Store.ListUsers()
 	sessions := s.pa.Store.ListSessions()
 	resources := s.pa.Store.ListResources()
-	rules := s.pa.Store.ListPolicyRules()
 	audit := s.pa.Store.GetAuditLog(50)
 
 	activeSessions := 0
@@ -259,29 +223,21 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var totalRisk float64
 	healthCount := 0
 	healthyDevices := 0
 	allDeviceHealth := s.pa.Store.ListDeviceHealth()
 	for _, dh := range allDeviceHealth {
-		totalRisk += float64(100 - dh.OverallScore)
 		healthCount++
 		if dh.OverallScore >= 70 {
 			healthyDevices++
 		}
-	}
-	avgRisk := 0.0
-	if healthCount > 0 {
-		avgRisk = totalRisk / float64(healthCount)
 	}
 
 	stats := models.DashboardStats{
 		TotalUsers:     len(users),
 		ActiveSessions: activeSessions,
 		TotalResources: len(resources),
-		TotalPolicies:  len(rules),
 		RecentDenials:  recentDenials,
-		AverageRisk:    int(avgRisk),
 		HealthyDevices: healthyDevices,
 		TotalDevices:   healthCount,
 	}

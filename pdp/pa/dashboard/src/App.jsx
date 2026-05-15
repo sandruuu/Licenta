@@ -14,7 +14,6 @@ import DeviceHealth from './pages/DeviceHealth';
 import ProtectApp from './pages/ProtectApp';
 import Gateways from './pages/Gateways';
 import GatewayDetail from './pages/GatewayDetail';
-import './App.css';
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('admin_token');
@@ -38,10 +37,10 @@ function App() {
           <Route path="tenants" element={<Navigate to="/dashboard/organizations" replace />} />
           <Route path="resources" element={<Resources />} />
           <Route path="resources/:resourceId" element={<ResourceDetail />} />
+          <Route path="policies" element={<Policies />} />
           <Route path="gateways" element={<Gateways />} />
           <Route path="gateways/:gatewayId" element={<GatewayDetail />} />
           <Route path="protect-app" element={<ProtectApp />} />
-          <Route path="policies" element={<Policies />} />
           <Route path="sessions" element={<Sessions />} />
           <Route path="device-health" element={<DeviceHealth />} />
           <Route path="audit" element={<Audit />} />

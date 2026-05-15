@@ -21,7 +21,7 @@ export default function Modal({ open, onClose, title, children, footer, size = '
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-graphite/45 backdrop-blur-sm"
          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className={`bg-surface-card rounded-md border border-border shadow-2xl w-full ${sizes[size] || sizes.md} mx-4 max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-border flex-shrink-0">

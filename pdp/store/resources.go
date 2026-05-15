@@ -139,7 +139,8 @@ func (s *Store) scanResources(rows *sql.Rows) []*models.Resource {
 	return resources
 }
 
-// GetResourceByClientID finds a resource by its per-app ClientID.
+// GetResourceByClientID is retained for legacy databases where protected
+// resources briefly carried OIDC-style client IDs.
 func (s *Store) GetResourceByClientID(clientID string) (*models.Resource, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
 		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,

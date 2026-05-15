@@ -5,16 +5,14 @@ import StatCard from '../components/ui/StatCard';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import {
-  Users, Radio, Server, Shield, AlertTriangle, TrendingUp, Monitor, Activity, FileText,
+  Users, Radio, Server, AlertTriangle, Monitor, Activity, FileText,
 } from 'lucide-react';
 
 const statCards = [
   { key: 'total_users', label: 'Total Users', type: 'users', icon: Users, color: 'blue' },
   { key: 'active_sessions', label: 'Active Sessions', type: 'sessions', icon: Radio, color: 'green' },
   { key: 'total_resources', label: 'Resources', type: 'resources', icon: Server, color: 'purple' },
-  { key: 'total_policies', label: 'Policies', type: 'policies', icon: Shield, color: 'orange' },
   { key: 'recent_denials', label: 'Recent Denials', type: 'denials', icon: AlertTriangle, color: 'red' },
-  { key: 'average_risk', label: 'Avg Risk Score', type: 'risk', icon: TrendingUp, color: 'orange' },
   { key: 'healthy_devices', label: 'Healthy Devices', type: 'healthy', icon: Monitor, color: 'green' },
   { key: 'total_devices', label: 'Total Devices', type: 'devices', icon: Activity, color: 'blue' },
 ];
@@ -56,22 +54,9 @@ export default function Dashboard() {
 
   return (
     <>
-      <PageHeader title="Dashboard" subtitle="Zero Trust Network Access — Overview" />
+      <PageHeader title="Dashboard" subtitle="......................................." />
 
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 mb-6">
-        {statCards.map(({ key, label, icon: Icon, color }) => (
-          <StatCard key={key} label={label} value={stats?.[key] ?? 0} icon={Icon} color={color} />
-        ))}
-      </div>
-
-      <DataTable
-        columns={auditColumns}
-        data={audit}
-        loading={false}
-        emptyIcon={FileText}
-        emptyTitle="No recent activity"
-        emptyMessage="Events will appear here as users access resources."
-      />
+     
     </>
   );
 }

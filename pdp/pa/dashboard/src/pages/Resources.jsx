@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Copy, Edit, Eye, EyeOff, Key, Server, Shield, Trash2 } from 'lucide-react';
+import { Edit2, Server, Trash2 } from 'lucide-react';
 import {
   createResource,
   deleteResource,
   getGateways,
+  getOrganizations,
   getResources,
-  getTenants,
-  regenerateSecret,
   updateResource,
 } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
-import DataTable from '../components/ui/DataTable';
+import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui/FormField';
+import Pagination from '../components/ui/Pagination';
+import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { usePublicConfig } from '../config/publicConfig';
 
 const typeMeta = [
@@ -27,10 +28,6 @@ const typeMeta = [
 
 function splitList(value) {
   return value ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
-}
-
-function copyText(text) {
-  navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function typeVariant(type) {
@@ -45,36 +42,35 @@ export default function Resources() {
   const [searchParams] = useSearchParams();
   const publicConfig = usePublicConfig();
   const [resources, setResources] = useState([]);
-  const [tenants, setTenants] = useState([]);
+  const [organizations, setOrganizations] = useState([]);
   const [gateways, setGateways] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [credModal, setCredModal] = useState(null);
-  const [showSecret, setShowSecret] = useState(false);
-  const [query, setQuery] = useState('');
+  const [openedCreateFromURL, setOpenedCreateFromURL] = useState(false);
+  const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [organizationFilter, setOrganizationFilter] = useState('all');
+  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('tenant_id') || 'all');
 
-  const tenantByID = useMemo(() => new Map(tenants.map((tenant) => [tenant.id, tenant])), [tenants]);
+  const organizationByID = useMemo(() => new Map(organizations.map((organization) => [organization.id, organization])), [organizations]);
   const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
   const typeOptions = useMemo(() => typeMeta.map((item) => ({
     ...item,
     defaultPort: publicConfig.resource_default_ports?.[item.value] || 0,
   })), [publicConfig.resource_default_ports]);
 
-  const gatewaysForTenant = (tenantID) => gateways.filter((gateway) => gateway.tenant_id === tenantID);
+  const gatewaysForOrganization = (organizationID) => gateways.filter((gateway) => gateway.tenant_id === organizationID);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [resourceData, tenantData, gatewayData] = await Promise.all([getResources(), getTenants(), getGateways()]);
+      const [resourceData, organizationData, gatewayData] = await Promise.all([getResources(), getOrganizations(), getGateways()]);
       setResources(Array.isArray(resourceData) ? resourceData : []);
-      setTenants(Array.isArray(tenantData) ? tenantData : []);
+      setOrganizations(Array.isArray(organizationData) ? organizationData : []);
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
     } catch (e) {
       setError(e.message || 'Failed to load resources');
@@ -87,19 +83,19 @@ export default function Resources() {
     load();
   }, []);
 
-  const defaultTenantID = () => searchParams.get('tenant_id') || tenants[0]?.id || '';
-  const defaultGatewayID = (tenantID) => searchParams.get('gateway_id') || gatewaysForTenant(tenantID)[0]?.id || '';
+  const defaultOrganizationID = () => searchParams.get('tenant_id') || organizations[0]?.id || '';
+  const defaultGatewayID = (organizationID) => searchParams.get('gateway_id') || gatewaysForOrganization(organizationID)[0]?.id || '';
 
   const openCreate = (type = searchParams.get('type') || 'web') => {
     const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
-    const tenantID = defaultTenantID();
+    const organizationID = defaultOrganizationID();
     const option = typeOptions.find((item) => item.value === normalizedType);
     setForm({
       name: '',
       description: '',
       type: normalizedType,
-      tenant_id: tenantID,
-      gateway_id: defaultGatewayID(tenantID),
+      tenant_id: organizationID,
+      gateway_id: defaultGatewayID(organizationID),
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
       external_url: '',
@@ -112,6 +108,48 @@ export default function Resources() {
     setModal('create');
   };
 
+  useEffect(() => {
+    if (searchParams.get('create') !== '1') {
+      setOpenedCreateFromURL(false);
+      return;
+    }
+
+    if (loading || modal || openedCreateFromURL) return;
+
+    const type = searchParams.get('type') || 'web';
+    const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
+    const organizationID = searchParams.get('tenant_id') || organizations[0]?.id || '';
+    const option = typeOptions.find((item) => item.value === normalizedType);
+    const gatewayID = searchParams.get('gateway_id') || gateways.find((gateway) => gateway.tenant_id === organizationID)?.id || '';
+
+    setForm({
+      name: '',
+      description: '',
+      type: normalizedType,
+      tenant_id: organizationID,
+      gateway_id: gatewayID,
+      host: '',
+      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
+      external_url: '',
+      catalog_fqdn: '',
+      enabled: true,
+      allowed_roles: '',
+      require_mfa: false,
+      tags: '',
+    });
+    setModal('create');
+    setOpenedCreateFromURL(true);
+  }, [
+    loading,
+    searchParams,
+    modal,
+    openedCreateFromURL,
+    typeOptions,
+    organizations,
+    gateways,
+    publicConfig.resource_default_ports,
+  ]);
+
   const openEdit = (resource) => {
     setForm({
       ...resource,
@@ -122,9 +160,9 @@ export default function Resources() {
     setModal('edit');
   };
 
-  const selectTenant = (tenantID) => {
-    const firstGateway = gatewaysForTenant(tenantID)[0]?.id || '';
-    setForm({ ...form, tenant_id: tenantID, gateway_id: firstGateway });
+  const selectOrganization = (organizationID) => {
+    const firstGateway = gatewaysForOrganization(organizationID)[0]?.id || '';
+    setForm({ ...form, tenant_id: organizationID, gateway_id: firstGateway });
   };
 
   const selectType = (type) => {
@@ -160,11 +198,7 @@ export default function Resources() {
 
     try {
       if (modal === 'create') {
-        const created = await createResource(data);
-        if (created?.client_id) {
-          setShowSecret(true);
-          setCredModal({ client_id: created.client_id, client_secret: created.client_secret, name: created.name });
-        }
+        await createResource(data);
       } else {
         await updateResource(form.id, data);
       }
@@ -188,22 +222,6 @@ export default function Resources() {
     }
   };
 
-  const handleRegenSecret = async (resource) => {
-    if (!confirm('Regenerate this resource secret?')) return;
-    setError('');
-    setSaving(true);
-    try {
-      const result = await regenerateSecret(resource.id);
-      setShowSecret(true);
-      setCredModal({ client_id: result.client_id, client_secret: result.client_secret, name: resource.name });
-      await load();
-    } catch (e) {
-      setError(e.message || 'Failed to regenerate secret');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const columns = [
     {
       key: 'name',
@@ -211,45 +229,29 @@ export default function Resources() {
       render: (_, row) => (
         <div>
           <span className="font-semibold text-text-primary text-xs">{row.name}</span>
-          {row.description && <div className="text-xs text-text-muted">{row.description}</div>}
         </div>
       ),
     },
     { key: 'type', label: 'Type', render: (value) => <Badge variant={typeVariant(value)}>{(value || '').toUpperCase()}</Badge> },
-    { key: 'tenant_id', label: 'Organization', render: (value) => tenantByID.get(value)?.name || value || '-' },
+    { key: 'tenant_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
     { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
-    { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     {
       key: 'metadata',
-      label: 'Catalog FQDN',
+      label: 'External FQDN',
       render: (value, row) => <span className="text-mono text-xs">{value?.catalog_fqdn || row.external_url || '-'}</span>,
     },
+    { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     { key: 'enabled', label: 'Status', render: (value) => <Badge variant={value ? 'success' : 'danger'}>{value ? 'Enabled' : 'Disabled'}</Badge> },
     {
       key: 'actions',
       label: 'Actions',
       align: 'right',
       render: (_, row) => (
-        <div className="flex items-center justify-end gap-1">
-          <Button variant="ghost" className="!p-1.5 !shadow-none" onClick={() => openEdit(row)} title="Edit">
-            <Edit size={12} />
-          </Button>
-          <Button
-            variant="ghost"
-            className="!p-1.5 !shadow-none"
-            onClick={() => navigate(`/dashboard/policies?tenant_id=${encodeURIComponent(row.tenant_id || '')}&gateway_id=${encodeURIComponent(row.gateway_id || '')}&resource_id=${encodeURIComponent(row.id)}`)}
-            title="View policies"
-          >
-            <Shield size={12} />
-          </Button>
-          <Button variant="ghost" className="!p-1.5 !shadow-none" onClick={() => handleRegenSecret(row)} title="Regenerate secret">
-            <Key size={12} />
-          </Button>
-          <Button variant="ghost" className="!p-1.5 !shadow-none !text-danger hover:!bg-danger-muted" onClick={() => handleDelete(row.id)} title="Delete">
-            <Trash2 size={12} />
-          </Button>
-        </div>
+        <TableActions>
+          <TableIconButton icon={Edit2} label="Edit resource" onClick={() => openEdit(row)} />
+          <TableIconButton icon={Trash2} label="Delete resource" danger onClick={() => handleDelete(row.id)} />
+        </TableActions>
       ),
     },
   ];
@@ -261,7 +263,7 @@ export default function Resources() {
       if (statusFilter === 'disabled' && resource.enabled !== false) return false;
       if (organizationFilter !== 'all' && resource.tenant_id !== organizationFilter) return false;
       if (!needle) return true;
-      const organization = tenantByID.get(resource.tenant_id);
+      const organization = organizationByID.get(resource.tenant_id);
       const gateway = gatewayByID.get(resource.gateway_id);
       return [
         resource.name,
@@ -275,8 +277,29 @@ export default function Resources() {
         gateway?.name,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
-  }, [resources, query, typeFilter, statusFilter, organizationFilter, tenantByID, gatewayByID]);
+  }, [resources, query, typeFilter, statusFilter, organizationFilter, organizationByID, gatewayByID]);
   const hasFilters = query.trim() || typeFilter !== 'all' || statusFilter !== 'all' || organizationFilter !== 'all';
+  const resourcePagination = usePaginatedTable(filteredResources);
+
+  const handleQueryChange = (value) => {
+    setQuery(value);
+    resourcePagination.resetPage();
+  };
+
+  const handleTypeFilterChange = (value) => {
+    setTypeFilter(value);
+    resourcePagination.resetPage();
+  };
+
+  const handleStatusFilterChange = (value) => {
+    setStatusFilter(value);
+    resourcePagination.resetPage();
+  };
+
+  const handleOrganizationFilterChange = (value) => {
+    setOrganizationFilter(value);
+    resourcePagination.resetPage();
+  };
 
   return (
     <>
@@ -290,68 +313,47 @@ export default function Resources() {
 
       <ListToolbar
         query={query}
-        onQueryChange={setQuery}
+        onQueryChange={handleQueryChange}
         placeholder="Search resource, host, gateway, or organization"
         summary={`${filteredResources.length} of ${resources.length}`}
       >
-        <ListToolbarSelect value={typeFilter} onChange={setTypeFilter}>
+        <ListToolbarSelect value={typeFilter} onChange={handleTypeFilterChange}>
           <option value="all">All types</option>
           {typeOptions.map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </ListToolbarSelect>
-        <ListToolbarSelect value={statusFilter} onChange={setStatusFilter}>
+        <ListToolbarSelect value={statusFilter} onChange={handleStatusFilterChange}>
           <option value="all">All statuses</option>
           <option value="enabled">Enabled</option>
           <option value="disabled">Disabled</option>
         </ListToolbarSelect>
-        <ListToolbarSelect value={organizationFilter} onChange={setOrganizationFilter} className="min-w-[180px]">
+        <ListToolbarSelect value={organizationFilter} onChange={handleOrganizationFilterChange} className="min-w-[180px]">
           <option value="all">All organizations</option>
-          {tenants.map((tenant) => (
-            <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+          {organizations.map((organization) => (
+            <option key={organization.id} value={organization.id}>{organization.name}</option>
           ))}
         </ListToolbarSelect>
       </ListToolbar>
 
       <DataTable
         columns={columns}
-        data={filteredResources}
+        data={resourcePagination.pageItems}
         loading={loading}
+        minRows={resourcePagination.pageSize}
         emptyIcon={Server}
         emptyTitle={hasFilters ? 'No resources match filters' : 'No resources configured'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find resources.' : 'Create a gateway first, then attach protected resources to it.'}
+        onRowClick={(row) => navigate(`/dashboard/resources/${encodeURIComponent(row.id)}`)}
       />
 
-      <Modal
-        open={!!credModal}
-        onClose={() => { setCredModal(null); setShowSecret(false); }}
-        title="Resource Credentials"
-        size="md"
-        footer={<Button onClick={() => { setCredModal(null); setShowSecret(false); }}>Done</Button>}
-      >
-        {credModal && (
-          <>
-            <FormField label="Resource">
-              <div className="bg-surface-secondary border border-border rounded-md px-3 py-2 font-mono text-[13px] text-text-primary">{credModal.name}</div>
-            </FormField>
-            <FormField label="Client ID">
-              <div className="flex items-center gap-2 bg-surface-secondary border border-border rounded-md px-3 py-2 font-mono text-[13px]">
-                <code className="flex-1 min-w-0 break-all text-text-primary">{credModal.client_id}</code>
-                <Button variant="ghost" className="!p-1.5 !shadow-none" onClick={() => copyText(credModal.client_id)}><Copy size={12} /></Button>
-              </div>
-            </FormField>
-            <FormField label="Client Secret">
-              <div className="flex items-center gap-2 bg-surface-secondary border border-border rounded-md px-3 py-2 font-mono text-[13px]">
-                <code className="flex-1 min-w-0 break-all text-text-primary">{showSecret ? credModal.client_secret : 'hidden'}</code>
-                <Button variant="ghost" className="!p-1.5 !shadow-none" onClick={() => setShowSecret(!showSecret)}>
-                  {showSecret ? <EyeOff size={12} /> : <Eye size={12} />}
-                </Button>
-                <Button variant="ghost" className="!p-1.5 !shadow-none" onClick={() => copyText(credModal.client_secret)}><Copy size={12} /></Button>
-              </div>
-            </FormField>
-          </>
-        )}
-      </Modal>
+      {/* <div className="pt-6">
+        <Pagination
+          currentPage={resourcePagination.currentPage}
+          totalPages={resourcePagination.totalPages}
+          onPageChange={resourcePagination.setCurrentPage}
+        />
+      </div> */}
 
       <Modal
         open={!!modal}
@@ -369,15 +371,15 @@ export default function Resources() {
       >
         <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-3">
           <FormField label="Organization" className="mb-0 md:col-span-2">
-            <FormSelect value={form.tenant_id || ''} onChange={(e) => selectTenant(e.target.value)}>
+            <FormSelect value={form.tenant_id || ''} onChange={(e) => selectOrganization(e.target.value)}>
               <option value="">Select organization</option>
-              {tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+              {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
             </FormSelect>
           </FormField>
           <FormField label="Gateway" className="mb-0 md:col-span-2">
             <FormSelect value={form.gateway_id || ''} onChange={(e) => setForm({ ...form, gateway_id: e.target.value })}>
               <option value="">Select gateway</option>
-              {gatewaysForTenant(form.tenant_id).map((gateway) => (
+              {gatewaysForOrganization(form.tenant_id).map((gateway) => (
                 <option key={gateway.id} value={gateway.id}>{gateway.name}</option>
               ))}
             </FormSelect>

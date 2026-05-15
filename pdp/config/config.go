@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"time"
-
-	"pdp/models"
 )
 
 // RuntimeConfig holds operational knobs that used to live as literals in code.
@@ -81,12 +79,6 @@ type GeoConfig struct {
 	ImpossibleTravelSpeedKMH float64       `json:"impossible_travel_speed_kmh"`
 }
 
-// PolicyConfig controls optional first-run policy initialization.
-type PolicyConfig struct {
-	SeedDefaultRules bool                `json:"seed_default_rules"`
-	DefaultRules     []models.PolicyRule `json:"default_rules"`
-}
-
 // RiskConfig controls the numeric risk-score model used by PE.
 type RiskConfig struct {
 	PostureCriticalAfter        time.Duration  `json:"posture_critical_after"`
@@ -123,8 +115,6 @@ type RiskConfig struct {
 	SuspiciousGeoVelocityPoints int            `json:"suspicious_geo_velocity_points"`
 	MaxAnomalyPoints            int            `json:"max_anomaly_points"`
 	MaxScore                    int            `json:"max_score"`
-	DefaultDenyRiskThreshold    int            `json:"default_deny_risk_threshold"`
-	DefaultMFARiskThreshold     int            `json:"default_mfa_risk_threshold"`
 }
 
 // Config holds all PDP service configuration
@@ -184,7 +174,6 @@ type Config struct {
 	Gateway        GatewayConfig         `json:"gateway"`
 	Enrollment     EnrollmentConfig      `json:"enrollment"`
 	Geo            GeoConfig             `json:"geo"`
-	Policies       PolicyConfig          `json:"policies"`
 	Risk           RiskConfig            `json:"risk"`
 }
 
@@ -394,11 +383,5 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Risk.MaxScore <= 0 {
 		c.Risk.MaxScore = 100
-	}
-	if c.Risk.DefaultDenyRiskThreshold <= 0 {
-		c.Risk.DefaultDenyRiskThreshold = 80
-	}
-	if c.Risk.DefaultMFARiskThreshold <= 0 {
-		c.Risk.DefaultMFARiskThreshold = 50
 	}
 }

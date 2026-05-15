@@ -90,6 +90,26 @@ export async function deleteTenant(id) {
   });
 }
 
+export async function getOrganizations() {
+  return getTenants();
+}
+
+export async function createOrganization(data) {
+  return createTenant(data);
+}
+
+export async function getOrganization(id) {
+  return getTenant(id);
+}
+
+export async function updateOrganization(id, data) {
+  return updateTenant(id, data);
+}
+
+export async function deleteOrganization(id) {
+  return deleteTenant(id);
+}
+
 // ─── Auth ───────────────────────────────────
 
 export async function login(username, password) {
@@ -162,9 +182,57 @@ export async function deleteResource(id) {
   });
 }
 
-export async function regenerateSecret(resourceId) {
-  return apiFetch(`/admin/resources-regenerate-secret/${resourceId}`, {
+// Access policies use Duo-style assignment layers: organization, group, resource, and resource_group.
+
+export async function getPolicies() {
+  return apiFetch('/admin/policies');
+}
+
+export async function createPolicy(data) {
+  return apiFetch('/admin/policies', {
     method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getPolicy(id) {
+  return apiFetch(`/admin/policies/${id}`);
+}
+
+export async function updatePolicy(id, data) {
+  return apiFetch(`/admin/policies/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePolicy(id) {
+  return apiFetch(`/admin/policies/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getPolicyAssignments() {
+  return apiFetch('/admin/policy-assignments');
+}
+
+export async function createPolicyAssignment(data) {
+  return apiFetch('/admin/policy-assignments', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updatePolicyAssignment(id, data) {
+  return apiFetch(`/admin/policy-assignments/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deletePolicyAssignment(id) {
+  return apiFetch(`/admin/policy-assignments/${id}`, {
+    method: 'DELETE',
   });
 }
 
@@ -214,56 +282,6 @@ export async function testGatewayFederation(id, issuer) {
   return apiFetch(`/admin/gateways/${id}/test-federation`, {
     method: 'POST',
     body: JSON.stringify({ issuer: issuer || '' }),
-  });
-}
-
-// ─── Policy Rules ───────────────────────────
-
-export async function getRules() {
-  return apiFetch('/admin/rules');
-}
-
-export async function createRule(data) {
-  return apiFetch('/admin/rules', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateRule(id, data) {
-  return apiFetch(`/admin/rules/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteRule(id) {
-  return apiFetch(`/admin/rules/${id}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function getPolicyAssignments() {
-  return apiFetch('/admin/policy-assignments');
-}
-
-export async function createPolicyAssignment(data) {
-  return apiFetch('/admin/policy-assignments', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updatePolicyAssignment(id, data) {
-  return apiFetch(`/admin/policy-assignments/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deletePolicyAssignment(id) {
-  return apiFetch(`/admin/policy-assignments/${id}`, {
-    method: 'DELETE',
   });
 }
 

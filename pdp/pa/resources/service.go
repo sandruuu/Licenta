@@ -1,8 +1,6 @@
 package resources
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,16 +13,10 @@ import (
 	"pdp/util"
 )
 
-const (
-	clientIDRandomBytes   = 9
-	clientSecretByteCount = 20
-)
-
 var (
 	ErrServiceUnavailable = errors.New("resource service is not available")
 	ErrInvalidRequest     = errors.New("invalid resource request")
 	ErrResourceNotFound   = errors.New("resource not found")
-	ErrCredentialIssue    = errors.New("resource credential generation failed")
 )
 
 type EventPublisher interface {
@@ -53,7 +45,9 @@ func (service *Service) ListResources() ([]*models.Resource, error) {
 	if err := service.readyStore(); err != nil {
 		return nil, err
 	}
-	return service.store.ListResources(), nil
+	resources := service.store.ListResources()
+	clearResourceClientFields(resources...)
+	return resources, nil
 }
 
 func (service *Service) CreateResource(resource models.Resource) (*models.Resource, error) {
@@ -74,19 +68,15 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	now := service.clock()
 	resourceID, err := util.GenerateID("res")
 	if err != nil {
-		return nil, fmt.Errorf("%w: generate resource ID: %v", ErrCredentialIssue, err)
-	}
-	clientID, clientSecret, err := generateClientCredentials()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCredentialIssue, err)
+		return nil, fmt.Errorf("generate resource ID: %w", err)
 	}
 
 	resource.ID = resourceID
 	resource.CreatedAt = now
 	resource.UpdatedAt = now
 	resource.Enabled = true
-	resource.ClientID = clientID
-	resource.ClientSecret = clientSecret
+	resource.ClientID = ""
+	resource.ClientSecret = ""
 
 	service.store.SaveResource(&resource)
 	service.publishResourceEvent(resource.ID, "created", "resource_created")
@@ -147,21 +137,6 @@ func (service *Service) DeleteResource(id string) error {
 	return nil
 }
 
-func (service *Service) RegenerateSecret(id string) (*models.Resource, error) {
-	resource, err := service.resourceByID(id)
-	if err != nil {
-		return nil, err
-	}
-	secret, err := randomHex(clientSecretByteCount)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCredentialIssue, err)
-	}
-	resource.ClientSecret = secret
-	resource.UpdatedAt = service.clock()
-	service.store.SaveResource(resource)
-	return resource, nil
-}
-
 func (service *Service) resourceByID(id string) (*models.Resource, error) {
 	if err := service.readyStore(); err != nil {
 		return nil, err
@@ -174,6 +149,7 @@ func (service *Service) resourceByID(id string) (*models.Resource, error) {
 	if !ok {
 		return nil, ErrResourceNotFound
 	}
+	clearResourceClientFields(resource)
 	return resource, nil
 }
 
@@ -244,27 +220,14 @@ func normalizeResourceType(resourceType string) string {
 	return strings.ToLower(strings.TrimSpace(resourceType))
 }
 
-func generateClientCredentials() (string, string, error) {
-	clientIDBytes := make([]byte, clientIDRandomBytes)
-	if _, err := rand.Read(clientIDBytes); err != nil {
-		return "", "", err
+func clearResourceClientFields(resources ...*models.Resource) {
+	for _, resource := range resources {
+		if resource == nil {
+			continue
+		}
+		resource.ClientID = ""
+		resource.ClientSecret = ""
 	}
-	clientSecret, err := randomHex(clientSecretByteCount)
-	if err != nil {
-		return "", "", err
-	}
-	return "DI" + hex.EncodeToString(clientIDBytes), clientSecret, nil
-}
-
-func randomHex(bytesLen int) (string, error) {
-	if bytesLen <= 0 {
-		return "", fmt.Errorf("random byte length must be positive")
-	}
-	randomBytes := make([]byte, bytesLen)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(randomBytes), nil
 }
 
 func applyStringField(fields map[string]json.RawMessage, name string, target *string) {

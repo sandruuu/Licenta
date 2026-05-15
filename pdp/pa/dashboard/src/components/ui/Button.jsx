@@ -2,7 +2,7 @@ const base = 'inline-flex items-center gap-1.5 px-4 py-2 rounded-md font-semibol
 
 const styles = {
   primary:
-    'bg-accent text-white hover:bg-accent-hover',
+    'bg-accent text-white-smoke hover:bg-accent-hover',
   secondary:
     'bg-transparent border border-border text-text-secondary hover:bg-surface-hover hover:text-text-primary',
   danger:

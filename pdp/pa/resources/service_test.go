@@ -11,7 +11,7 @@ import (
 	"pdp/store"
 )
 
-func TestServiceCreateResourceGeneratesCredentialsAndPublishesEvent(t *testing.T) {
+func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testing.T) {
 	dataStore := newResourceTestStore(t)
 	seedResourceScope(dataStore)
 	publisher := &testResourcePublisher{}
@@ -34,8 +34,8 @@ func TestServiceCreateResourceGeneratesCredentialsAndPublishesEvent(t *testing.T
 	if !strings.HasPrefix(resource.ID, "res_") {
 		t.Fatalf("resource ID = %q, want res_ prefix", resource.ID)
 	}
-	if !strings.HasPrefix(resource.ClientID, "DI") || len(resource.ClientID) != 20 || len(resource.ClientSecret) != 40 {
-		t.Fatalf("credentials not generated correctly: client_id=%q secret_len=%d", resource.ClientID, len(resource.ClientSecret))
+	if resource.ClientID != "" || resource.ClientSecret != "" {
+		t.Fatalf("protected resource should not receive OIDC credentials: client_id=%q secret=%q", resource.ClientID, resource.ClientSecret)
 	}
 	if !resource.Enabled {
 		t.Fatalf("resource should be enabled by default: %+v", resource)
@@ -44,7 +44,7 @@ func TestServiceCreateResourceGeneratesCredentialsAndPublishesEvent(t *testing.T
 		t.Fatalf("resource created event mismatch: %+v", publisher.events)
 	}
 	saved, found := dataStore.GetResource(resource.ID)
-	if !found || saved.ClientID != resource.ClientID {
+	if !found || saved.Name != resource.Name || saved.ClientID != "" || saved.ClientSecret != "" {
 		t.Fatalf("resource was not persisted correctly: found=%v saved=%+v", found, saved)
 	}
 }
@@ -67,6 +67,30 @@ func TestServiceCreateResourceValidatesRequest(t *testing.T) {
 	_, err = service.CreateResource(models.Resource{Name: "No Scope", Type: "ssh"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("missing scope error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestServiceListResourcesHidesLegacyClientCredentials(t *testing.T) {
+	dataStore := newResourceTestStore(t)
+	service := NewService(dataStore)
+	dataStore.SaveResource(&models.Resource{
+		ID:           "res-1",
+		Name:         "Legacy App",
+		Type:         "web",
+		ClientID:     "DIoldclientid123456",
+		ClientSecret: "old-secret",
+		Enabled:      true,
+	})
+
+	resources, err := service.ListResources()
+	if err != nil {
+		t.Fatalf("ListResources returned error: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("resource count = %d, want 1", len(resources))
+	}
+	if resources[0].ClientID != "" || resources[0].ClientSecret != "" {
+		t.Fatalf("legacy credentials should be hidden: client_id=%q secret=%q", resources[0].ClientID, resources[0].ClientSecret)
 	}
 }
 
@@ -98,22 +122,6 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "updated" {
 		t.Fatalf("resource updated event mismatch: %+v", publisher.events)
-	}
-}
-
-func TestServiceRegenerateSecretPreservesClientID(t *testing.T) {
-	dataStore := newResourceTestStore(t)
-	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
-	service := NewService(dataStore)
-	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", Name: "App", Type: "web", ClientID: "DIoldclientid123456", ClientSecret: "old-secret"})
-
-	resource, err := service.RegenerateSecret("res-1")
-	if err != nil {
-		t.Fatalf("RegenerateSecret returned error: %v", err)
-	}
-	if resource.ClientID != "DIoldclientid123456" || resource.ClientSecret == "old-secret" || len(resource.ClientSecret) != 40 {
-		t.Fatalf("secret regeneration mismatch: client_id=%q secret=%q", resource.ClientID, resource.ClientSecret)
 	}
 }
 

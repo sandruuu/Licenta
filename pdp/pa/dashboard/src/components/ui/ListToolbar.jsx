@@ -1,4 +1,5 @@
 import { Search } from 'lucide-react';
+import SelectDropdown from './SelectDropdown';
 
 export default function ListToolbar({
   query,
@@ -15,17 +16,8 @@ export default function ListToolbar({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={placeholder}
-          className="h-11 w-full rounded-full border border-border bg-surface-secondary pl-10 pr-4 text-[13px] text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted transition-colors"
+          className="h-11 w-full rounded-md border border-border bg-surface-secondary pl-10 pr-4 text-sm font-semibold text-text-primary placeholder:text-text-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-muted"
         />
-      </div>
-
-      <div className="flex flex-wrap items-center justify-end gap-2">
-        {children}
-        {summary && (
-          <span className="px-1 text-xs font-medium text-text-secondary whitespace-nowrap">
-            {summary}
-          </span>
-        )}
       </div>
     </div>
   );
@@ -33,12 +25,13 @@ export default function ListToolbar({
 
 export function ListToolbarSelect({ value, onChange, children, className = '' }) {
   return (
-    <select
+    <SelectDropdown
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`h-11 min-w-[140px] rounded-full border border-border bg-surface-card px-4 text-[12px] font-semibold text-text-primary focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted transition-colors ${className}`}
+      className={`min-w-[176px] ${className}`}
+      buttonClassName="h-11 rounded-md px-4 text-sm"
     >
       {children}
-    </select>
+    </SelectDropdown>
   );
 }

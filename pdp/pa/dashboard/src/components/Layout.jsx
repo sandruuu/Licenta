@@ -1,26 +1,41 @@
+import { createElement } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { clearToken } from '../api';
+import ThemeToggle from './ui/ThemeToggle';
 import {
   LayoutDashboard,
   Server,
   Router,
-  Shield,
   Radio,
   Activity,
   FileText,
   LogOut,
   Building2,
+  ShieldCheck,
+  Shield,
 } from 'lucide-react';
 
-const navItems = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
-  { to: '/dashboard/organizations', icon: Building2, label: 'Organizations' },
-  { to: '/dashboard/resources', icon: Server, label: 'Resources' },
-  { to: '/dashboard/gateways', icon: Router, label: 'Gateways' },
-  { to: '/dashboard/policies', icon: Shield, label: 'Policies' },
-  { to: '/dashboard/sessions', icon: Radio, label: 'Sessions' },
-  { to: '/dashboard/device-health', icon: Activity, label: 'Device Health' },
-  { to: '/dashboard/audit', icon: FileText, label: 'Audit Log' },
+const navSections = [
+  {
+    items: [
+      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
+    ],
+  },
+  {
+    items: [
+      { to: '/dashboard/organizations', icon: Building2, label: 'Organizations' },
+      { to: '/dashboard/resources', icon: Server, label: 'Resources' },
+      { to: '/dashboard/policies', icon: ShieldCheck, label: 'Policies' },
+      { to: '/dashboard/gateways', icon: Router, label: 'Gateways' },
+    ],
+  },
+  {
+    items: [
+      { to: '/dashboard/sessions', icon: Radio, label: 'Sessions' },
+      { to: '/dashboard/device-health', icon: Activity, label: 'Device Health' },
+      { to: '/dashboard/audit', icon: FileText, label: 'Audit Log' },
+    ],
+  },
 ];
 
 export default function Layout() {
@@ -32,61 +47,79 @@ export default function Layout() {
   };
 
   return (
-    <div className="flex min-h-screen">
+    <div className="min-h-screen">
       <aside
-        className="w-[290px] min-w-[290px] bg-surface-card border-r border-border
-                   flex flex-col fixed h-screen z-10"
+        className="sidebar-shell group fixed left-1.5 top-1.5 z-40 flex h-[calc(100vh-12px)] w-[88px] flex-col gap-2 rounded-md p-2 transition-[width] duration-300 ease-out hover:w-[292px]"
       >
-        {/* Brand */}
-        <div className="pt-8 px-6 pb-5 border-b border-border text-center flex-shrink-0">
-          <h1 className="text-xl font-bold tracking-[-0.3px] text-text-primary leading-none">
-            SECURE<span className="text-accent-orange">ALERT</span>
-          </h1>
-          <span className="inline-block mt-2 text-[11px] text-text-muted uppercase tracking-[0.08em] font-semibold">
-            PDP Console
+        <div className="sidebar-panel flex h-20 shrink-0 items-center justify-center gap-0 rounded-md px-3 transition-colors group-hover:justify-start group-hover:gap-3">
+          <span className="grid h-10 w-10 shrink-0 place-items-center text-accent">
+            <Shield className="h-7 w-7" />
           </span>
+          <div className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
+            <h1 className="text-lg font-bold leading-none text-text-primary">
+              <span className="text-accent">TRUST</span>CLOUD
+            </h1>
+          </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 px-4 py-3 overflow-y-auto">
-          {navItems.map(({ to, icon: Icon, label, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                [
-                  'flex items-center gap-3 px-3.5 py-3 rounded-md no-underline text-sm font-bold transition-all duration-200 mb-0.5',
-                  isActive
-                    ? 'bg-accent text-white shadow-[0_4px_12px_rgba(15,23,42,0.2)]'
-                    : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-                ].join(' ')
-              }
-            >
-              <Icon className="w-[18px] h-[18px] flex-shrink-0" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
+        <div className="sidebar-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md">
+          <nav className="flex-1 overflow-y-auto px-3 py-4">
+            {navSections.map((section, sectionIndex) => (
+              <div key={sectionIndex} className="mb-4">
+                <div className="space-y-1">
+                  {section.items.map(({ to, icon, label, end }) => (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      end={end}
+                      title={label}
+                      className={({ isActive }) =>
+                        [
+                          'flex h-11 items-center justify-center gap-0 overflow-hidden rounded-md px-3 text-sm font-bold no-underline transition-all duration-200 hover:text-[15px] hover:[&>svg]:h-5 hover:[&>svg]:w-5 group-hover:justify-start group-hover:gap-3',
+                          isActive
+                            ? 'text-[15px] text-accent [&>svg]:h-5 [&>svg]:w-5'
+                            : 'text-text-secondary hover:text-text-primary',
+                        ].join(' ')
+                      }
+                    >
+                      {createElement(icon, { className: 'h-[18px] w-[18px] shrink-0 transition-all duration-200' })}
+                      <span className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
+                        {label}
+                      </span>
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
 
-        {/* Footer */}
-        <div className="p-4 border-t border-border flex-shrink-0">
-          <button
-            onClick={handleLogout}
-            className="w-full py-2.5 px-3 border border-border rounded-md bg-transparent
-                       text-text-secondary text-[13px] font-bold cursor-pointer
-                       transition-all duration-200
-                       hover:bg-danger-muted hover:text-danger hover:border-danger"
-          >
-            <LogOut size={14} className="inline-block mr-1.5 align-middle" />
-            Logout
-          </button>
+          <div className="shrink-0 p-3">
+            <ThemeToggle
+              showLabel
+              borderless
+              collapsibleLabel
+              className="mb-2 justify-center group-hover:justify-start group-hover:gap-3"
+              labelClassName="w-0 opacity-0 group-hover:w-auto group-hover:opacity-100"
+            />
+            <button
+              type="button"
+              onClick={handleLogout}
+              title="Logout"
+              className="flex h-11 w-full items-center justify-center gap-0 overflow-hidden rounded-md bg-transparent px-3 text-sm font-bold text-danger transition-all duration-200 hover:text-[15px] hover:[&>svg]:h-5 hover:[&>svg]:w-5 group-hover:justify-start group-hover:gap-3"
+            >
+              <LogOut className="h-[18px] w-[18px] shrink-0 transition-all duration-200" />
+              <span className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
+                Logout
+              </span>
+            </button>
+          </div>
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="flex-1 ml-[290px] p-8 min-h-screen">
-        <Outlet />
+      <main className="min-h-screen pl-[96px]">
+        <div className="p-8">
+          <Outlet />
+        </div>
       </main>
     </div>
   );

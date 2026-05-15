@@ -214,10 +214,6 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminUsers)))
 	s.mux.Handle("/api/admin/tenants", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminTenants)))
 	s.mux.Handle("/api/admin/tenants/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminTenantByID)))
-	s.mux.Handle("/api/admin/rules", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminRules)))
-	s.mux.Handle("/api/admin/rules/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminRuleByID)))
-	s.mux.Handle("/api/admin/policy-assignments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignments)))
-	s.mux.Handle("/api/admin/policy-assignments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignmentByID)))
 	s.mux.Handle("/api/admin/sessions", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessions)))
 	s.mux.Handle("/api/admin/sessions/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessionByID)))
 	s.mux.Handle("/api/admin/audit", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAudit)))
@@ -243,11 +239,14 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/resources", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminResources)))
 	s.mux.Handle("/api/admin/resources/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminResourceByID)))
+	s.mux.Handle("/api/admin/policies", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicies)))
+	s.mux.Handle("/api/admin/policies/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyByID)))
+	s.mux.Handle("/api/admin/policy-assignments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignments)))
+	s.mux.Handle("/api/admin/policy-assignments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignmentByID)))
 	s.mux.Handle("/api/admin/device-health", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceHealth)))
 	s.mux.Handle("/api/admin/device-health/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceHealthByID)))
 	s.mux.Handle("/api/admin/device-posture", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDevicePosture)))
 	s.mux.Handle("/api/admin/device-posture/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDevicePostureByID)))
-	s.mux.Handle("/api/admin/resources-regenerate-secret/", s.adminAuthMiddleware(http.HandlerFunc(s.handleRegenerateSecret)))
 	s.mux.Handle("/api/admin/dashboard", s.adminAuthMiddleware(http.HandlerFunc(s.handleDashboardStats)))
 
 	// ─────────────────────────────────────────────

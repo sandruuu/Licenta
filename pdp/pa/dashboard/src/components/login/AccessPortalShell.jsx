@@ -1,8 +1,10 @@
 import { CheckCircle2, Shield } from 'lucide-react';
+import ThemeToggle from '../ui/ThemeToggle';
 
 function AccessPortalShell({ flowError, sessionLabel, resultType, children }) {
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center px-4 py-8">
+    <div className="relative min-h-screen bg-surface flex items-center justify-center px-4 py-8">
+      <ThemeToggle className="absolute right-4 top-4" />
       <div className="w-full max-w-[420px] bg-surface-card border border-border rounded-lg shadow-xl p-8 animate-[cardFadeIn_0.35s_ease-out_both]">
         <div className="text-center mb-6">
           <div className="w-12 h-12 rounded-xl bg-accent-muted flex items-center justify-center mx-auto mb-3">

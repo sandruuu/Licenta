@@ -1,106 +1,81 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { X } from 'lucide-react';
 import {
+  createPolicy,
   createPolicyAssignment,
-  createRule,
+  deletePolicy,
   deletePolicyAssignment,
-  deleteRule,
   getDirectoryGroups,
-  getDirectoryUsers,
-  getGateways,
+  getOrganizations,
+  getPolicies,
   getPolicyAssignments,
   getResources,
-  getRules,
-  getTenants,
-  updateRule,
+  updatePolicy,
 } from '../api';
+import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import PageHeader from '../components/ui/PageHeader';
-import Modal from '../components/ui/Modal';
-import Button from '../components/ui/Button';
-import PolicyFilters from '../components/policies/PolicyFilters';
-import PolicyForm from '../components/policies/PolicyForm';
-import PolicyTable from '../components/policies/PolicyTable';
-import PolicyAssignmentModal from '../components/policies/PolicyAssignmentModal';
+import Pagination from '../components/ui/Pagination';
+import PolicyApplyModal from '../components/policies/PolicyApplyModal';
+import PolicyEditor from '../components/policies/PolicyEditor';
+import PolicyList from '../components/policies/PolicyList';
+import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import {
-  assignmentFilterOptions,
-  assignmentScopeMode,
-  conditionsToForm,
-  createBlankConditions,
-  includesText,
-  splitIntList,
-  splitList,
-} from '../components/policies/policyHelpers';
+  EMPTY_ASSIGNMENT_FORM,
+  EMPTY_POLICY_FORM,
+  LAYERS,
+  conditionSummary,
+  conditionsFromForm,
+  inferEnabledSections,
+  policyFormFromRule,
+} from '../components/policies/policyModel';
 
 export default function Policies() {
   const [searchParams] = useSearchParams();
-  const [rules, setRules] = useState([]);
+  const [policies, setPolicies] = useState([]);
   const [assignments, setAssignments] = useState([]);
-  const [tenants, setTenants] = useState([]);
-  const [gateways, setGateways] = useState([]);
+  const [organizations, setOrganizations] = useState([]);
   const [resources, setResources] = useState([]);
-  const [directoryUsers, setDirectoryUsers] = useState([]);
-  const [directoryGroups, setDirectoryGroups] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState(null);
-  const [assignmentPolicy, setAssignmentPolicy] = useState(null);
-  const [assignmentForm, setAssignmentForm] = useState({});
-  const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
-  const [assignmentSaving, setAssignmentSaving] = useState(false);
   const [error, setError] = useState('');
-  const [filters, setFilters] = useState(() => {
-    const scope = searchParams.get('scope');
-    return {
-      scope: assignmentFilterOptions.some((option) => option.value === scope) ? scope : 'all',
-      tenant_id: searchParams.get('tenant_id') || '',
-      gateway_id: searchParams.get('gateway_id') || '',
-      resource_id: searchParams.get('resource_id') || '',
-      q: '',
-    };
-  });
+  const [query, setQuery] = useState('');
+  const [levelFilter, setLevelFilter] = useState('all');
+  const [editor, setEditor] = useState(null);
+  const [assignmentModal, setAssignmentModal] = useState(null);
+  const [policyForm, setPolicyForm] = useState(EMPTY_POLICY_FORM);
+  const [assignmentForm, setAssignmentForm] = useState(EMPTY_ASSIGNMENT_FORM);
 
-  const tenantByID = useMemo(() => new Map(tenants.map((tenant) => [tenant.id, tenant])), [tenants]);
-  const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
-  const resourceByID = useMemo(() => new Map(resources.map((resource) => [resource.id, resource])), [resources]);
-  const assignmentsByPolicy = useMemo(() => {
-    const map = new Map();
-    assignments.forEach((assignment) => {
-      if (!map.has(assignment.policy_id)) map.set(assignment.policy_id, []);
-      map.get(assignment.policy_id).push(assignment);
-    });
-    return map;
-  }, [assignments]);
+  const maps = useMemo(() => ({
+    policies: new Map(policies.map((policy) => [policy.id, policy])),
+    organizations: new Map(organizations.map((organization) => [organization.id, organization])),
+    resources: new Map(resources.map((resource) => [resource.id, resource])),
+    groups: new Map(groups.map((group) => [group.id, group])),
+  }), [policies, organizations, resources, groups]);
 
-  const gatewaysForTenant = (tenantID) => gateways.filter((gateway) => !tenantID || gateway.tenant_id === tenantID);
-  const resourcesForTenant = (tenantID) => resources.filter((resource) => !tenantID || resource.tenant_id === tenantID);
-  const resourcesForGateway = (tenantID, gatewayID) => resourcesForTenant(tenantID).filter((resource) => !gatewayID || resource.gateway_id === gatewayID);
-
-  const filterGateways = gatewaysForTenant(filters.tenant_id);
-  const filterResources = resourcesForGateway(filters.tenant_id, filters.gateway_id);
+  const defaultOrganizationID = useMemo(
+    () => searchParams.get('organization_id') || organizations[0]?.id || '',
+    [organizations, searchParams],
+  );
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [ruleData, assignmentData, tenantData, gatewayData, resourceData, directoryUserData, directoryGroupData] = await Promise.all([
-        getRules(),
+      const [policyData, assignmentData, organizationData, resourceData, groupData] = await Promise.all([
+        getPolicies(),
         getPolicyAssignments(),
-        getTenants(),
-        getGateways(),
+        getOrganizations(),
         getResources(),
-        getDirectoryUsers(),
         getDirectoryGroups(),
       ]);
-      setRules(Array.isArray(ruleData) ? ruleData : []);
+      setPolicies(Array.isArray(policyData) ? policyData : []);
       setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
-      setTenants(Array.isArray(tenantData) ? tenantData : []);
-      setGateways(Array.isArray(gatewayData) ? gatewayData : []);
+      setOrganizations(Array.isArray(organizationData) ? organizationData : []);
       setResources(Array.isArray(resourceData) ? resourceData : []);
-      setDirectoryUsers(Array.isArray(directoryUserData) ? directoryUserData : []);
-      setDirectoryGroups(Array.isArray(directoryGroupData) ? directoryGroupData : []);
+      setGroups(Array.isArray(groupData) ? groupData : []);
     } catch (e) {
-      setError(e.message || 'Failed to load policy data');
+      setError(e.message || 'Failed to load policies');
     } finally {
       setLoading(false);
     }
@@ -110,108 +85,68 @@ export default function Policies() {
     load();
   }, []);
 
-  const openCreate = () => {
-    setForm({
-      name: '',
-      description: '',
-      action: 'allow',
-      priority: 100,
-      enabled: true,
-      conditions: createBlankConditions(),
-    });
-    setModal('create');
-  };
+  const assignmentsForPolicy = useCallback(
+    (policyID) => assignments.filter((assignment) => assignment.policy_id === policyID),
+    [assignments],
+  );
 
-  const openEdit = (rule) => {
-    setForm({
-      ...rule,
-      tenant_id: '',
-      gateway_id: '',
-      resource_id: '',
-      scope: 'global',
-      conditions: conditionsToForm(rule.conditions),
-    });
-    setModal('edit');
-  };
+  const filteredPolicies = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return policies
+      .filter((policy) => {
+        const policyAssignments = assignmentsForPolicy(policy.id);
+        if (levelFilter !== 'all' && !policyAssignments.some((assignment) => assignment.level === levelFilter)) return false;
+        if (!needle) return true;
+        return [
+          policy.name,
+          policy.description,
+          policy.action,
+          ...conditionSummary(policy),
+        ].some((value) => String(value || '').toLowerCase().includes(needle));
+      })
+      .sort((left, right) => (left.priority || 100) - (right.priority || 100));
+  }, [policies, assignmentsForPolicy, query, levelFilter]);
 
-  const updateCondition = (key, value) => {
-    setForm({ ...form, conditions: { ...form.conditions, [key]: value } });
-  };
-
-  const resetFilters = () => {
-    setFilters({ scope: 'all', tenant_id: '', gateway_id: '', resource_id: '', q: '' });
-  };
-
-  const setFilterTenant = (tenantID) => {
-    setFilters({ ...filters, tenant_id: tenantID, gateway_id: '', resource_id: '' });
-  };
-
-  const setFilterGateway = (gatewayID) => {
-    const gateway = gatewayByID.get(gatewayID);
-    setFilters({
-      ...filters,
-      tenant_id: gateway?.tenant_id || filters.tenant_id,
-      gateway_id: gatewayID,
-      resource_id: '',
+  const openPolicyEditor = (mode, policy = null) => {
+    const form = policy ? policyFormFromRule(policy) : EMPTY_POLICY_FORM;
+    setPolicyForm(form);
+    setEditor({
+      mode,
+      policyID: policy?.id || '',
+      activeSection: 'details',
+      enabledSections: inferEnabledSections(form),
     });
   };
 
-  const setFilterResource = (resourceID) => {
-    const resource = resourceByID.get(resourceID);
-    setFilters({
-      ...filters,
-      tenant_id: resource?.tenant_id || filters.tenant_id,
-      gateway_id: resource?.gateway_id || filters.gateway_id,
-      resource_id: resourceID,
-    });
+  const toggleEditorSection = (sectionID, value) => {
+    setEditor((current) => ({
+      ...current,
+      enabledSections: {
+        ...current.enabledSections,
+        [sectionID]: value,
+      },
+    }));
   };
 
-  const formIsReady = () => !!form.name?.trim();
-
-  const handleSave = async () => {
+  const handleSavePolicy = async () => {
     setSaving(true);
     setError('');
-
-    const data = {
-      id: form.id,
-      name: form.name?.trim(),
-      description: form.description?.trim(),
-      tenant_id: '',
-      scope: 'global',
-      gateway_id: '',
-      resource_id: '',
-      action: form.action || 'allow',
-      priority: parseInt(form.priority, 10) || 100,
-      enabled: form.enabled !== false,
-      conditions: {
-        min_health_score: parseInt(form.conditions?.min_health_score, 10) || 0,
-        required_checks: splitList(form.conditions?.required_checks),
-        allowed_roles: splitList(form.conditions?.allowed_roles),
-        allowed_users: splitList(form.conditions?.allowed_users),
-        allowed_groups: splitList(form.conditions?.allowed_groups),
-        allowed_ips: splitList(form.conditions?.allowed_ips),
-        allowed_time_start: form.conditions?.allowed_time_start || '',
-        allowed_time_end: form.conditions?.allowed_time_end || '',
-        allowed_days: splitList(form.conditions?.allowed_days),
-        target_resources: splitList(form.conditions?.target_resources),
-        target_ports: splitIntList(form.conditions?.target_ports),
-        max_risk_score: parseInt(form.conditions?.max_risk_score, 10) || 100,
-      },
+    const payload = {
+      name: policyForm.name.trim(),
+      description: policyForm.description.trim(),
+      priority: parseInt(policyForm.priority, 10) || 100,
+      enabled: policyForm.enabled !== false,
+      action: policyForm.action,
+      conditions: conditionsFromForm(policyForm, editor?.enabledSections),
     };
-
     try {
-      if (modal === 'create') {
-        const created = await createRule(data);
-        setModal(null);
-        await load();
-        const createdID = created?.id || data.id;
-        const createdPolicy = createdID ? { ...data, id: createdID } : null;
-        if (createdPolicy) openAssign(createdPolicy);
+      if (editor?.mode === 'edit') {
+        await updatePolicy(policyForm.id, payload);
       } else {
-        await updateRule(form.id, data);
-        setModal(null);
-        await load();
+        await createPolicy(payload);
       }
+      setEditor(null);
+      await load();
     } catch (e) {
       setError(e.message || 'Failed to save policy');
     } finally {
@@ -219,228 +154,217 @@ export default function Policies() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this policy and all of its assignments?')) return;
+  const handleDuplicatePolicy = async (policy) => {
     setError('');
     try {
-      await deleteRule(id);
+      await createPolicy({
+        name: `${policy.name} copy`,
+        description: policy.description || '',
+        priority: (policy.priority || 100) + 1,
+        enabled: false,
+        action: policy.action || 'allow',
+        conditions: policy.conditions || {},
+      });
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to duplicate policy');
+    }
+  };
+
+  const openAssignmentCreate = (policy = null) => {
+    setAssignmentForm({
+      ...EMPTY_ASSIGNMENT_FORM,
+      policy_id: policy?.id || policies[0]?.id || '',
+      tenant_id: defaultOrganizationID,
+      resource_ids: [],
+      group_ids: [],
+    });
+    setAssignmentModal('create');
+  };
+
+  const handleSaveAssignment = async () => {
+    setSaving(true);
+    setError('');
+    const selectedResourceIDs = assignmentForm.resource_ids?.length
+      ? assignmentForm.resource_ids
+      : (assignmentForm.resource_id ? [assignmentForm.resource_id] : []);
+    const selectedGroupIDs = assignmentForm.group_ids?.length
+      ? assignmentForm.group_ids
+      : (assignmentForm.group_id ? [assignmentForm.group_id] : []);
+    const groupTargets = selectedGroupIDs.map((groupID) => {
+      const group = groups.find((item) => item.id === groupID);
+      return { id: groupID, name: group?.display_name || assignmentForm.group_name || groupID };
+    });
+    if (!groupTargets.length && assignmentForm.group_name?.trim()) {
+      groupTargets.push({ id: '', name: assignmentForm.group_name.trim() });
+    }
+    const resourceTargets = selectedResourceIDs.map((resourceID) => ({ id: resourceID }));
+
+    if (['resource', 'resource_group'].includes(assignmentForm.level) && !resourceTargets.length) {
+      setError('Select at least one resource.');
+      setSaving(false);
+      return;
+    }
+    if (['group', 'resource_group'].includes(assignmentForm.level) && !groupTargets.length) {
+      setError('Select at least one group.');
+      setSaving(false);
+      return;
+    }
+
+    const makePayload = ({ resourceID = '', groupID = '', groupName = '' } = {}) => ({
+      policy_id: assignmentForm.policy_id,
+      tenant_id: assignmentForm.tenant_id,
+      level: assignmentForm.level,
+      resource_id: ['resource', 'resource_group'].includes(assignmentForm.level) ? resourceID : '',
+      group_id: ['group', 'resource_group'].includes(assignmentForm.level) ? groupID : '',
+      group_name: ['group', 'resource_group'].includes(assignmentForm.level) ? groupName : '',
+      priority: parseInt(assignmentForm.priority, 10) || 100,
+      enabled: assignmentForm.enabled !== false,
+    });
+
+    let payloads = [makePayload()];
+    if (assignmentForm.level === 'resource') {
+      payloads = resourceTargets.map((resource) => makePayload({ resourceID: resource.id }));
+    } else if (assignmentForm.level === 'group') {
+      payloads = groupTargets.map((group) => makePayload({ groupID: group.id, groupName: group.name }));
+    } else if (assignmentForm.level === 'resource_group') {
+      payloads = resourceTargets.flatMap((resource) => groupTargets.map((group) => (
+        makePayload({ resourceID: resource.id, groupID: group.id, groupName: group.name })
+      )));
+    }
+
+    try {
+      await Promise.all(payloads.map((payload) => createPolicyAssignment(payload)));
+      setAssignmentModal(null);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to save policy assignment');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeletePolicy = async (policy) => {
+    if (!confirm(`Delete policy "${policy.name}" and its assignments?`)) return;
+    setError('');
+    try {
+      await deletePolicy(policy.id);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to delete policy');
     }
   };
 
-  const defaultAssignmentForm = (policy) => {
-    const selectedResource = filters.resource_id ? resourceByID.get(filters.resource_id) : null;
-    const selectedGateway = filters.gateway_id ? gatewayByID.get(filters.gateway_id) : null;
-    const scope = selectedResource ? 'resource' : selectedGateway ? 'gateway' : 'tenant';
-    const tenantID = selectedResource?.tenant_id || selectedGateway?.tenant_id || filters.tenant_id || tenants[0]?.id || '';
-    const gatewayID = scope === 'resource'
-      ? selectedResource?.gateway_id || ''
-      : scope === 'gateway'
-        ? selectedGateway?.id || gatewaysForTenant(tenantID)[0]?.id || ''
-        : '';
-    const resourceID = scope === 'resource' ? selectedResource?.id || '' : '';
-
-    return {
-      policy_id: policy?.id || '',
-      scope,
-      tenant_id: tenantID,
-      gateway_id: gatewayID,
-      resource_id: resourceID,
-      enabled: true,
-    };
-  };
-
-  const openAssign = (policy) => {
-    setAssignmentPolicy(policy);
-    setAssignmentForm(defaultAssignmentForm(policy));
-  };
-
-  const saveAssignment = async () => {
-    if (!assignmentPolicy) return;
-    setAssignmentSaving(true);
+  const handleUnassignPolicy = async (policy) => {
+    const policyAssignments = assignmentsForPolicy(policy.id);
+    if (!policyAssignments.length) return;
+    if (!confirm(`Unassign "${policy.name}" from ${policyAssignments.length} target${policyAssignments.length === 1 ? '' : 's'}?`)) return;
     setError('');
     try {
-      await createPolicyAssignment({
-        policy_id: assignmentPolicy.id,
-        tenant_id: assignmentForm.tenant_id || '',
-        gateway_id: assignmentForm.scope === 'gateway' || assignmentForm.scope === 'resource' ? assignmentForm.gateway_id || '' : '',
-        resource_id: assignmentForm.scope === 'resource' ? assignmentForm.resource_id || '' : '',
-        enabled: assignmentForm.enabled !== false,
-      });
-      await load();
-      setAssignmentForm(defaultAssignmentForm(assignmentPolicy));
-    } catch (e) {
-      setError(e.message || 'Failed to assign policy');
-    } finally {
-      setAssignmentSaving(false);
-    }
-  };
-
-  const removeAssignment = async (assignmentID) => {
-    if (!confirm('Remove this policy assignment?')) return;
-    setError('');
-    try {
-      await deletePolicyAssignment(assignmentID);
+      await Promise.all(policyAssignments.map((assignment) => deletePolicyAssignment(assignment.id)));
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to remove policy assignment');
+      setError(e.message || 'Failed to unassign policy');
     }
   };
 
-  const assignmentMatchesTarget = (assignment) => {
-    if (!assignment) return false;
-    if (filters.scope !== 'all' && filters.scope !== 'unassigned' && assignmentScopeMode(assignment) !== filters.scope) {
-      return false;
-    }
+  const resourcesForAssignment = resources.filter((resource) => resource.tenant_id === assignmentForm.tenant_id);
+  const groupsForAssignment = groups.filter((group) => group.tenant_id === assignmentForm.tenant_id);
+  const policyPagination = usePaginatedTable(filteredPolicies);
+  const compactCount = `${filteredPolicies.length} ${filteredPolicies.length === 1 ? 'policy' : 'policies'}`;
 
-    const selectedResource = filters.resource_id ? resourceByID.get(filters.resource_id) : null;
-    const selectedGateway = filters.gateway_id
-      ? gatewayByID.get(filters.gateway_id)
-      : selectedResource ? gatewayByID.get(selectedResource.gateway_id) : null;
-    const selectedTenantID = filters.tenant_id || selectedResource?.tenant_id || selectedGateway?.tenant_id || '';
-
-    if (filters.resource_id) {
-      if (assignment.resource_id) return assignment.resource_id === filters.resource_id;
-      if (assignment.gateway_id) return assignment.gateway_id === selectedResource?.gateway_id;
-      return assignment.tenant_id === selectedResource?.tenant_id;
-    }
-    if (filters.gateway_id) {
-      if (assignment.resource_id) return resourceByID.get(assignment.resource_id)?.gateway_id === filters.gateway_id;
-      if (assignment.gateway_id) return assignment.gateway_id === filters.gateway_id;
-      return assignment.tenant_id === selectedGateway?.tenant_id;
-    }
-    if (selectedTenantID) {
-      if (assignment.resource_id) return resourceByID.get(assignment.resource_id)?.tenant_id === selectedTenantID;
-      if (assignment.gateway_id) return gatewayByID.get(assignment.gateway_id)?.tenant_id === selectedTenantID;
-      return assignment.tenant_id === selectedTenantID;
-    }
-    return true;
+  const handleQueryChange = (value) => {
+    setQuery(value);
+    policyPagination.resetPage();
   };
 
-  const assignmentSearchText = (assignment) => {
-    const tenant = tenantByID.get(assignment.tenant_id);
-    const gateway = gatewayByID.get(assignment.gateway_id);
-    const resource = resourceByID.get(assignment.resource_id);
-    return [
-      assignmentScopeMode(assignment),
-      tenant?.name,
-      tenant?.domain,
-      tenant?.id,
-      gateway?.name,
-      gateway?.fqdn,
-      gateway?.id,
-      resource?.name,
-      resource?.host,
-      resource?.id,
-    ];
+  const handleLevelFilterChange = (value) => {
+    setLevelFilter(value);
+    policyPagination.resetPage();
   };
 
-  const filteredRules = useMemo(() => {
-    const query = filters.q.trim().toLowerCase();
-    const hasAssignmentFilters = filters.scope !== 'all' || filters.tenant_id || filters.gateway_id || filters.resource_id;
-
-    return rules.filter((rule) => {
-      const ruleAssignments = assignmentsByPolicy.get(rule.id) || [];
-      if (filters.scope === 'unassigned' && ruleAssignments.length > 0) return false;
-      if (filters.scope !== 'unassigned' && hasAssignmentFilters && !ruleAssignments.some(assignmentMatchesTarget)) return false;
-
-      if (!query) return true;
-      return [
-        rule.name,
-        rule.description,
-        rule.action,
-        ...(rule.conditions?.allowed_users || []),
-        ...(rule.conditions?.allowed_groups || []),
-        ...ruleAssignments.flatMap(assignmentSearchText),
-      ].some((value) => includesText(value, query));
-    });
-  }, [rules, filters, assignmentsByPolicy, tenantByID, gatewayByID, resourceByID]);
+  if (editor) {
+    return (
+      <PolicyEditor
+        editor={editor}
+        form={policyForm}
+        setForm={setPolicyForm}
+        assignments={assignmentsForPolicy(editor.policyID)}
+        maps={maps}
+        saving={saving}
+        onBack={() => setEditor(null)}
+        onSave={handleSavePolicy}
+        onToggleSection={toggleEditorSection}
+        onSelectSection={(activeSection) => setEditor((current) => ({ ...current, activeSection }))}
+      />
+    );
+  }
 
   return (
-    <>
-      <PageHeader title="Policies" subtitle="Define reusable access rules, then assign them to organizations, gateways, or resources" createLabel="Create Policy" onCreate={openCreate} />
+    <div className="space-y-4 pb-8">
+      <PageHeader
+        title="Policies"
+        subtitle="Manage access control policies and their assignments"
+        createLabel="Add Policy"
+        onCreate={() => openPolicyEditor('create')}
+      />
 
       {error && (
-        <div className="mb-4 flex items-center justify-between rounded-md border border-danger bg-danger-muted px-4 py-3 text-sm text-danger">
-          <span>{error}</span>
-          <Button variant="ghost" className="!p-1 !shadow-none" onClick={() => setError('')}><X size={14} /></Button>
+        <div className="rounded-md border border-danger bg-danger-muted px-4 py-3 text-sm font-semibold text-danger">
+          {error}
         </div>
       )}
 
-      <PolicyFilters
-        filters={filters}
-        tenants={tenants}
-        gateways={filterGateways}
-        resources={filterResources}
-        resultCount={filteredRules.length}
-        totalCount={rules.length}
-        onScopeChange={(scope) => setFilters({ ...filters, scope })}
-        onTenantChange={setFilterTenant}
-        onGatewayChange={setFilterGateway}
-        onResourceChange={setFilterResource}
-        onSearchChange={(q) => setFilters({ ...filters, q })}
-        onClear={resetFilters}
-      />
+      <ListToolbar
+        query={query}
+        onQueryChange={handleQueryChange}
+        placeholder="Search policy, rule, application, or group"
+        summary={compactCount}
+      >
+        <ListToolbarSelect value={levelFilter} onChange={handleLevelFilterChange} className="lg:min-w-[230px]">
+          <option value="all">Policy apply type</option>
+          {LAYERS.map((layer) => (
+            <option key={layer.value} value={layer.value}>{layer.label}</option>
+          ))}
+        </ListToolbarSelect>
+      </ListToolbar>
 
-      <PolicyTable
-        policies={filteredRules}
+      <PolicyList
+        policies={policyPagination.pageItems}
         loading={loading}
-        tenantByID={tenantByID}
-        gatewayByID={gatewayByID}
-        resourceByID={resourceByID}
-        assignmentsByPolicy={assignmentsByPolicy}
-        onEdit={openEdit}
-        onAssign={openAssign}
-        onDelete={handleDelete}
+        pageSize={policyPagination.pageSize}
+        assignmentsForPolicy={assignmentsForPolicy}
+        maps={maps}
+        onEdit={(policy) => openPolicyEditor('edit', policy)}
+        onApply={openAssignmentCreate}
+        onDuplicate={handleDuplicatePolicy}
+        onUnassign={handleUnassignPolicy}
+        onDelete={handleDeletePolicy}
       />
 
-      <Modal
-        open={!!modal}
-        onClose={() => setModal(null)}
-        title={modal === 'create' ? 'Create Policy' : 'Edit Policy'}
-        size="3xl"
-        footer={(
-          <>
-            <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !formIsReady()}>
-              {saving ? 'Saving...' : modal === 'create' ? 'Create Policy' : 'Save Changes'}
-            </Button>
-          </>
-        )}
-      >
-        <PolicyForm
-          form={form}
-          setForm={setForm}
-          directoryUsers={directoryUsers}
-          directoryGroups={directoryGroups}
-          onConditionChange={updateCondition}
+      {/* <div className="pt-2">
+        <Pagination
+          currentPage={policyPagination.currentPage}
+          totalPages={policyPagination.totalPages}
+          onPageChange={policyPagination.setCurrentPage}
         />
-      </Modal>
+      </div> */}
 
-      <Modal
-        open={!!assignmentPolicy}
-        onClose={() => setAssignmentPolicy(null)}
-        title="Assign Policy"
-        size="3xl"
-      >
-        <PolicyAssignmentModal
-          policy={assignmentPolicy}
-          assignments={assignmentPolicy ? assignmentsByPolicy.get(assignmentPolicy.id) || [] : []}
-          form={assignmentForm}
-          setForm={setAssignmentForm}
-          tenants={tenants}
-          gateways={gateways}
-          resources={resources}
-          tenantByID={tenantByID}
-          gatewayByID={gatewayByID}
-          resourceByID={resourceByID}
-          saving={assignmentSaving}
-          onSave={saveAssignment}
-          onDelete={removeAssignment}
-        />
-      </Modal>
-    </>
+      <PolicyApplyModal
+        open={!!assignmentModal}
+        mode={assignmentModal}
+        form={assignmentForm}
+        setForm={setAssignmentForm}
+        policies={policies}
+        organizations={organizations}
+        resourcesForAssignment={resourcesForAssignment}
+        groupsForAssignment={groupsForAssignment}
+        assignments={assignments}
+        maps={maps}
+        saving={saving}
+        onClose={() => setAssignmentModal(null)}
+        onSave={handleSaveAssignment}
+      />
+    </div>
   );
 }
