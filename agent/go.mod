@@ -1,4 +1,4 @@
-module ztna.local/agent
+module agent
 
 go 1.24.0
 

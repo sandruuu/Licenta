@@ -8,14 +8,14 @@ import (
 
 func TestGatewayIdentityURIUsesOrganizationPath(t *testing.T) {
 	got := GatewayIdentityURI("org-1", "gw-1")
-	want := "spiffe://ztna.local/organization/org-1/gateway/gw-1"
+	want := "spiffe://gateway/organization/org-1/gateway/gw-1"
 	if got != want {
 		t.Fatalf("GatewayIdentityURI() = %q, want %q", got, want)
 	}
 }
 
 func TestGatewayCertificateIdentityRejectsTenantPath(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://ztna.local/tenant/tenant-1/gateway/gw-1")
+	identityURI, err := url.Parse("spiffe://gateway/tenant/tenant-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestGatewayCertificateIdentityRejectsTenantPath(t *testing.T) {
 }
 
 func TestGatewayCertificateIdentityReadsOrganizationPath(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://ztna.local/organization/org-1/gateway/gw-1")
+	identityURI, err := url.Parse("spiffe://gateway/organization/org-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}

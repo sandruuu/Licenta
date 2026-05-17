@@ -11,7 +11,7 @@ docker compose --profile idp up -d keycloak
 Adauga numele local in hosts, ca issuer-ul sa fie accesibil si din browser:
 
 ```text
-127.0.0.1 keycloak.ztna.local
+127.0.0.1 keycloak
 ```
 
 Pe Windows, fisierul este:
@@ -23,7 +23,7 @@ C:\Windows\System32\drivers\etc\hosts
 Consola Keycloak:
 
 ```text
-http://keycloak.ztna.local:8080
+http://keycloak:8080
 ```
 
 Credenitiale admin implicite:
@@ -47,7 +47,7 @@ In dashboard, deschide `Tenants`, alege organizatia, apoi `Identity Providers` s
 
 ```text
 Name: Keycloak Lab
-Issuer URL: http://keycloak.ztna.local:8080/realms/ztna-lab
+Issuer URL: http://keycloak:8080/realms/ztna-lab
 OIDC Client ID: ztna-pdp
 OIDC Client Secret: ztna-pdp-dev-secret
 Scopes: openid profile email
@@ -76,7 +76,7 @@ ZTNA-Users  -> user
 
 ```text
 Name: Keycloak Partner
-Issuer URL: http://keycloak.ztna.local:8080/realms/ztna-partner
+Issuer URL: http://keycloak:8080/realms/ztna-partner
 OIDC Client ID: ztna-pdp-partner
 OIDC Client Secret: ztna-pdp-partner-dev-secret
 Scopes: openid profile email
@@ -102,7 +102,7 @@ PARTNER-Users  -> user
 ```
 
 Foloseste exact issuer-ul realm-ului configurat, nu `http://localhost:8080/...`. Keycloak emite token-uri cu issuer
-`http://keycloak.ztna.local:8080/realms/<realm>`, iar aplicatia trebuie sa valideze acelasi issuer.
+`http://keycloak:8080/realms/<realm>`, iar aplicatia trebuie sa valideze acelasi issuer.
 
 ## Utilizatori demo
 
@@ -130,5 +130,5 @@ Redirect URI-uri incluse in clientul demo:
 
 ```text
 https://localhost:8443/auth/federated/callback
-https://pdp.ztna.local:8443/auth/federated/callback
+https://pdp:8443/auth/federated/callback
 ```

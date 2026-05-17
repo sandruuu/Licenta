@@ -1,0 +1,5 @@
+cd C:\Users\laura\Desktop\Licenta\agent
+.\packaging\windows\build-enterprise-package.ps1
+
+cd C:\Users\laura\Desktop\Licenta\agent\build
+.\install.ps1

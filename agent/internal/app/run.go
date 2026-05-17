@@ -3,92 +3,79 @@ package app
 import (
 	"context"
 	"log/slog"
-	"os"
 
-	"ztna.local/agent/internal/bootstrap"
-	"ztna.local/agent/internal/meta"
-	"ztna.local/agent/internal/service"
-	"ztna.local/agent/internal/service/scm"
-	"ztna.local/agent/internal/tray"
+	"agent/internal/service"
+	"agent/internal/service/scm"
+	"agent/internal/shared/meta"
+	"agent/internal/tray"
 )
 
-func Run(ctx context.Context, args []string, logger *slog.Logger) error {
+func Run(ctx context.Context, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	options, err := Parse(args)
+	if scm.IsServiceContext() {
+		config, err := LoadServiceConfig()
+		if err != nil {
+			return err
+		}
+		svc := service.New(serviceConfigFromConfig(config), service.Dependencies{Logger: logger})
+		return scm.RunService(meta.ServiceName, svc.Run, logger)
+	}
+	config, err := LoadTrayConfig()
 	if err != nil {
 		return err
 	}
-	if options.Command == CommandHelp {
-		PrintUsage(os.Stdout)
-		return nil
-	}
+	return tray.Run(ctx, trayOptionsFromConfig(config), logger)
+}
 
-	svc := service.New(service.Options{
-		AuthorizedUserSID: options.AuthorizedUserSID,
-		CloudIssuer:       options.CloudIssuer,
-		CloudURL:          options.CloudURL,
-		CloudCertSHA256:   options.CloudCertSHA256,
-		JWKSURL:           options.JWKSURL,
-		CAFile:            options.CAFile,
-		DNSServer:         options.DNSServer,
-		CatalogInterval:   options.CatalogInterval,
-		TUNEnabled:        options.TUNEnabled,
-		TUNName:           options.TUNName,
-		TUNIP:             options.TUNIP,
-		TUNNetmask:        options.TUNNetmask,
-		TUNRouteCIDR:      options.TUNRouteCIDR,
-		GatewayTunnel:     options.GatewayTunnel,
-		GatewayAddress:    options.GatewayAddress,
-		GatewayServerName: options.GatewayServerName,
-		ProcessIdentity:   options.ProcessIdentity,
-		Logger:            logger,
-	})
-	switch options.Command {
-	case CommandBootstrap:
-		return bootstrap.Run(ctx, bootstrap.Options{DemoMessage: options.DemoMessage, Timeout: options.Timeout, CloudIssuer: options.CloudIssuer, JWKSURL: options.JWKSURL, CAFile: options.CAFile, DNSServer: options.DNSServer, CatalogInterval: options.CatalogInterval, TUNEnabled: options.TUNEnabled, TUNName: options.TUNName, TUNIP: options.TUNIP, TUNNetmask: options.TUNNetmask, TUNRouteCIDR: options.TUNRouteCIDR, GatewayTunnel: options.GatewayTunnel, GatewayAddress: options.GatewayAddress, GatewayServerName: options.GatewayServerName, ProcessIdentity: options.ProcessIdentity, Login: options.Login, CloudURL: options.CloudURL, IssuerURL: options.IssuerURL, ClientID: options.ClientID, Scopes: options.Scopes, DeviceID: options.DeviceID, EnrollmentNonce: options.EnrollmentNonce, KeyName: options.KeyName, Hostname: options.Hostname, ACRValues: options.ACRValues}, logger)
-	case CommandService:
-		return scm.RunService(meta.ServiceName, svc.Run, logger)
-	case CommandRunService:
-		return service.RunConsole(ctx, svc)
-	case CommandInstallService:
-		if err := scm.InstallOrUpdate(scm.Config{
-			ServiceName:       meta.ServiceName,
-			DisplayName:       meta.ServiceDisplayName,
-			Description:       meta.ServiceDescription,
-			AuthorizedUserSID: options.AuthorizedUserSID,
-			CloudIssuer:       options.CloudIssuer,
-			CloudURL:          options.CloudURL,
-			CloudCertSHA256:   options.CloudCertSHA256,
-			JWKSURL:           options.JWKSURL,
-			CAFile:            options.CAFile,
-			DNSServer:         options.DNSServer,
-			CatalogInterval:   options.CatalogInterval,
-			TUNEnabled:        options.TUNEnabled,
-			TUNName:           options.TUNName,
-			TUNIP:             options.TUNIP,
-			TUNNetmask:        options.TUNNetmask,
-			TUNRouteCIDR:      options.TUNRouteCIDR,
-			GatewayTunnel:     options.GatewayTunnel,
-			GatewayAddress:    options.GatewayAddress,
-			GatewayServerName: options.GatewayServerName,
-			ProcessIdentity:   options.ProcessIdentity,
-		}, logger); err != nil {
-			return err
-		}
-		return scm.Start(meta.ServiceName, logger)
-	case CommandStart:
-		return scm.Start(meta.ServiceName, logger)
-	case CommandStop:
-		return scm.Stop(meta.ServiceName, logger)
-	case CommandStatus:
-		return scm.PrintStatus(meta.ServiceName)
-	case CommandUninstall:
-		return scm.Uninstall(meta.ServiceName, logger)
-	case CommandTray:
-		return tray.Run(ctx, tray.Options{GUI: !options.TrayProof, Message: options.DemoMessage, Stay: options.TrayStay, Timeout: options.Timeout, Login: options.Login, CloudURL: options.CloudURL, IssuerURL: options.IssuerURL, ClientID: options.ClientID, Scopes: options.Scopes, DeviceID: options.DeviceID, Nonce: options.EnrollmentNonce, UserSID: options.AuthorizedUserSID, KeyName: options.KeyName, Hostname: options.Hostname, CAFile: options.CAFile, ACRValues: options.ACRValues}, logger)
-	default:
-		return ErrUsage
+func serviceConfigFromConfig(config ServiceConfig) service.Config {
+	return service.Config{
+		AuthorizedUserSID:          config.AuthorizedUserSID,
+		PAURL:                      config.PAURL,
+		CloudCertSHA256:            config.CloudCertSHA256,
+		CAFile:                     config.CAFile,
+		DNSServer:                  config.DNSServer,
+		PostureInterval:            config.PostureInterval,
+		CriticalInterval:           config.CriticalInterval,
+		HeartbeatInterval:          config.HeartbeatInterval,
+		PostureReportTimeout:       config.PostureReportTimeout,
+		CatalogInterval:            config.CatalogInterval,
+		CatalogCacheTTL:            config.CatalogCacheTTL,
+		CatalogRetryBackoff:        config.CatalogRetryBackoff,
+		AccessTokenExpirySkew:      config.AccessTokenExpirySkew,
+		CertificateRenewalInterval: config.CertificateRenewalInterval,
+		CertificateRenewBefore:     config.CertificateRenewBefore,
+		CertificateRenewalTimeout:  config.CertificateRenewalTimeout,
+		PARequestTimeout:           config.PARequestTimeout,
+		EnrollmentRateLimitMax:     config.EnrollmentRateLimitMax,
+		EnrollmentRateLimitWindow:  config.EnrollmentRateLimitWindow,
+		TUNEnabled:                 config.TUNEnabled,
+		TUNName:                    config.TUNName,
+		TUNIP:                      config.TUNIP,
+		TUNNetmask:                 config.TUNNetmask,
+		TUNRouteCIDR:               config.TUNRouteCIDR,
+		ProcessIdentity:            config.ProcessIdentity,
+	}
+}
+
+func trayOptionsFromConfig(config TrayConfig) tray.Options {
+	return tray.Options{
+		Timeout:                  config.Timeout,
+		EnrollmentTimeout:        config.EnrollmentTimeout,
+		TokenRefreshInterval:     config.TokenRefreshInterval,
+		TokenRefreshMargin:       config.TokenRefreshMargin,
+		DashboardRefreshInterval: config.DashboardRefreshInterval,
+		PAURL:                    config.PAURL,
+		IssuerURL:                config.IssuerURL,
+		ClientID:                 config.ClientID,
+		Scopes:                   config.Scopes,
+		DeviceID:                 config.DeviceID,
+		Nonce:                    config.EnrollmentNonce,
+		LocalSID:                 config.LocalSID,
+		KeyName:                  config.KeyName,
+		Hostname:                 config.Hostname,
+		CAFile:                   config.CAFile,
+		ACRValues:                config.ACRValues,
 	}
 }

@@ -17,24 +17,25 @@ import (
 	"testing"
 	"time"
 
-	"ztna.local/agent/internal/catalog"
-	"ztna.local/agent/internal/deviceidentity"
-	"ztna.local/agent/internal/enrollment"
-	"ztna.local/agent/internal/ipc"
-	"ztna.local/agent/internal/jwtverify"
+	"agent/internal/service/catalog"
+	"agent/internal/service/certificates"
+	"agent/internal/service/deviceidentity"
+	"agent/internal/service/enrollment"
+	servicestate "agent/internal/service/state"
+	"agent/internal/shared/ipc"
 )
 
 func TestFileEnrollmentStateStoreRoundTrip(t *testing.T) {
 	now := time.Unix(2000, 0).UTC()
 	path := filepath.Join(t.TempDir(), "state", "agent-enrollment-state.json")
-	store := newFileEnrollmentStateStore(path, func() time.Time { return now })
-	state := persistedEnrollmentState{
-		Version:             enrollmentStateFileVersion,
+	store := servicestate.NewEnrollmentFileStore(path, func() time.Time { return now })
+	state := servicestate.Enrollment{
+		Version:             servicestate.EnrollmentFileVersion,
 		EnrollmentState:     ipc.EnrollmentStateEnrolled,
 		DeviceID:            "device-1",
 		DeviceIDSource:      deviceidentity.DeviceIDSourceTPMEKPublicSHA256,
 		ActiveUserSID:       "S-1-5-21-1",
-		KeyName:             "ZTNA_DeviceKey_S-1-5-21-1",
+		KeyName:             "ZTNA_DeviceKey",
 		KeyProvider:         deviceidentity.MicrosoftPlatformCryptoProvider,
 		CertificateSHA256:   "cert-sha",
 		CertificateNotAfter: now.Add(time.Hour),
@@ -62,9 +63,9 @@ func TestFileEnrollmentStateStoreRoundTrip(t *testing.T) {
 func TestFileCatalogCacheStoreRoundTrip(t *testing.T) {
 	now := time.Unix(2500, 0).UTC()
 	path := filepath.Join(t.TempDir(), "state", "agent-catalog-cache.json")
-	store := newFileCatalogCacheStore(path, func() time.Time { return now })
-	cache := persistedCatalogCache{
-		Version:        catalogCacheFileVersion,
+	store := servicestate.NewCatalogCacheFileStore(path, func() time.Time { return now })
+	cache := servicestate.CatalogCache{
+		Version:        servicestate.CatalogCacheFileVersion,
 		DeviceID:       "device-1",
 		CatalogVersion: "v1",
 		PolicyEpoch:    "epoch-1",
@@ -96,23 +97,23 @@ func TestFileCatalogCacheStoreRoundTrip(t *testing.T) {
 func TestServiceRestoresCatalogCacheAndReappliesDNS(t *testing.T) {
 	now := time.Unix(4500, 0).UTC()
 	certificate, certificateSHA256 := testMachineTLSCertificate(t, "device-1", now)
-	enrollmentStore := newFileEnrollmentStateStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
-	if err := enrollmentStore.Save(context.Background(), persistedEnrollmentState{
-		Version:           enrollmentStateFileVersion,
+	enrollmentStore := servicestate.NewEnrollmentFileStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
+	if err := enrollmentStore.Save(context.Background(), servicestate.Enrollment{
+		Version:           servicestate.EnrollmentFileVersion,
 		EnrollmentState:   ipc.EnrollmentStateEnrolled,
 		DeviceID:          "device-1",
 		DeviceIDSource:    deviceidentity.DeviceIDSourceTPMEKPublicSHA256,
 		ActiveUserSID:     "S-1-5-21-1",
-		KeyName:           "ZTNA_DeviceKey_S-1-5-21-1",
+		KeyName:           "ZTNA_DeviceKey",
 		KeyProvider:       deviceidentity.MicrosoftPlatformCryptoProvider,
 		CertificateSHA256: certificateSHA256,
 		LastAcceptedAt:    now.Add(-time.Minute),
 	}); err != nil {
 		t.Fatalf("Save enrollment state returned error: %v", err)
 	}
-	catalogStore := newFileCatalogCacheStore(filepath.Join(t.TempDir(), "agent-catalog-cache.json"), func() time.Time { return now })
-	if err := catalogStore.Save(context.Background(), persistedCatalogCache{
-		Version:        catalogCacheFileVersion,
+	catalogStore := servicestate.NewCatalogCacheFileStore(filepath.Join(t.TempDir(), "agent-catalog-cache.json"), func() time.Time { return now })
+	if err := catalogStore.Save(context.Background(), servicestate.CatalogCache{
+		Version:        servicestate.CatalogCacheFileVersion,
 		DeviceID:       "device-1",
 		CatalogVersion: "v-cache",
 		PolicyEpoch:    "epoch-cache",
@@ -125,7 +126,7 @@ func TestServiceRestoresCatalogCacheAndReappliesDNS(t *testing.T) {
 		t.Fatalf("Save catalog cache returned error: %v", err)
 	}
 	dnsConfigurator := &fakeDNSConfigurator{}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -149,31 +150,29 @@ func TestServiceRestoresCatalogCacheAndReappliesDNS(t *testing.T) {
 func TestServicePersistsEnrollmentMetadataAfterRunnerSuccess(t *testing.T) {
 	now := time.Unix(3000, 0).UTC()
 	statePath := filepath.Join(t.TempDir(), "agent-enrollment-state.json")
-	store := newFileEnrollmentStateStore(statePath, func() time.Time { return now })
+	store := servicestate.NewEnrollmentFileStore(statePath, func() time.Time { return now })
 	runner := &fakeEnrollmentRunner{result: &enrollment.RunnerResult{EnrollmentID: "enroll-1", CertificateSHA256: "cert-sha", CertificateNotAfter: now.Add(time.Hour)}}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
 		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
 		EnrollmentRunner:  runner,
 		StateStore:        store,
-		TokenValidator: fakeTokenValidator{claims: &jwtverify.Claims{
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
 			DeviceID: "device-1",
 			Nonce:    "nonce-1",
 			UserSID:  "S-1-5-21-1",
 		}},
 	})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:                "header.payload.signature",
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
 		AccessToken:          "access.payload.signature",
 		AccessTokenExpiresAt: now.Add(time.Hour),
 		Nonce:                "nonce-1",
 		DeviceID:             "device-1",
 		UserSID:              "S-1-5-21-1",
-		KeyName:              "ZTNA_DeviceKey_S-1-5-21-1",
-		ExpiresInSeconds:     300,
+		KeyName:              "ZTNA_DeviceKey",
 		SentAt:               now,
 	})
 	if err != nil {
@@ -205,21 +204,21 @@ func TestServicePersistsEnrollmentMetadataAfterRunnerSuccess(t *testing.T) {
 func TestServiceRestoresEnrollmentStateFromMachineStoreCertificate(t *testing.T) {
 	now := time.Unix(4000, 0).UTC()
 	certificate, certificateSHA256 := testMachineTLSCertificate(t, "device-1", now)
-	store := newFileEnrollmentStateStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
-	if err := store.Save(context.Background(), persistedEnrollmentState{
-		Version:           enrollmentStateFileVersion,
+	store := servicestate.NewEnrollmentFileStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
+	if err := store.Save(context.Background(), servicestate.Enrollment{
+		Version:           servicestate.EnrollmentFileVersion,
 		EnrollmentState:   ipc.EnrollmentStateEnrolled,
 		DeviceID:          "device-1",
 		DeviceIDSource:    deviceidentity.DeviceIDSourceTPMEKPublicSHA256,
 		ActiveUserSID:     "S-1-5-21-1",
-		KeyName:           "ZTNA_DeviceKey_S-1-5-21-1",
+		KeyName:           "ZTNA_DeviceKey",
 		KeyProvider:       deviceidentity.MicrosoftPlatformCryptoProvider,
 		CertificateSHA256: certificateSHA256,
 		LastAcceptedAt:    now.Add(-time.Minute),
 	}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
 	}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -230,7 +229,7 @@ func TestServiceRestoresEnrollmentStateFromMachineStoreCertificate(t *testing.T)
 		},
 	})
 	status := service.status()
-	if status.EnrollmentState != ipc.EnrollmentStateEnrolled || status.CertificateSHA256 != certificateSHA256 || status.KeyName != "ZTNA_DeviceKey_S-1-5-21-1" || !status.CertificateExpiresAt.Equal(certificate.Leaf.NotAfter.UTC()) {
+	if status.EnrollmentState != ipc.EnrollmentStateEnrolled || status.CertificateSHA256 != certificateSHA256 || status.KeyName != "ZTNA_DeviceKey" || !status.CertificateExpiresAt.Equal(certificate.Leaf.NotAfter.UTC()) {
 		t.Fatalf("status = %+v", status)
 	}
 }
@@ -240,16 +239,17 @@ func TestServiceRenewsCertificateWhenExpiryWithinWindow(t *testing.T) {
 	certificate, certificateSHA256 := testMachineTLSCertificate(t, "device-1", now)
 	renewedExpiresAt := now.Add(24 * time.Hour)
 	renewer := &fakeEnrollmentRenewer{result: &enrollment.RunnerResult{CertificateSHA256: "renewed-cert-sha", CertificateNotAfter: renewedExpiresAt}}
-	store := newFileEnrollmentStateStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
-	service := New(Options{
-		AuthorizedUserSID: "S-1-5-21-1",
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:             func() time.Time { return now },
-		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
-		StateStore:        store,
-		EnrollmentRenewer: renewer,
+	store := servicestate.NewEnrollmentFileStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID:      "S-1-5-21-1",
+		Logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:                  func() time.Time { return now },
+		IdentityProvider:       testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
+		StateStore:             store,
+		EnrollmentRenewer:      renewer,
+		CertificateRenewBefore: 12 * time.Hour,
 		CertificateLoader: func(_ context.Context, options deviceidentity.MachineCertificateOptions) (tls.Certificate, error) {
-			if options.DeviceID != "device-1" || options.KeyName != "ZTNA_DeviceKey_S-1-5-21-1" {
+			if options.DeviceID != "device-1" || options.KeyName != "ZTNA_DeviceKey" {
 				t.Fatalf("certificate loader options = %+v", options)
 			}
 			return certificate, nil
@@ -257,7 +257,7 @@ func TestServiceRenewsCertificateWhenExpiryWithinWindow(t *testing.T) {
 	})
 	service.enrollment.State = ipc.EnrollmentStateEnrolled
 	service.enrollment.DeviceID = "device-1"
-	service.enrollment.KeyName = "ZTNA_DeviceKey_S-1-5-21-1"
+	service.enrollment.KeyName = "ZTNA_DeviceKey"
 	service.enrollment.KeyProvider = deviceidentity.MicrosoftPlatformCryptoProvider
 	service.enrollment.CertificateSHA256 = certificateSHA256
 	service.enrollment.CertificateNotAfter = certificate.Leaf.NotAfter.UTC()
@@ -286,21 +286,22 @@ func TestServiceDoesNotRenewFreshCertificate(t *testing.T) {
 	now := time.Unix(7000, 0).UTC()
 	certificate, certificateSHA256 := testMachineTLSCertificateExpiresAt(t, "device-1", now, now.Add(24*time.Hour))
 	renewer := &fakeEnrollmentRenewer{result: &enrollment.RunnerResult{CertificateSHA256: "renewed-cert-sha", CertificateNotAfter: now.Add(48 * time.Hour)}}
-	store := newFileEnrollmentStateStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
-	service := New(Options{
-		AuthorizedUserSID: "S-1-5-21-1",
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:             func() time.Time { return now },
-		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
-		StateStore:        store,
-		EnrollmentRenewer: renewer,
+	store := servicestate.NewEnrollmentFileStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID:      "S-1-5-21-1",
+		Logger:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:                  func() time.Time { return now },
+		IdentityProvider:       testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
+		StateStore:             store,
+		EnrollmentRenewer:      renewer,
+		CertificateRenewBefore: 12 * time.Hour,
 		CertificateLoader: func(context.Context, deviceidentity.MachineCertificateOptions) (tls.Certificate, error) {
 			return certificate, nil
 		},
 	})
 	service.enrollment.State = ipc.EnrollmentStateEnrolled
 	service.enrollment.DeviceID = "device-1"
-	service.enrollment.KeyName = "ZTNA_DeviceKey_S-1-5-21-1"
+	service.enrollment.KeyName = "ZTNA_DeviceKey"
 	service.enrollment.KeyProvider = deviceidentity.MicrosoftPlatformCryptoProvider
 	service.enrollment.CertificateSHA256 = certificateSHA256
 
@@ -320,20 +321,20 @@ func TestServiceDoesNotRenewFreshCertificate(t *testing.T) {
 func TestServiceDoesNotRestoreWhenCertificateFingerprintDiffers(t *testing.T) {
 	now := time.Unix(5000, 0).UTC()
 	certificate, _ := testMachineTLSCertificate(t, "device-1", now)
-	store := newFileEnrollmentStateStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
-	if err := store.Save(context.Background(), persistedEnrollmentState{
-		Version:           enrollmentStateFileVersion,
+	store := servicestate.NewEnrollmentFileStore(filepath.Join(t.TempDir(), "agent-enrollment-state.json"), func() time.Time { return now })
+	if err := store.Save(context.Background(), servicestate.Enrollment{
+		Version:           servicestate.EnrollmentFileVersion,
 		EnrollmentState:   ipc.EnrollmentStateEnrolled,
 		DeviceID:          "device-1",
 		DeviceIDSource:    deviceidentity.DeviceIDSourceTPMEKPublicSHA256,
 		ActiveUserSID:     "S-1-5-21-1",
-		KeyName:           "ZTNA_DeviceKey_S-1-5-21-1",
+		KeyName:           "ZTNA_DeviceKey",
 		KeyProvider:       deviceidentity.MicrosoftPlatformCryptoProvider,
 		CertificateSHA256: "different-cert-sha",
 	}); err != nil {
 		t.Fatalf("Save returned error: %v", err)
 	}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -380,7 +381,7 @@ func testMachineTLSCertificateExpiresAt(t *testing.T, deviceID string, now, notA
 		t.Fatalf("ParseCertificate returned error: %v", err)
 	}
 	certificate := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
-	certificateSHA256, err := tlsCertificateSHA256(certificate)
+	certificateSHA256, err := certificates.SHA256(certificate)
 	if err != nil {
 		t.Fatalf("tlsCertificateSHA256 returned error: %v", err)
 	}

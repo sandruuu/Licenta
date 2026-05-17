@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const gatewayIdentityTrustDomain = "ztna.local"
+const gatewayIdentityTrustDomain = "gateway"
 
 // GatewayIdentityURI is the stable certificate identity used for gateway mTLS.
 // FQDN remains a network attribute; organization_id + gateway_id are the

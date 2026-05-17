@@ -9,7 +9,7 @@ import (
 
 const (
 	deviceIdentityURIScheme = "spiffe"
-	deviceIdentityURIHost   = "ztna.local"
+	deviceIdentityURIHost   = "agent"
 	deviceIdentityURIPath   = "/device/"
 )
 

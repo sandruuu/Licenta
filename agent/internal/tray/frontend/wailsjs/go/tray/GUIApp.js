@@ -25,3 +25,7 @@ export function HideWindow() {
 export function ShowWindow() {
   return window['go']['tray']['GUIApp']['ShowWindow']();
 }
+
+export function StartEnrollment() {
+  return window['go']['tray']['GUIApp']['StartEnrollment']();
+}

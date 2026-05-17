@@ -26,31 +26,15 @@ const (
 )
 
 type Config struct {
-	ServiceName       string
-	DisplayName       string
-	Description       string
-	AuthorizedUserSID string
-	CloudIssuer       string
-	CloudURL          string
-	CloudCertSHA256   string
-	JWKSURL           string
-	CAFile            string
-	DNSServer         string
-	CatalogInterval   time.Duration
-	TUNEnabled        bool
-	TUNName           string
-	TUNIP             string
-	TUNNetmask        string
-	TUNRouteCIDR      string
-	GatewayTunnel     bool
-	GatewayAddress    string
-	GatewayServerName string
-	ProcessIdentity   bool
+	ExecutablePath        string
+	ServiceName           string
+	DisplayName           string
+	Description           string
+	RecoveryRestartDelays []time.Duration
 }
 
 func RunService(serviceName string, run func(context.Context) error, logger *slog.Logger) error {
-	interactive, err := svc.IsAnInteractiveSession()
-	if err == nil && !interactive {
+	if IsServiceContext() {
 		return svc.Run(serviceName, &windowsService{serviceName: serviceName, run: run})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,17 +42,27 @@ func RunService(serviceName string, run func(context.Context) error, logger *slo
 	return run(ctx)
 }
 
+func IsServiceContext() bool {
+	interactive, err := svc.IsAnInteractiveSession()
+	return err == nil && !interactive
+}
+
 func InstallOrUpdate(config Config, logger *slog.Logger) error {
-	if strings.TrimSpace(config.AuthorizedUserSID) == "" {
-		return fmt.Errorf("authorized user SID is required")
+	executable := strings.TrimSpace(config.ExecutablePath)
+	if executable == "" {
+		var err error
+		executable, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("resolve executable: %w", err)
+		}
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve executable: %w", err)
-	}
+	var err error
 	executable, err = filepath.Abs(executable)
 	if err != nil {
 		return fmt.Errorf("resolve absolute executable path: %w", err)
+	}
+	if _, err := os.Stat(executable); err != nil {
+		return fmt.Errorf("stat service executable: %w", err)
 	}
 	manager, err := mgr.Connect()
 	if err != nil {
@@ -83,55 +77,6 @@ func InstallOrUpdate(config Config, logger *slog.Logger) error {
 		Description:      config.Description,
 		DelayedAutoStart: true,
 	}
-	args := []string{"service", "--authorized-user-sid", config.AuthorizedUserSID}
-	if strings.TrimSpace(config.CloudIssuer) != "" {
-		args = append(args, "--cloud-issuer", config.CloudIssuer)
-	}
-	if strings.TrimSpace(config.CloudURL) != "" {
-		args = append(args, "--cloud-url", config.CloudURL)
-	}
-	if strings.TrimSpace(config.CloudCertSHA256) != "" {
-		args = append(args, "--cloud-cert-sha256", config.CloudCertSHA256)
-	}
-	if strings.TrimSpace(config.JWKSURL) != "" {
-		args = append(args, "--jwks-url", config.JWKSURL)
-	}
-	if strings.TrimSpace(config.CAFile) != "" {
-		args = append(args, "--ca-file", config.CAFile)
-	}
-	if strings.TrimSpace(config.DNSServer) != "" {
-		args = append(args, "--dns-server", config.DNSServer)
-	}
-	if config.CatalogInterval > 0 {
-		args = append(args, "--catalog-interval", config.CatalogInterval.String())
-	}
-	if config.TUNEnabled {
-		args = append(args, "--tun")
-	}
-	if config.GatewayTunnel {
-		args = append(args, "--gateway-tunnel")
-	}
-	if config.ProcessIdentity {
-		args = append(args, "--process-identity")
-	}
-	if strings.TrimSpace(config.TUNName) != "" {
-		args = append(args, "--tun-name", config.TUNName)
-	}
-	if strings.TrimSpace(config.TUNIP) != "" {
-		args = append(args, "--tun-ip", config.TUNIP)
-	}
-	if strings.TrimSpace(config.TUNNetmask) != "" {
-		args = append(args, "--tun-netmask", config.TUNNetmask)
-	}
-	if strings.TrimSpace(config.TUNRouteCIDR) != "" {
-		args = append(args, "--tun-route-cidr", config.TUNRouteCIDR)
-	}
-	if strings.TrimSpace(config.GatewayAddress) != "" {
-		args = append(args, "--gateway-address", config.GatewayAddress)
-	}
-	if strings.TrimSpace(config.GatewayServerName) != "" {
-		args = append(args, "--gateway-server-name", config.GatewayServerName)
-	}
 	service, err := manager.OpenService(config.ServiceName)
 	if err == nil {
 		defer service.Close()
@@ -139,7 +84,7 @@ func InstallOrUpdate(config Config, logger *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("read existing service configuration: %w", err)
 		}
-		currentConfig.BinaryPathName = binaryPath(executable, args)
+		currentConfig.BinaryPathName = binaryPath(executable)
 		currentConfig.StartType = mgr.StartAutomatic
 		currentConfig.ErrorControl = mgr.ErrorNormal
 		currentConfig.DisplayName = config.DisplayName
@@ -148,7 +93,7 @@ func InstallOrUpdate(config Config, logger *slog.Logger) error {
 		if err := service.UpdateConfig(currentConfig); err != nil {
 			return fmt.Errorf("update service configuration: %w", err)
 		}
-		if err := configureRecovery(service); err != nil {
+		if err := configureRecovery(service, config.RecoveryRestartDelays); err != nil {
 			return err
 		}
 		if err := installEventSource(config.ServiceName); err != nil {
@@ -160,12 +105,12 @@ func InstallOrUpdate(config Config, logger *slog.Logger) error {
 	if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		return fmt.Errorf("open service: %w", err)
 	}
-	service, err = manager.CreateService(config.ServiceName, executable, mgrConfig, args...)
+	service, err = manager.CreateService(config.ServiceName, executable, mgrConfig)
 	if err != nil {
 		return fmt.Errorf("create service: %w", err)
 	}
 	defer service.Close()
-	if err := configureRecovery(service); err != nil {
+	if err := configureRecovery(service, config.RecoveryRestartDelays); err != nil {
 		return err
 	}
 	if err := installEventSource(config.ServiceName); err != nil {
@@ -275,19 +220,20 @@ func PrintStatus(serviceName string) error {
 	return nil
 }
 
-func binaryPath(executable string, args []string) string {
-	parts := []string{syscall.EscapeArg(executable)}
-	for _, arg := range args {
-		parts = append(parts, syscall.EscapeArg(arg))
-	}
-	return strings.Join(parts, " ")
+func binaryPath(executable string) string {
+	return syscall.EscapeArg(executable)
 }
 
-func configureRecovery(service *mgr.Service) error {
-	actions := []mgr.RecoveryAction{
-		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
-		{Type: mgr.ServiceRestart, Delay: time.Minute},
+func configureRecovery(service *mgr.Service, restartDelays []time.Duration) error {
+	if len(restartDelays) == 0 {
+		return fmt.Errorf("service recovery restart delays are required")
+	}
+	actions := make([]mgr.RecoveryAction, 0, len(restartDelays))
+	for _, delay := range restartDelays {
+		if delay <= 0 {
+			return fmt.Errorf("service recovery restart delays must be greater than zero")
+		}
+		actions = append(actions, mgr.RecoveryAction{Type: mgr.ServiceRestart, Delay: delay})
 	}
 	if err := service.SetRecoveryActions(actions, 24*60*60); err != nil {
 		return fmt.Errorf("configure service recovery actions: %w", err)
@@ -388,7 +334,7 @@ type windowsService struct {
 	run         func(context.Context) error
 }
 
-func (service *windowsService) Execute(args []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
+func (service *windowsService) Execute(_ []string, requests <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

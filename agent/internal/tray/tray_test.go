@@ -1,41 +1,36 @@
 package tray
 
 import (
-	"context"
 	"io"
 	"log/slog"
-	"net"
 	"testing"
 	"time"
-
-	"ztna.local/agent/internal/ipc"
 )
 
-func TestTraySendsPing(t *testing.T) {
-	serverConn, clientConn := net.Pipe()
-	defer serverConn.Close()
-	defer clientConn.Close()
-
-	oldNewDefaultClient := newDefaultClient
-	newDefaultClient = func() *ipc.Client {
-		return ipc.NewClient(func(context.Context) (net.Conn, error) { return clientConn, nil })
+func TestNewGUIAppRequiresExplicitTimeout(t *testing.T) {
+	app := NewGUIApp(Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if app.timeout != 0 {
+		t.Fatalf("timeout = %s, want 0s", app.timeout)
 	}
-	defer func() { newDefaultClient = oldNewDefaultClient }()
+}
 
-	go func() {
-		_ = ipc.ServeConn(context.Background(), serverConn, ipc.HandlerFunc(func(ctx context.Context, request *ipc.Request) (*ipc.Response, error) {
-			var ping ipc.PingRequest
-			if err := ipc.DecodeBody(request.Body, &ping); err != nil {
-				return nil, err
-			}
-			if ping.Message != "hello" {
-				t.Errorf("message = %q, want hello", ping.Message)
-			}
-			return ipc.NewResponse(request.ID, ipc.PingResponse{Message: "pong", Echo: ping.Message, Protocol: ipc.ProtocolVersion})
-		}))
-	}()
+func TestNewGUIAppPreservesTimeout(t *testing.T) {
+	app := NewGUIApp(Options{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if app.timeout != time.Second {
+		t.Fatalf("timeout = %s, want 1s", app.timeout)
+	}
+}
 
-	if err := Run(context.Background(), Options{Message: "hello", Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil))); err != nil {
-		t.Fatalf("Run returned error: %v", err)
+func TestWailsAppOptionsUsesWindowConfig(t *testing.T) {
+	app := NewGUIApp(Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	wailsOptions := wailsAppOptions(app, defaultGUIWindowConfig)
+	if wailsOptions.Title != defaultGUIWindowConfig.Title || wailsOptions.Width != defaultGUIWindowConfig.Width || wailsOptions.Height != defaultGUIWindowConfig.Height || wailsOptions.MinWidth != defaultGUIWindowConfig.MinWidth || wailsOptions.MinHeight != defaultGUIWindowConfig.MinHeight {
+		t.Fatalf("wails options = %+v", wailsOptions)
+	}
+	if len(wailsOptions.Bind) != 1 || wailsOptions.Bind[0] != app {
+		t.Fatalf("wails bind = %+v", wailsOptions.Bind)
+	}
+	if wailsOptions.AssetServer == nil || wailsOptions.BackgroundColour == nil {
+		t.Fatalf("wails options missing asset server/background: %+v", wailsOptions)
 	}
 }

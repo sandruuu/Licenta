@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"ztna.local/agent/internal/catalog"
-	"ztna.local/agent/internal/deviceidentity"
-	"ztna.local/agent/internal/ipc"
+	"agent/internal/service/catalog"
+	"agent/internal/service/deviceidentity"
+	"agent/internal/shared/ipc"
 )
 
 const (
@@ -157,7 +157,7 @@ func (service *Service) certificateInfo(ctx context.Context, status ipc.AgentSta
 	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, defaultCertificateRenewalTimeout)
+		ctx, cancel = context.WithTimeout(ctx, service.certificateRenewalTimeout)
 		defer cancel()
 	}
 	certificate, err := service.certificateLoader(ctx, deviceidentity.MachineCertificateOptions{

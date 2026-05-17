@@ -78,7 +78,7 @@ The rename does not change the external protocol surface:
 
 Agent and Gateway consumers still use `cloud_url` / `CLOUD_URL` config names pointing to the PDP URL. These are external consumer config keys and are intentionally preserved for backward compatibility.
 
-The root Docker Compose service is named `pdp`, with `pdp.ztna.local` as the sole network alias.
+The root Docker Compose service is named `pdp`, with `pdp` as the sole network alias.
 
 ## Migration Status (completed May 2026)
 
@@ -89,7 +89,7 @@ The PDP has been fully migrated from the legacy `cloud` naming convention:
 - Legacy `filepath.Join("..", "cloud", "web", filename)` path fallback removed
 - Legacy `LoadFromDisk()`/`importJSON()` store.json migration removed
 - Legacy `PKIRoleHealth` config field removed
-- `cloud.ztna.local` Docker alias removed; Gateway `depends_on` updated from `cloud:` → `pdp:`
+- `cloud.example.com` Docker alias removed; Gateway `depends_on` updated from `cloud:` → `pdp:`
 - TLS cert references in config files updated: `cloud.crt`/`cloud.key` → `pdp.crt`/`pdp.key`
 
 ## Validation

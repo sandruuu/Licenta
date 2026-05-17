@@ -1,6 +1,6 @@
 {
   "listen_addr": ":8443",
-  "pdp_fqdn": "pdp.ztna.local",
+  "pdp_fqdn": "pdp",
   "tls_cert": "./data/pdp-server-tls-cert.pem",
   "mtls_ca": "./data/vault-pki-ca-cert.pem",
   "pki_url": "http://vault:8200",
@@ -61,7 +61,7 @@
     "enabled": true,
     "username": "admin",
     "password": "admin",
-    "email": "admin@ztna.local",
+    "email": "admin@example.com",
     "role": "admin"
   },
   "public": {

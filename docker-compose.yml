@@ -36,7 +36,7 @@ services:
       public:
         ipv4_address: 172.30.0.20
         aliases:
-          - pdp.ztna.local
+          - pdp
       security:
         ipv4_address: 172.24.0.20
     volumes:
@@ -60,7 +60,7 @@ services:
     command:
       - start-dev
       - --import-realm
-      - --hostname=http://keycloak.ztna.local:8080
+      - --hostname=http://keycloak:8080
       - --hostname-strict=false
     ports:
       - "8080:8080"
@@ -68,7 +68,7 @@ services:
       public:
         ipv4_address: 172.30.0.30
         aliases:
-          - keycloak.ztna.local
+          - keycloak
     volumes:
       - keycloak-data:/opt/keycloak/data
       - ./infrastructure/keycloak/import:/opt/keycloak/data/import:ro

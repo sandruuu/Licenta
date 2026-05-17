@@ -1,5 +1,5 @@
 export namespace ipc {
-	
+
 	export class AccessEvent {
 	    id: string;
 	    decision: string;
@@ -12,11 +12,11 @@ export namespace ipc {
 	    details?: Record<string, string>;
 	    // Go type: time
 	    occurred_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AccessEvent(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -30,7 +30,7 @@ export namespace ipc {
 	        this.details = source["details"];
 	        this.occurred_at = this.convertValues(source["occurred_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -53,17 +53,17 @@ export namespace ipc {
 	    events: AccessEvent[];
 	    // Go type: time
 	    reported_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AccessEventsResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.events = this.convertValues(source["events"], AccessEvent);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -97,11 +97,11 @@ export namespace ipc {
 	    bytes_in?: number;
 	    bytes_out?: number;
 	    last_error?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ActiveSession(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -117,7 +117,7 @@ export namespace ipc {
 	        this.bytes_out = source["bytes_out"];
 	        this.last_error = source["last_error"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -140,17 +140,17 @@ export namespace ipc {
 	    sessions: ActiveSession[];
 	    // Go type: time
 	    reported_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ActiveSessionsResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sessions = this.convertValues(source["sessions"], ActiveSession);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -177,11 +177,11 @@ export namespace ipc {
 	    status?: string;
 	    // Go type: time
 	    updated_at?: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CatalogResource(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.fqdn = source["fqdn"];
@@ -191,7 +191,7 @@ export namespace ipc {
 	        this.status = source["status"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -215,11 +215,11 @@ export namespace ipc {
 	    status: string;
 	    description: string;
 	    details?: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DevicePostureCheck(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -235,11 +235,11 @@ export namespace ipc {
 	    checks: DevicePostureCheck[];
 	    // Go type: time
 	    collected_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DevicePostureReport(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.device_id = source["device_id"];
@@ -248,7 +248,7 @@ export namespace ipc {
 	        this.checks = this.convertValues(source["checks"], DevicePostureCheck);
 	        this.collected_at = this.convertValues(source["collected_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -274,11 +274,11 @@ export namespace ipc {
 	    session_state?: string;
 	    // Go type: time
 	    access_token_expires_at?: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AuthenticatedUser(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.user_sid = source["user_sid"];
@@ -287,7 +287,7 @@ export namespace ipc {
 	        this.session_state = source["session_state"];
 	        this.access_token_expires_at = this.convertValues(source["access_token_expires_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -317,11 +317,11 @@ export namespace ipc {
 	    expires_at?: any;
 	    valid: boolean;
 	    last_error?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CertificateInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.sha256 = source["sha256"];
@@ -333,7 +333,7 @@ export namespace ipc {
 	        this.valid = source["valid"];
 	        this.last_error = source["last_error"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -362,11 +362,11 @@ export namespace ipc {
 	    key_provider?: string;
 	    nonce?: string;
 	    last_error?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EnrollmentInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
@@ -459,11 +459,11 @@ export namespace ipc {
 	    identity_checked_at?: any;
 	    // Go type: time
 	    reported_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AgentStatus(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.service_state = source["service_state"];
@@ -531,7 +531,7 @@ export namespace ipc {
 	        this.identity_checked_at = this.convertValues(source["identity_checked_at"], null);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -557,11 +557,11 @@ export namespace ipc {
 	    session_state?: string;
 	    catalog_state?: string;
 	    network_state?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DashboardConnection(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.state = source["state"];
@@ -584,11 +584,11 @@ export namespace ipc {
 	    access_events: AccessEvent[];
 	    // Go type: time
 	    reported_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AgentDashboard(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.connection = this.convertValues(source["connection"], DashboardConnection);
@@ -602,7 +602,7 @@ export namespace ipc {
 	        this.access_events = this.convertValues(source["access_events"], AccessEvent);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -621,24 +621,24 @@ export namespace ipc {
 		    return a;
 		}
 	}
-	
-	
-	
+
+
+
 	export class CatalogResourcesResponse {
 	    resources: CatalogResource[];
 	    // Go type: time
 	    reported_at: any;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new CatalogResourcesResponse(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.resources = this.convertValues(source["resources"], CatalogResource);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -657,10 +657,52 @@ export namespace ipc {
 		    return a;
 		}
 	}
-	
-	
-	
-	
+
+
+
+
 
 }
 
+export namespace tray {
+
+	export class EnrollmentStartResponse {
+	    started: boolean;
+	    message: string;
+	    enrollment_state?: string;
+	    device_id?: string;
+	    // Go type: time
+	    reported_at: any;
+
+	    static createFrom(source: any = {}) {
+	        return new EnrollmentStartResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.started = source["started"];
+	        this.message = source["message"];
+	        this.enrollment_state = source["enrollment_state"];
+	        this.device_id = source["device_id"];
+	        this.reported_at = this.convertValues(source["reported_at"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+}

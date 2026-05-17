@@ -109,7 +109,7 @@ func TestValidateGatewayCertificateRejectsNotYetValidCertificate(t *testing.T) {
 }
 
 func TestGatewayIdentityFromCertificateReadsPAIdentity(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://ztna.local/organization/org-1/gateway/gw-1")
+	identityURI, err := url.Parse("spiffe://gateway/organization/org-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestGatewayIdentityFromCertificateReadsPAIdentity(t *testing.T) {
 }
 
 func TestGatewayIdentityFromCertificateRequiresFQDN(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://ztna.local/organization/org-1/gateway/gw-1")
+	identityURI, err := url.Parse("spiffe://gateway/organization/org-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestGatewayIdentityFromCertificateRequiresFQDN(t *testing.T) {
 }
 
 func TestGatewayIdentityFromCertificateRejectsLegacyTenantPath(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://ztna.local/tenant/tenant-1/gateway/gw-1")
+	identityURI, err := url.Parse("spiffe://gateway/tenant/tenant-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}

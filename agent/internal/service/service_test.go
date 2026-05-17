@@ -10,17 +10,137 @@ import (
 	"testing"
 	"time"
 
-	"ztna.local/agent/internal/catalog"
-	"ztna.local/agent/internal/deviceidentity"
-	"ztna.local/agent/internal/dnscontrol"
-	"ztna.local/agent/internal/enrollment"
-	"ztna.local/agent/internal/ipc"
-	"ztna.local/agent/internal/jwtverify"
-	agentnetwork "ztna.local/agent/internal/network"
+	"agent/internal/service/catalog"
+	"agent/internal/service/deviceidentity"
+	"agent/internal/service/dnscontrol"
+	"agent/internal/service/enrollment"
+	agentnetwork "agent/internal/service/network"
+	"agent/internal/service/relay"
+	servicestate "agent/internal/service/state"
+	"agent/internal/shared/ipc"
 )
 
+type serviceTestOptions struct {
+	AuthorizedUserSID          string
+	PAURL                      string
+	CloudCertSHA256            string
+	CAFile                     string
+	PostureInterval            time.Duration
+	CriticalInterval           time.Duration
+	HeartbeatInterval          time.Duration
+	PostureReportTimeout       time.Duration
+	CatalogInterval            time.Duration
+	CatalogCacheTTL            time.Duration
+	CatalogRetryBackoff        []time.Duration
+	AccessTokenExpirySkew      time.Duration
+	DNSServer                  string
+	TUNEnabled                 bool
+	TUNName                    string
+	TUNIP                      string
+	TUNNetmask                 string
+	TUNRouteCIDR               string
+	ProcessIdentity            bool
+	CertificateRenewalInterval time.Duration
+	CertificateRenewBefore     time.Duration
+	CertificateRenewalTimeout  time.Duration
+	PARequestTimeout           time.Duration
+	EnrollmentRateLimitMax     int
+	EnrollmentRateLimitWindow  time.Duration
+	Logger                     *slog.Logger
+	ListenerFactory            func(string) (net.Listener, error)
+	EnrollmentValidator        EnrollmentValidator
+	IdentityProvider           deviceidentity.Provider
+	PostureCollector           DevicePostureCollector
+	PostureReporter            DevicePostureReporter
+	CatalogClient              DeviceCatalogClient
+	ResourceAuthorizer         relay.ResourceAuthorizer
+	DNSConfigurator            DNSConfigurator
+	SyntheticResolver          SyntheticResolver
+	DNSResolverServer          DNSResolverServer
+	NetworkManager             NetworkManager
+	EnrollmentRunner           EnrollmentRunner
+	EnrollmentRenewer          EnrollmentRenewer
+	StateStore                 servicestate.EnrollmentStore
+	CatalogCacheStore          servicestate.CatalogCacheStore
+	CertificateLoader          MachineCertificateLoader
+	Clock                      func() time.Time
+}
+
+func newTestService(options serviceTestOptions) *Service {
+	if options.PostureReportTimeout <= 0 {
+		options.PostureReportTimeout = 30 * time.Second
+	}
+	if options.CatalogCacheTTL <= 0 {
+		options.CatalogCacheTTL = 5 * time.Minute
+	}
+	if len(options.CatalogRetryBackoff) == 0 {
+		options.CatalogRetryBackoff = []time.Duration{5 * time.Minute, 10 * time.Minute, 15 * time.Minute, 30 * time.Minute}
+	}
+	if options.AccessTokenExpirySkew <= 0 {
+		options.AccessTokenExpirySkew = 30 * time.Second
+	}
+	if options.CertificateRenewalTimeout <= 0 {
+		options.CertificateRenewalTimeout = 30 * time.Second
+	}
+	if options.PARequestTimeout <= 0 {
+		options.PARequestTimeout = 10 * time.Second
+	}
+	if options.EnrollmentRateLimitMax <= 0 {
+		options.EnrollmentRateLimitMax = 3
+	}
+	if options.EnrollmentRateLimitWindow <= 0 {
+		options.EnrollmentRateLimitWindow = time.Minute
+	}
+	return New(Config{
+		AuthorizedUserSID:          options.AuthorizedUserSID,
+		PAURL:                      options.PAURL,
+		CloudCertSHA256:            options.CloudCertSHA256,
+		CAFile:                     options.CAFile,
+		PostureInterval:            options.PostureInterval,
+		CriticalInterval:           options.CriticalInterval,
+		HeartbeatInterval:          options.HeartbeatInterval,
+		PostureReportTimeout:       options.PostureReportTimeout,
+		CatalogInterval:            options.CatalogInterval,
+		CatalogCacheTTL:            options.CatalogCacheTTL,
+		CatalogRetryBackoff:        options.CatalogRetryBackoff,
+		AccessTokenExpirySkew:      options.AccessTokenExpirySkew,
+		DNSServer:                  options.DNSServer,
+		TUNEnabled:                 options.TUNEnabled,
+		TUNName:                    options.TUNName,
+		TUNIP:                      options.TUNIP,
+		TUNNetmask:                 options.TUNNetmask,
+		TUNRouteCIDR:               options.TUNRouteCIDR,
+		ProcessIdentity:            options.ProcessIdentity,
+		CertificateRenewalInterval: options.CertificateRenewalInterval,
+		CertificateRenewBefore:     options.CertificateRenewBefore,
+		CertificateRenewalTimeout:  options.CertificateRenewalTimeout,
+		PARequestTimeout:           options.PARequestTimeout,
+		EnrollmentRateLimitMax:     options.EnrollmentRateLimitMax,
+		EnrollmentRateLimitWindow:  options.EnrollmentRateLimitWindow,
+	}, Dependencies{
+		Logger:              options.Logger,
+		ListenerFactory:     options.ListenerFactory,
+		EnrollmentValidator: options.EnrollmentValidator,
+		IdentityProvider:    options.IdentityProvider,
+		PostureCollector:    options.PostureCollector,
+		PostureReporter:     options.PostureReporter,
+		CatalogClient:       options.CatalogClient,
+		ResourceAuthorizer:  options.ResourceAuthorizer,
+		DNSConfigurator:     options.DNSConfigurator,
+		SyntheticResolver:   options.SyntheticResolver,
+		DNSResolverServer:   options.DNSResolverServer,
+		NetworkManager:      options.NetworkManager,
+		EnrollmentRunner:    options.EnrollmentRunner,
+		EnrollmentRenewer:   options.EnrollmentRenewer,
+		StateStore:          options.StateStore,
+		CatalogCacheStore:   options.CatalogCacheStore,
+		CertificateLoader:   options.CertificateLoader,
+		Clock:               options.Clock,
+	})
+}
+
 func TestServiceHandlesPing(t *testing.T) {
-	service := New(Options{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	service := newTestService(serviceTestOptions{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	service.transition(StateRunning)
 	request, err := ipc.NewRequest("req-1", ipc.OperationPing, ipc.PingRequest{Message: "hello", TrayPID: 22, SentAt: time.Now().UTC()})
 	if err != nil {
@@ -43,7 +163,7 @@ func TestServiceHandlesPing(t *testing.T) {
 }
 
 func TestServiceReportsUnenrolledStatus(t *testing.T) {
-	service := New(Options{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityProvider: testIdentityProvider("S-1-5-21-1")})
+	service := newTestService(serviceTestOptions{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityProvider: testIdentityProvider("S-1-5-21-1")})
 	service.transition(StateRunning)
 	request, err := ipc.NewRequest("req-1", ipc.OperationGetStatus, ipc.StatusRequest{})
 	if err != nil {
@@ -57,34 +177,33 @@ func TestServiceReportsUnenrolledStatus(t *testing.T) {
 	if err := ipc.DecodeBody(response.Body, &status); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if status.EnrollmentState != ipc.EnrollmentStateUnenrolled || status.KeyName != "ZTNA_DeviceKey_S-1-5-21-1" || status.EnrollmentNonce == "" || !status.KeyExists {
+	if status.EnrollmentState != ipc.EnrollmentStateUnenrolled || status.KeyName != "ZTNA_DeviceKey" || status.EnrollmentNonce == "" || !status.KeyExists {
 		t.Fatalf("status = %+v", status)
 	}
 }
 
-func TestServiceAcceptsValidatedEnrollmentToken(t *testing.T) {
+func TestServiceAcceptsValidatedEnrollmentAccessToken(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
 		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
-		TokenValidator: fakeTokenValidator{claims: &jwtverify.Claims{
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
 			DeviceID: "device-1",
 			Nonce:    "nonce-1",
-			UserSID:  "S-1-5-21-1",
 		}},
 	})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:            "header.payload.signature",
-		Nonce:            "nonce-1",
-		DeviceID:         "device-1",
-		UserSID:          "S-1-5-21-1",
-		KeyName:          "ZTNA_DeviceKey_S-1-5-21-1",
-		UserEmail:        "alice@example.com",
-		ExpiresInSeconds: 300,
-		SentAt:           now,
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		UserSID:              "S-1-5-21-1",
+		KeyName:              "ZTNA_DeviceKey",
+		UserEmail:            "alice@example.com",
+		SentAt:               now,
 	})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
@@ -96,7 +215,7 @@ func TestServiceAcceptsValidatedEnrollmentToken(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("response error = %+v", response.Error)
 	}
-	var ack ipc.SubmitEnrollmentTokenResponse
+	var ack ipc.StartEnrollmentResponse
 	if err := ipc.DecodeBody(response.Body, &ack); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
@@ -105,31 +224,71 @@ func TestServiceAcceptsValidatedEnrollmentToken(t *testing.T) {
 	}
 }
 
+func TestServiceAcceptsEnrollmentAccessTokenFromVerifiedPeerSID(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID: "S-1-5-21-1",
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:             func() time.Time { return now },
+		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
+			DeviceID: "device-1",
+			Nonce:    "nonce-1",
+		}},
+	})
+	service.enrollment.Nonce = "nonce-1"
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		KeyName:              "ZTNA_DeviceKey",
+		SentAt:               now,
+	})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	ctx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{UserSID: "S-1-5-21-1", Verified: true})
+	response, err := service.HandleIPC(ctx, request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("response error = %+v", response.Error)
+	}
+	var ack ipc.StartEnrollmentResponse
+	if err := ipc.DecodeBody(response.Body, &ack); err != nil {
+		t.Fatalf("DecodeBody returned error: %v", err)
+	}
+	if !ack.Accepted || ack.ActiveUserSID != "S-1-5-21-1" {
+		t.Fatalf("ack = %+v", ack)
+	}
+}
+
 func TestServiceRunsEnrollmentRunnerAfterValidatedToken(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	runner := &fakeEnrollmentRunner{result: &enrollment.RunnerResult{EnrollmentID: "enroll-1", CertificateSHA256: "cert-sha"}}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
 		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
 		EnrollmentRunner:  runner,
-		TokenValidator: fakeTokenValidator{claims: &jwtverify.Claims{
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
 			DeviceID: "device-1",
 			Nonce:    "nonce-1",
-			UserSID:  "S-1-5-21-1",
 		}},
 	})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:            "header.payload.signature",
-		Nonce:            "nonce-1",
-		DeviceID:         "device-1",
-		UserSID:          "S-1-5-21-1",
-		KeyName:          "ZTNA_DeviceKey_S-1-5-21-1",
-		UserEmail:        "alice@example.com",
-		ExpiresInSeconds: 300,
-		SentAt:           now,
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		UserSID:              "S-1-5-21-1",
+		KeyName:              "ZTNA_DeviceKey",
+		UserEmail:            "alice@example.com",
+		SentAt:               now,
 	})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
@@ -141,14 +300,14 @@ func TestServiceRunsEnrollmentRunnerAfterValidatedToken(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("response error = %+v", response.Error)
 	}
-	var ack ipc.SubmitEnrollmentTokenResponse
+	var ack ipc.StartEnrollmentResponse
 	if err := ipc.DecodeBody(response.Body, &ack); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
 	if ack.EnrollmentState != ipc.EnrollmentStateEnrolled {
 		t.Fatalf("ack = %+v", ack)
 	}
-	if runner.input.Token != "header.payload.signature" || runner.input.KeyName != "ZTNA_DeviceKey_S-1-5-21-1" || runner.input.UserEmail != "alice@example.com" {
+	if runner.input.AccessToken != "header.payload.signature" || runner.input.KeyName != "ZTNA_DeviceKey" || runner.input.UserEmail != "alice@example.com" {
 		t.Fatalf("runner input = %+v", runner.input)
 	}
 	status := service.status()
@@ -159,7 +318,7 @@ func TestServiceRunsEnrollmentRunnerAfterValidatedToken(t *testing.T) {
 
 func TestServiceReturnsDevicePostureReport(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -202,7 +361,7 @@ func TestServiceReturnsDevicePostureReport(t *testing.T) {
 
 func TestServiceReturnsAgentDashboard(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -241,7 +400,7 @@ func TestServiceReturnsAgentDashboard(t *testing.T) {
 
 func TestServiceReturnsCatalogResources(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Clock: func() time.Time { return now }})
+	service := newTestService(serviceTestOptions{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Clock: func() time.Time { return now }})
 	service.catalog.Status = catalogStatusReady
 	service.catalog.LastSyncedAt = now
 	service.catalog.Resources = []catalog.Resource{{FQDN: "ssh.lab.local", ResourceID: "res-ssh", Protocol: "tcp", Port: 22}}
@@ -266,7 +425,7 @@ func TestServiceReturnsCatalogResources(t *testing.T) {
 func TestServiceDoesNotReportPostureBeforeEnrollment(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	reporter := &fakePostureReporter{}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -290,7 +449,7 @@ func TestServiceDoesNotReportPostureBeforeEnrollment(t *testing.T) {
 func TestServiceReportsPostureAfterEnrollment(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	reporter := &fakePostureReporter{}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -319,7 +478,7 @@ func TestServiceReportsCriticalPostureTransition(t *testing.T) {
 		testPostureReport(now, ipc.DevicePostureStatusCritical),
 		testPostureReport(now.Add(time.Minute), ipc.DevicePostureStatusCritical),
 	}}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -348,7 +507,7 @@ func TestServiceReportsCriticalPostureTransition(t *testing.T) {
 func TestServiceSendsHeartbeatAfterEnrollment(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	reporter := &fakeHeartbeatPostureReporter{}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -374,7 +533,7 @@ func TestServiceSyncsCatalogAndAppliesDNSAfterEnrollment(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	catalogClient := &fakeCatalogClient{catalog: catalog.Catalog{Version: "v1", PolicyEpoch: "v1", DNSSuffixes: []string{"example.test"}, Resources: []catalog.Resource{{FQDN: "admin.example.test", ResourceID: "res-1", Protocol: "https", Port: 443}}, TTLSeconds: 300}}
 	dnsConfigurator := &fakeDNSConfigurator{}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -411,7 +570,7 @@ func TestServiceSyncsCatalogAndAppliesDNSAfterEnrollment(t *testing.T) {
 
 func TestServiceUpdatesAccessTokenThroughIPC(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -451,7 +610,7 @@ func TestServiceUpdatesAccessTokenThroughIPC(t *testing.T) {
 
 func TestServiceRejectsAccessTokenForWrongSID(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -481,10 +640,43 @@ func TestServiceRejectsAccessTokenForWrongSID(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsAccessTokenWhenPeerSIDDoesNotMatchPayload(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID: "S-1-5-21-1",
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:             func() time.Time { return now },
+		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
+	})
+	service.enrollment.State = ipc.EnrollmentStateEnrolled
+	service.enrollment.DeviceID = "device-1"
+	request, err := ipc.NewRequest("req-1", ipc.OperationUpdateAccessToken, ipc.UpdateAccessTokenRequest{
+		AccessToken: "user.access.token",
+		ExpiresAt:   now.Add(time.Hour),
+		DeviceID:    "device-1",
+		UserSID:     "S-1-5-21-1",
+		SentAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	ctx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{UserSID: "S-1-5-21-2", Verified: true})
+	response, err := service.HandleIPC(ctx, request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	if response.OK || response.Error.Code != ipc.ErrorCodeInvalidRequest {
+		t.Fatalf("response = %+v", response)
+	}
+	if status := service.status(); status.SessionState != sessionStatusRejected {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
 func TestServiceCatalogSyncRequiresAccessToken(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	catalogClient := &fakeCatalogClient{catalog: catalog.Catalog{Version: "v1", PolicyEpoch: "v1", DNSSuffixes: []string{"example.test"}, TTLSeconds: 300}}
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:             func() time.Time { return now },
@@ -506,29 +698,30 @@ func TestServiceCatalogSyncRequiresAccessToken(t *testing.T) {
 	}
 }
 
-func TestServiceConfiguresCloudPostureReporter(t *testing.T) {
-	service := New(Options{
+func TestServiceConfiguresPAGRPCClient(t *testing.T) {
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
-		CloudURL:          "https://cloud.example",
+		PAURL:             "https://cloud.example",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
 	})
-	if service.postureReporter == nil {
-		t.Fatalf("posture reporter was not configured")
+	if service.paClient == nil || service.postureReporter == nil || service.catalogClient == nil || service.enrollmentValidator == nil {
+		t.Fatalf("PA gRPC client dependencies were not configured")
 	}
 }
 
-func TestServiceRejectsEnrollmentTokenWithoutValidator(t *testing.T) {
-	service := New(Options{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityProvider: testIdentityProvider("S-1-5-21-1")})
+func TestServiceRejectsEnrollmentAccessTokenWithoutValidator(t *testing.T) {
+	service := newTestService(serviceTestOptions{AuthorizedUserSID: "S-1-5-21-1", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), IdentityProvider: testIdentityProvider("S-1-5-21-1")})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:            "header.payload.signature",
-		Nonce:            "nonce-1",
-		DeviceID:         "device-1",
-		UserSID:          "S-1-5-21-1",
-		KeyName:          "ZTNA_DeviceKey_S-1-5-21-1",
-		ExpiresInSeconds: 300,
-		SentAt:           time.Now().UTC(),
+	now := time.Now().UTC()
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		UserSID:              "S-1-5-21-1",
+		KeyName:              "ZTNA_DeviceKey",
+		SentAt:               now,
 	})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
@@ -542,22 +735,23 @@ func TestServiceRejectsEnrollmentTokenWithoutValidator(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsEnrollmentTokenWrongSID(t *testing.T) {
-	service := New(Options{
-		AuthorizedUserSID: "S-1-5-21-1",
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		IdentityProvider:  testIdentityProvider("S-1-5-21-1"),
-		TokenValidator:    fakeTokenValidator{claims: &jwtverify.Claims{}},
+func TestServiceRejectsEnrollmentAccessTokenWrongSID(t *testing.T) {
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID:   "S-1-5-21-1",
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		IdentityProvider:    testIdentityProvider("S-1-5-21-1"),
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{}},
 	})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:            "header.payload.signature",
-		Nonce:            "nonce-1",
-		DeviceID:         "device-1",
-		UserSID:          "S-1-5-21-2",
-		KeyName:          "ZTNA_DeviceKey_S-1-5-21-1",
-		ExpiresInSeconds: 300,
-		SentAt:           time.Now().UTC(),
+	now := time.Now().UTC()
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		UserSID:              "S-1-5-21-2",
+		KeyName:              "ZTNA_DeviceKey",
+		SentAt:               now,
 	})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
@@ -571,26 +765,57 @@ func TestServiceRejectsEnrollmentTokenWrongSID(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsEnrollmentTokenWrongServiceDeviceID(t *testing.T) {
-	service := New(Options{
+func TestServiceRejectsEnrollmentAccessTokenWhenPeerSIDDoesNotMatchPayload(t *testing.T) {
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID:   "S-1-5-21-1",
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		IdentityProvider:    testIdentityProvider("S-1-5-21-1"),
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{}},
+	})
+	service.enrollment.Nonce = "nonce-1"
+	now := time.Now().UTC()
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-1",
+		UserSID:              "S-1-5-21-1",
+		KeyName:              "ZTNA_DeviceKey",
+		SentAt:               now,
+	})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	ctx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{UserSID: "S-1-5-21-2", Verified: true})
+	response, err := service.HandleIPC(ctx, request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	if response.OK || response.Error.Code != ipc.ErrorCodeInvalidRequest {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestServiceRejectsEnrollmentAccessTokenWrongServiceDeviceID(t *testing.T) {
+	service := newTestService(serviceTestOptions{
 		AuthorizedUserSID: "S-1-5-21-1",
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-from-ek"),
-		TokenValidator: fakeTokenValidator{claims: &jwtverify.Claims{
+		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
 			DeviceID: "device-override",
 			Nonce:    "nonce-1",
-			UserSID:  "S-1-5-21-1",
 		}},
 	})
 	service.enrollment.Nonce = "nonce-1"
-	request, err := ipc.NewRequest("req-1", ipc.OperationSubmitEnrollmentToken, ipc.SubmitEnrollmentTokenRequest{
-		Token:            "header.payload.signature",
-		Nonce:            "nonce-1",
-		DeviceID:         "device-override",
-		UserSID:          "S-1-5-21-1",
-		KeyName:          "ZTNA_DeviceKey_S-1-5-21-1",
-		ExpiresInSeconds: 300,
-		SentAt:           time.Now().UTC(),
+	now := time.Now().UTC()
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollment, ipc.StartEnrollmentRequest{
+		AccessToken:          "header.payload.signature",
+		AccessTokenExpiresAt: now.Add(time.Hour),
+		Nonce:                "nonce-1",
+		DeviceID:             "device-override",
+		UserSID:              "S-1-5-21-1",
+		KeyName:              "ZTNA_DeviceKey",
+		SentAt:               now,
 	})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
@@ -602,11 +827,6 @@ func TestServiceRejectsEnrollmentTokenWrongServiceDeviceID(t *testing.T) {
 	if response.OK || response.Error.Code != ipc.ErrorCodeInvalidRequest {
 		t.Fatalf("response = %+v", response)
 	}
-}
-
-type fakeTokenValidator struct {
-	claims *jwtverify.Claims
-	err    error
 }
 
 type fakeEnrollmentRunner struct {
@@ -734,14 +954,19 @@ func (renewer *fakeEnrollmentRenewer) Renew(_ context.Context, input enrollment.
 	return renewer.result, nil
 }
 
-func (validator fakeTokenValidator) Validate(context.Context, string) (*jwtverify.Claims, error) {
+type fakeEnrollmentValidator struct {
+	result *enrollment.ValidationResult
+	err    error
+}
+
+func (validator fakeEnrollmentValidator) ValidateEnrollmentAccessToken(context.Context, enrollment.ValidationInput) (*enrollment.ValidationResult, error) {
 	if validator.err != nil {
 		return nil, validator.err
 	}
-	if validator.claims == nil {
-		return nil, errors.New("no claims")
+	if validator.result == nil {
+		return nil, errors.New("no validation result")
 	}
-	return validator.claims, nil
+	return validator.result, nil
 }
 
 type fakeIdentityProvider struct {
@@ -762,7 +987,7 @@ func testIdentityProviderWithDevice(userSID, deviceID string) fakeIdentityProvid
 		DeviceID:       deviceID,
 		DeviceIDSource: deviceidentity.DeviceIDSourceTPMEKPublicSHA256,
 		ActiveUserSID:  userSID,
-		KeyName:        deviceidentity.KeyNameForSID(userSID),
+		KeyName:        deviceidentity.KeyNameForDevice(),
 		KeyExists:      true,
 		KeyProvider:    deviceidentity.MicrosoftPlatformCryptoProvider,
 		CollectedAt:    time.Unix(1000, 0).UTC(),
@@ -771,7 +996,7 @@ func testIdentityProviderWithDevice(userSID, deviceID string) fakeIdentityProvid
 
 func TestServiceRunsWithInjectedListener(t *testing.T) {
 	listener := newPipeListener()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		ListenerFactory: func(string) (net.Listener, error) {
 			return listener, nil
@@ -804,7 +1029,7 @@ func TestServiceRunsWithInjectedListener(t *testing.T) {
 func TestServiceStartsSyntheticDNSServerWithLifecycleContext(t *testing.T) {
 	listener := newPipeListener()
 	dnsServer := newFakeDNSResolverServer()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DNSResolverServer: dnsServer,
 		ListenerFactory: func(string) (net.Listener, error) {
@@ -841,7 +1066,7 @@ func TestServiceStartsSyntheticDNSServerWithLifecycleContext(t *testing.T) {
 func TestServiceStartsNetworkManagerWithLifecycleContext(t *testing.T) {
 	listener := newPipeListener()
 	networkManager := newFakeNetworkManager()
-	service := New(Options{
+	service := newTestService(serviceTestOptions{
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NetworkManager: networkManager,
 		ListenerFactory: func(string) (net.Listener, error) {

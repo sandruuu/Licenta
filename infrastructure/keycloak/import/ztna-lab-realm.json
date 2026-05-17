@@ -33,11 +33,11 @@
       "frontchannelLogout": false,
       "redirectUris": [
         "https://localhost:8443/auth/federated/callback",
-        "https://pdp.ztna.local:8443/auth/federated/callback"
+        "https://pdp:8443/auth/federated/callback"
       ],
       "webOrigins": [
         "https://localhost:8443",
-        "https://pdp.ztna.local:8443"
+        "https://pdp:8443"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"

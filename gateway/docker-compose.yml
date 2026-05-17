@@ -14,7 +14,7 @@ services:
     container_name: ${GATEWAY_CONTAINER_NAME:-ztna-gateway}
     restart: unless-stopped
     extra_hosts:
-      - "pdp.ztna.local:host-gateway"
+      - "pdp:host-gateway"
     ports:
       - "${GATEWAY_HOST_PORT:-9443}:9443"
     environment:

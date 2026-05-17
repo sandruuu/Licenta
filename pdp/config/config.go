@@ -121,7 +121,7 @@ type RiskConfig struct {
 type Config struct {
 	// Server settings
 	ListenAddr string `json:"listen_addr"` // e.g. ":8443"
-	PDPFQDN    string `json:"pdp_fqdn"`    // FQDN for self-enrollment CSR (e.g. "pdp.ztna.local")
+	PDPFQDN    string `json:"pdp_fqdn"`    // FQDN for self-enrollment CSR (e.g. "pdp")
 	TLSCert    string `json:"tls_cert"`    // Path where the PDP TLS certificate is stored
 	MTLSCA     string `json:"mtls_ca"`     // Path where the issuer CA certificate is stored
 
