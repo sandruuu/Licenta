@@ -1,7 +1,7 @@
 import { Edit2, Trash2 } from 'lucide-react';
 import Badge from '../ui/Badge';
 import { LayerBadge } from './PolicyBadges';
-import { actionMeta, targetLabel } from './policyModel';
+import { actionMeta, assignmentScopeLabel, targetLabel } from './policyModel';
 
 export default function PolicyAssignmentsTable({ assignments, maps, onEdit, onDelete }) {
   return (
@@ -24,7 +24,10 @@ export default function PolicyAssignmentsTable({ assignments, maps, onEdit, onDe
               <p className="mt-1 text-xs text-text-secondary">{policy ? actionMeta(policy.action).label : 'Unknown action'}</p>
             </div>
             <div className="text-sm font-semibold text-text-secondary">{maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id}</div>
-            <div className="text-sm font-semibold text-text-primary">{targetLabel(assignment, maps)}</div>
+            <div>
+              <p className="text-sm font-semibold text-text-primary">{targetLabel(assignment, maps)}</p>
+              <p className="mt-1 truncate text-xs font-semibold text-text-muted">{assignmentScopeLabel(assignment, maps)}</p>
+            </div>
             <div className="flex flex-col gap-1">
               <span className="text-sm font-bold text-text-secondary">#{assignment.priority || 100}</span>
               <Badge variant={assignment.enabled === false ? 'danger' : 'success'}>{assignment.enabled === false ? 'Disabled' : 'Active'}</Badge>

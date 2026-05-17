@@ -20,7 +20,11 @@ func TestServiceRenewGatewayCertificateUpdatesCertificateAndRevokesOldSerial(t *
 	})
 	service.now = func() time.Time { return fixedNow }
 
-	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test")), 7, "gateway-role")
+	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test")), 7, "gateway-role", CertificateProfile{
+		CommonName: "edge.example.test",
+		DNSNames:   []string{"edge.example.test"},
+		URISANs:    []string{GatewayIdentityURI(gatewayTestTenantID, "gw-1")},
+	})
 	if err != nil {
 		t.Fatalf("sign old certificate: %v", err)
 	}

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	gatewayEnrollmentGRPCServiceName      = "ztna.gateway.v1.GatewayEnrollmentService"
-	gatewayEnrollmentGRPCEnrollPath       = "/ztna.gateway.v1.GatewayEnrollmentService/Enroll"
-	gatewayEnrollmentGRPCRenewCertPath    = "/ztna.gateway.v1.GatewayEnrollmentService/RenewCertificate"
+	gatewayEnrollmentGRPCServiceName      = "gateway.GatewayEnrollmentService"
+	gatewayEnrollmentGRPCEnrollPath       = "/gateway.GatewayEnrollmentService/Enroll"
+	gatewayEnrollmentGRPCRenewCertPath    = "/gateway.GatewayEnrollmentService/RenewCertificate"
 	gatewayEnrollmentResponseStatusEnroll = "enrolled"
 	gatewayEnrollmentResponseStatusRenew  = "renewed"
 )
@@ -97,12 +97,8 @@ func gatewayEnrollRequestFromStruct(value *structpb.Struct) models.GatewayEnroll
 		return models.GatewayEnrollRequest{}
 	}
 	return models.GatewayEnrollRequest{
-		Token:     strings.TrimSpace(structFieldString(value, "token")),
-		CSRPEM:    strings.TrimSpace(structFieldString(value, "csr_pem")),
-		FQDN:      strings.TrimSpace(structFieldString(value, "fqdn")),
-		Name:      strings.TrimSpace(structFieldString(value, "name")),
-		GatewayID: strings.TrimSpace(structFieldString(value, "gateway_id")),
-		TenantID:  strings.TrimSpace(structFieldString(value, "tenant_id")),
+		Token:  strings.TrimSpace(structFieldString(value, "token")),
+		CSRPEM: strings.TrimSpace(structFieldString(value, "csr_pem")),
 	}
 }
 

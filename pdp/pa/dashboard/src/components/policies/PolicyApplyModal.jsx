@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import { createElement, useState } from 'react';
+import { Building2, CheckCircle2, KeyRound, Users } from 'lucide-react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import FormField, { FormCheckbox, FormInput, FormRow, FormSelect } from '../ui/FormField';
@@ -11,6 +11,93 @@ import {
   selectedCountForLayer,
   toggleListValue,
 } from './policyModel';
+
+function normalizedGroupName(group) {
+  return String(group?.display_name || '').trim().toLowerCase();
+}
+
+function repeatedGroupNames(groups) {
+  const counts = new Map();
+  groups.forEach((group) => {
+    const name = normalizedGroupName(group);
+    if (name) counts.set(name, (counts.get(name) || 0) + 1);
+  });
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+function idpsForOrganization(maps, tenantID) {
+  return Array.from(maps.idps?.values?.() || []).filter((idp) => idp.tenant_id === tenantID);
+}
+
+function idpForGroup(group, maps) {
+  return group?.idp_id ? maps.idps?.get(group.idp_id) : null;
+}
+
+function defaultIdPForSelection(form, maps, groupsForAssignment) {
+  const organization = maps.organizations.get(form.tenant_id);
+  const configured = organization?.default_idp_id ? maps.idps?.get(organization.default_idp_id) : null;
+  if (configured) return configured;
+  const organizationIdPs = idpsForOrganization(maps, form.tenant_id);
+  if (organizationIdPs.length === 1) return organizationIdPs[0];
+  const firstGroupIdP = groupsForAssignment[0]?.idp_id ? maps.idps?.get(groupsForAssignment[0].idp_id) : null;
+  return firstGroupIdP || null;
+}
+
+function ContextItem({ icon, label, value, detail }) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-md border border-border-light bg-surface-card px-4 py-3">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-surface-secondary text-text-secondary">
+        {createElement(icon, { size: 16 })}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[10px] font-bold uppercase tracking-[0.12em] text-text-muted">{label}</span>
+        <span className="mt-1 block truncate text-sm font-bold text-text-primary">{value || '-'}</span>
+        {detail && <span className="mt-0.5 block truncate text-xs text-text-secondary">{detail}</span>}
+      </span>
+    </div>
+  );
+}
+
+function ScopeContext({ form, maps, groupsForAssignment }) {
+  const organization = maps.organizations.get(form.tenant_id);
+  const organizationIdPs = idpsForOrganization(maps, form.tenant_id);
+  const selectedIdP = defaultIdPForSelection(form, maps, groupsForAssignment);
+  const idpValue = organizationIdPs.length > 1
+    ? `${organizationIdPs.length} identity providers`
+    : selectedIdP?.name || groupsForAssignment[0]?.idp_id || 'No IdP configured';
+  const idpDetail = organizationIdPs.length > 1
+    ? organizationIdPs.map((idp) => idp.name || idp.id).join(', ')
+    : selectedIdP?.issuer || selectedIdP?.id || '';
+
+  return (
+    <section className="rounded-md border border-border bg-surface p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <h3 className="text-base font-bold text-text-primary">Assignment context</h3>
+        <Badge variant={form.tenant_id ? 'accent' : 'neutral'}>{form.tenant_id ? 'Scoped' : 'No organization'}</Badge>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-3">
+        <ContextItem
+          icon={Building2}
+          label="Organization"
+          value={organization?.name || form.tenant_id || 'Select organization'}
+          detail={organization?.domain || organization?.id || ''}
+        />
+        <ContextItem
+          icon={KeyRound}
+          label="Identity provider"
+          value={idpValue}
+          detail={idpDetail}
+        />
+        <ContextItem
+          icon={Users}
+          label="Directory groups"
+          value={`${groupsForAssignment.length} synced group${groupsForAssignment.length === 1 ? '' : 's'}`}
+          detail={groupsForAssignment[0]?.idp_id ? 'SCIM directory' : ''}
+        />
+      </div>
+    </section>
+  );
+}
 
 function AssignmentTypeCard({ layer, selected, onSelect }) {
   const Icon = layerIcons[layer.value];
@@ -36,7 +123,7 @@ function AssignmentTypeCard({ layer, selected, onSelect }) {
   );
 }
 
-function SelectableTable({ title, countLabel, searchPlaceholder, items, selectedIDs, onToggle, columns }) {
+function SelectableTable({ title, countLabel, searchPlaceholder, items, selectedIDs, onToggle, columns, emptyMessage = 'No matches.' }) {
   const [query, setQuery] = useState('');
   const filtered = items.filter((item) => {
     const needle = query.trim().toLowerCase();
@@ -96,7 +183,7 @@ function SelectableTable({ title, countLabel, searchPlaceholder, items, selected
             {!filtered.length && (
               <tr>
                 <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-xs font-medium text-text-muted">
-                  No matches.
+                  {items.length ? 'No matches.' : emptyMessage}
                 </td>
               </tr>
             )}
@@ -122,6 +209,13 @@ export default function PolicyApplyModal({
   onClose,
   onSave,
 }) {
+  const repeatedNames = repeatedGroupNames(groupsForAssignment);
+  const selectedOrganization = maps.organizations.get(form.tenant_id);
+  const selectedIdP = defaultIdPForSelection(form, maps, groupsForAssignment);
+  const manualGroupScope = form.tenant_id
+    ? [selectedOrganization?.name || form.tenant_id, selectedIdP?.name || selectedIdP?.id].filter(Boolean).join(' / ')
+    : '';
+
   return (
     <Modal
       open={open}
@@ -166,6 +260,8 @@ export default function PolicyApplyModal({
           </FormSelect>
         </FormField>
       </div>
+
+      <ScopeContext form={form} maps={maps} groupsForAssignment={groupsForAssignment} />
 
       <section className="rounded-md border border-border bg-surface p-4">
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -214,6 +310,7 @@ export default function PolicyApplyModal({
             const nextIDs = toggleListValue(form.resource_ids, resourceID);
             setForm({ ...form, resource_ids: nextIDs, resource_id: nextIDs[0] || '' });
           }}
+          emptyMessage={form.tenant_id ? 'No applications in this organization.' : 'Select an organization to list applications.'}
           columns={[
             { key: 'name', label: 'Name', value: (resource) => resource.name, render: (resource) => <span className="font-bold text-accent">{resource.name}</span> },
             { key: 'type', label: 'Type', value: (resource) => resource.type || 'resource' },
@@ -239,16 +336,51 @@ export default function PolicyApplyModal({
             selectedIDs={form.group_ids || []}
             onToggle={(groupID) => {
               const nextIDs = toggleListValue(form.group_ids, groupID);
-              const selectedGroup = groupsForAssignment.find((group) => group.id === groupID);
+              const firstSelectedGroup = groupsForAssignment.find((group) => group.id === nextIDs[0]);
               setForm({
                 ...form,
                 group_ids: nextIDs,
                 group_id: nextIDs[0] || '',
-                group_name: nextIDs.length ? selectedGroup?.display_name || form.group_name : '',
+                group_name: nextIDs.length ? firstSelectedGroup?.display_name || form.group_name : '',
               });
             }}
+            emptyMessage={form.tenant_id ? 'No synchronized groups in this organization.' : 'Select an organization to list groups.'}
             columns={[
-              { key: 'name', label: 'Name', value: (group) => group.display_name, render: (group) => <span className="font-bold text-accent">{group.display_name}</span> },
+              {
+                key: 'name',
+                label: 'Group',
+                value: (group) => `${group.display_name || ''} ${group.external_id || ''} ${group.id || ''}`,
+                render: (group) => (
+                  <span className="block min-w-0">
+                    <span className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="truncate font-bold text-accent">{group.display_name || group.id}</span>
+                      {repeatedNames.has(normalizedGroupName(group)) && <Badge variant="warning">Same name</Badge>}
+                    </span>
+                    <span className="mt-1 block truncate text-[11px] font-medium text-text-muted">
+                      {group.external_id || group.id}
+                    </span>
+                  </span>
+                ),
+              },
+              {
+                key: 'source',
+                label: 'Organization / IdP',
+                value: (group) => {
+                  const idp = idpForGroup(group, maps);
+                  const organization = maps.organizations.get(group.tenant_id);
+                  return `${organization?.name || group.tenant_id || ''} ${idp?.name || group.idp_id || ''} ${idp?.issuer || ''}`;
+                },
+                render: (group) => {
+                  const idp = idpForGroup(group, maps);
+                  const organization = maps.organizations.get(group.tenant_id);
+                  return (
+                    <span className="block min-w-0">
+                      <span className="block truncate font-semibold text-text-primary">{organization?.name || group.tenant_id || '-'}</span>
+                      <span className="mt-1 block truncate text-[11px] text-text-secondary">{idp?.name || group.idp_id || 'Identity provider'}</span>
+                    </span>
+                  );
+                },
+              },
               { key: 'members', label: 'Members', value: (group) => group.member_ids?.length || 0 },
               {
                 key: 'policy',
@@ -260,7 +392,10 @@ export default function PolicyApplyModal({
               },
             ]}
           />
-          <FormField label="Manual group name" hint="Use this when the group is known but not yet synchronized.">
+          <FormField
+            label="Manual group name"
+            hint={manualGroupScope ? `Scoped to ${manualGroupScope}.` : 'Scoped after an organization is selected.'}
+          >
             <FormInput value={form.group_name} onChange={(event) => setForm({ ...form, group_name: event.target.value })} placeholder="Finance" />
           </FormField>
         </>

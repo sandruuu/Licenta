@@ -4,32 +4,23 @@ networks:
 
 volumes:
   gateway-certs:
-  gateway-config:
+    name: ${GATEWAY_CERT_VOLUME:-gateway_gateway-certs}
 
 services:
   gateway:
     build:
       context: .
       dockerfile: Dockerfile.gateway
-    container_name: ztna-gateway
+    container_name: ${GATEWAY_CONTAINER_NAME:-ztna-gateway}
     restart: unless-stopped
+    extra_hosts:
+      - "pdp.ztna.local:host-gateway"
     ports:
-      - "9443:9443"
-      - "8080:8080"
-      - "80:80"
-    volumes:
-      - gateway-config:/app/config
-      - gateway-certs:/app/certs
+      - "${GATEWAY_HOST_PORT:-9443}:9443"
     environment:
-      - CLOUD_URL=${CLOUD_URL:-https://pdp.ztna.local:8443}
-      - GATEWAY_TENANT_ID=${GATEWAY_TENANT_ID:-tenant-1}
-      - GATEWAY_ID=${GATEWAY_ID:-gateway-docker}
-      - GATEWAY_ENDPOINT=${GATEWAY_ENDPOINT:-gateway.ztna.local:9443}
-      - GATEWAY_ENROLLMENT_TOKEN=${GATEWAY_ENROLLMENT_TOKEN:-}
-      - GATEWAY_CONTROL_ENABLED=${GATEWAY_CONTROL_ENABLED:-true}
-      - PKI_URL=${PKI_URL:-}
-      - PKI_TOKEN=${PKI_TOKEN:-}
-      - PKI_PATH=${PKI_PATH:-pki_int}
-      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
+      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:-}
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - gateway-certs:/app/certs
     networks:
       - gateway-net

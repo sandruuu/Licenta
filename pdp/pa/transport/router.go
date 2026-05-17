@@ -115,7 +115,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 		}
 	}
 	if policyAdmin.Gateways != nil {
-		policyAdmin.Gateways.SetCertificateAuthority(s.signCSR, s.revokeCertificate)
+		policyAdmin.Gateways.SetCertificateAuthority(s.signGatewayCSR, s.revokeCertificate)
 	}
 
 	s.registerRoutes()
@@ -193,7 +193,6 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Gateway endpoints (strict mTLS + enrolled gateway identity)
 	// ─────────────────────────────────────────────
-	s.mux.Handle("/api/gateway/revoked-serials", s.requireClientCert(s.gatewayAuthMiddleware(http.HandlerFunc(s.handleRevokedSerials))))
 
 	// ─────────────────────────────────────────────
 	// Authenticated user endpoints (JWT auth)

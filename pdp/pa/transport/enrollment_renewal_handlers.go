@@ -87,20 +87,3 @@ func enrollmentClientMessage(err error) string {
 	}
 	return message
 }
-
-// handleRevokedSerials handles GET /api/gateway/revoked-serials — gateway syncs revocation cache
-func (s *Server) handleRevokedSerials(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	serials := s.pa.Store.GetRevokedSerials()
-	if serials == nil {
-		serials = []string{}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"revoked_serials": serials,
-	})
-}

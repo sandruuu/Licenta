@@ -1,4 +1,4 @@
-package relay
+package dataplane
 
 import (
 	"fmt"
@@ -11,8 +11,8 @@ type Relay struct {
 	DialTimeout time.Duration
 }
 
-func New() *Relay {
-	return &Relay{DialTimeout: 10 * time.Second}
+func NewRelay(dialTimeout time.Duration) *Relay {
+	return &Relay{DialTimeout: dialTimeout}
 }
 
 func (relay *Relay) Connect(host string, port int) (net.Conn, error) {
@@ -24,7 +24,7 @@ func (relay *Relay) Connect(host string, port int) (net.Conn, error) {
 	}
 	timeout := relay.DialTimeout
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		return nil, fmt.Errorf("relay dial timeout must be configured")
 	}
 	return net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
 }

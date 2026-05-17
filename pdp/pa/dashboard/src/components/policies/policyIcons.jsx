@@ -3,18 +3,18 @@ import {
   CheckCircle2,
   FileText,
   Layers3,
-  MonitorCheck,
   Server,
   SlidersHorizontal,
   Users,
   XCircle,
   ShieldAlert,
+  LaptopMinimalCheck,
 } from 'lucide-react';
 
 export const sectionIcons = {
   details: FileText,
   action: SlidersHorizontal,
-  device: MonitorCheck,
+  device: LaptopMinimalCheck,
 };
 
 export const layerIcons = {

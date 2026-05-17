@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"gateway/internal/auth"
 	"gateway/internal/provisioning"
 )
 
@@ -28,7 +27,7 @@ func TestValidateProvisionedConnectAcceptsPASession(t *testing.T) {
 		t.Fatalf("ProvisionSession() error = %v", err)
 	}
 
-	session, code, message := gateway.validateProvisionedConnect(&auth.ConnectRequest{
+	session, code, message := gateway.validateProvisionedConnect(&ConnectRequest{
 		SessionID:    "sess-1",
 		SessionToken: "session-secret",
 		DeviceID:     "device-1",
@@ -46,14 +45,14 @@ func TestValidateProvisionedConnectAcceptsPASession(t *testing.T) {
 
 func TestValidateProvisionedConnectRejectsLegacyBearerOnly(t *testing.T) {
 	gateway := &Gateway{provisioned: provisioning.NewStore()}
-	_, code, message := gateway.validateProvisionedConnect(&auth.ConnectRequest{
-		Token:      "cloud-access-token",
+	_, code, message := gateway.validateProvisionedConnect(&ConnectRequest{
+		Token:      "legacy-access-token",
 		DeviceID:   "device-1",
 		RemoteAddr: "100.64.0.10",
 		RemotePort: 22,
 	}, &connectionState{certDeviceID: "device-1"})
-	if code != auth.CodeSessionInvalid {
-		t.Fatalf("code = %q, want %q (message=%q)", code, auth.CodeSessionInvalid, message)
+	if code != CodeSessionInvalid {
+		t.Fatalf("code = %q, want %q (message=%q)", code, CodeSessionInvalid, message)
 	}
 }
 
@@ -76,7 +75,7 @@ func TestRevokeProvisionedSessionDeniesConnect(t *testing.T) {
 		t.Fatal("RevokeProvisionedSession() = false")
 	}
 
-	_, code, message := gateway.validateProvisionedConnect(&auth.ConnectRequest{
+	_, code, message := gateway.validateProvisionedConnect(&ConnectRequest{
 		SessionID:    "sess-1",
 		SessionToken: "session-secret",
 		DeviceID:     "device-1",
@@ -84,8 +83,8 @@ func TestRevokeProvisionedSessionDeniesConnect(t *testing.T) {
 		Protocol:     "ssh",
 		RemotePort:   22,
 	}, &connectionState{certDeviceID: "device-1"})
-	if code != auth.CodeSessionInvalid {
-		t.Fatalf("code = %q, want %q (message=%q)", code, auth.CodeSessionInvalid, message)
+	if code != CodeSessionInvalid {
+		t.Fatalf("code = %q, want %q (message=%q)", code, CodeSessionInvalid, message)
 	}
 }
 
@@ -103,12 +102,12 @@ func TestDNSResolveIsNotAcceptedByStrictGateway(t *testing.T) {
 	if _, err := clientConn.Write([]byte(`{"type":"dns_resolve","domain":"db.internal"}` + "\n")); err != nil {
 		t.Fatalf("write request: %v", err)
 	}
-	var response auth.ConnectResponse
+	var response ConnectResponse
 	if err := json.NewDecoder(clientConn).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Code != auth.CodeBadRequest {
-		t.Fatalf("code = %q, want %q", response.Code, auth.CodeBadRequest)
+	if response.Code != CodeBadRequest {
+		t.Fatalf("code = %q, want %q", response.Code, CodeBadRequest)
 	}
 	<-done
 }

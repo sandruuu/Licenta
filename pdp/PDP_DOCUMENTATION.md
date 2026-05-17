@@ -66,10 +66,11 @@ The rename does not change the external protocol surface:
 - `ztna.catalog.v1.DeviceCatalogService/GetCatalog`
 - `ztna.device.v1.DeviceTelemetryService/ReportPosture`
 - `ztna.device.v1.DeviceTelemetryService/Heartbeat`
-- `ztna.gateway.v1.GatewayEnrollmentService/Enroll`
-- `ztna.gateway.v1.GatewayEnrollmentService/RenewCertificate`
-- `ztna.gateway.v1.GatewayControlService/ControlStream`
-- `GET /api/gateway/revoked-serials`
+- `gateway.GatewayEnrollmentService/Enroll`
+- `gateway.GatewayEnrollmentService/RenewCertificate`
+- `gateway.GatewayTrustService/GetCACertificate`
+- `gateway.GatewayTrustService/GetRevokedSerials`
+- `gateway.GatewayControlService/ControlStream`
 - `/api/admin/*`
 - OIDC endpoints under `/auth/*`
 

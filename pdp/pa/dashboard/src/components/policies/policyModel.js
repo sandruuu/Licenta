@@ -38,8 +38,7 @@ export const LAYERS = [
 export const POLICY_SECTIONS = [
   {
     id: 'details',
-    label: 'Name & details',
-    category: 'Policy',
+    label: 'Details',
     required: true,
     description: 'Name the policy and review where it is currently applied.',
     protects: 'Clear ownership and descriptions make policy changes auditable.',
@@ -48,7 +47,6 @@ export const POLICY_SECTIONS = [
   {
     id: 'action',
     label: 'Authentication policy',
-    category: 'Users',
     required: true,
     description: 'Choose what happens when all added policy settings match.',
     protects: 'Makes the final access decision explicit and easy to review.',
@@ -56,14 +54,57 @@ export const POLICY_SECTIONS = [
   },
   {
     id: 'device',
-    label: 'Duo Desktop & device health',
-    category: 'Devices',
-    fields: ['required_checks', 'required_check_status'],
+    label: 'Device compliance',
+    fields: ['required_checks'],
     description: 'Require agent-reported device checks to match.',
     protects: 'Keeps unmanaged or unhealthy devices from reaching protected resources.',
     recommendation: 'Start with one or two high-signal checks, then expand after devices report consistently.',
   },
 ];
+
+export const DEFAULT_DEVICE_CHECK_OPTIONS = [
+  {
+    value: 'Operating System',
+    label: 'Operating System',
+    description: 'OS name, version, build, architecture, and uptime.',
+  },
+  {
+    value: 'Firewall',
+    label: 'Firewall',
+    description: 'Windows firewall profile state.',
+  },
+  {
+    value: 'Antivirus',
+    label: 'Antivirus',
+    description: 'Detected antivirus, real-time protection, and definitions.',
+  },
+  {
+    value: 'Disk Encryption',
+    label: 'Disk Encryption',
+    description: 'System drive encryption and protection state.',
+  },
+  {
+    value: 'Windows Updates',
+    label: 'Windows Updates',
+    description: 'Pending updates and last installed hotfix.',
+  },
+  {
+    value: 'Password & Lock',
+    label: 'Password & Lock',
+    description: 'Password and screen lock posture.',
+  },
+];
+
+const EXCLUDED_DEVICE_CHECK_NAMES = new Set(['connectivity']);
+
+export function isSupportedDeviceCheck(checkName) {
+  const normalizedName = String(checkName || '').trim().toLowerCase();
+  return normalizedName !== '' && !EXCLUDED_DEVICE_CHECK_NAMES.has(normalizedName);
+}
+
+export function requiredDeviceChecksFromValue(value) {
+  return splitList(value).filter(isSupportedDeviceCheck);
+}
 
 export const POLICY_GROUPS = [
   { label: 'Access', sections: ['action'] },
@@ -73,7 +114,6 @@ export const POLICY_GROUPS = [
 export const EMPTY_POLICY_FORM = {
   name: '',
   description: '',
-  priority: 100,
   enabled: true,
   action: 'allow',
   required_checks: '',
@@ -94,6 +134,7 @@ export const EMPTY_ASSIGNMENT_FORM = {
 };
 
 export function splitList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || '').trim()).filter(Boolean);
   return String(value || '')
     .split(',')
     .map((item) => item.trim())
@@ -102,6 +143,24 @@ export function splitList(value) {
 
 export function listToText(value) {
   return Array.isArray(value) ? value.join(', ') : '';
+}
+
+export function deviceCheckOptionsFromReports(reports = []) {
+  const optionsByName = new Map(DEFAULT_DEVICE_CHECK_OPTIONS.map((option) => [option.value, option]));
+  reports.forEach((report) => {
+    (report?.checks || []).forEach((check) => {
+      const name = String(check?.name || '').trim();
+      if (!isSupportedDeviceCheck(name) || optionsByName.has(name)) return;
+      optionsByName.set(name, {
+        value: name,
+        label: name,
+        description: check.description || 'Reported by device posture telemetry.',
+      });
+    });
+  });
+  return [...optionsByName.values()]
+    .filter((option) => isSupportedDeviceCheck(option.value))
+    .sort((left, right) => left.label.localeCompare(right.label));
 }
 
 export function compactObject(value) {
@@ -129,10 +188,9 @@ export function policyFormFromRule(rule) {
     id: rule?.id,
     name: rule?.name || '',
     description: rule?.description || '',
-    priority: rule?.priority || 100,
     enabled: rule?.enabled !== false,
     action: rule?.action || 'allow',
-    required_checks: listToText(conditions.required_checks),
+    required_checks: listToText(requiredDeviceChecksFromValue(conditions.required_checks)),
     required_check_status: conditions.required_check_status || '',
   };
 }
@@ -147,9 +205,10 @@ export function inferEnabledSections(form) {
 }
 
 export function conditionsFromForm(form, enabledSections = inferEnabledSections(form)) {
+  const requiredChecks = requiredDeviceChecksFromValue(form.required_checks);
   return compactObject({
-    required_checks: enabledSections.device ? splitList(form.required_checks) : [],
-    required_check_status: enabledSections.device ? form.required_check_status : '',
+    required_checks: enabledSections.device ? requiredChecks : [],
+    required_check_status: enabledSections.device && requiredChecks.length ? form.required_check_status : '',
   });
 }
 
@@ -172,6 +231,13 @@ export function layerWeight(level) {
   return layerMeta(level).order;
 }
 
+export function assignmentScopeLabel(assignment, maps) {
+  const organization = maps.organizations?.get(assignment.tenant_id)?.name || assignment.tenant_id || '';
+  const group = maps.groups?.get(assignment.group_id);
+  const idp = group?.idp_id ? maps.idps?.get(group.idp_id) : null;
+  return [organization, idp?.name || group?.idp_id].filter(Boolean).join(' / ');
+}
+
 export function targetLabel(assignment, maps) {
   const organization = maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id || 'Organization';
   const resource = maps.resources.get(assignment.resource_id)?.name || assignment.resource_id || 'Resource';
@@ -192,7 +258,9 @@ export function selectedCountForLayer(form) {
   if (form.level === 'resource') return form.resource_ids?.length || 0;
   if (form.level === 'group') return form.group_ids?.length || (form.group_name?.trim() ? 1 : 0);
   if (form.level === 'resource_group') {
-    return Math.min(form.resource_ids?.length || 0, form.group_ids?.length || (form.group_name?.trim() ? 1 : 0));
+    const resourceCount = form.resource_ids?.length || 0;
+    const groupCount = form.group_ids?.length || (form.group_name?.trim() ? 1 : 0);
+    return resourceCount * groupCount;
   }
   return form.tenant_id ? 1 : 0;
 }

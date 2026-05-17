@@ -32,35 +32,34 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 		return nil, fmt.Errorf("%w: revoked gateways cannot be enrolled", ErrForbidden)
 	}
 	if strings.TrimSpace(gateway.TenantID) == "" {
-		return nil, fmt.Errorf("%w: gateway tenant_id is required before enrollment", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: gateway organization_id is required before enrollment", ErrInvalidRequest)
 	}
-	if requestGatewayID := strings.TrimSpace(req.GatewayID); requestGatewayID != "" && requestGatewayID != gateway.ID {
-		return nil, fmt.Errorf("%w: enrollment gateway_id does not match token gateway", ErrForbidden)
-	}
-	if requestTenantID := strings.TrimSpace(req.TenantID); requestTenantID != "" && requestTenantID != gateway.TenantID {
-		return nil, fmt.Errorf("%w: enrollment tenant_id does not match token tenant", ErrForbidden)
-	}
-
 	csr, err := parseGatewayCSR(req.CSRPEM)
 	if err != nil {
 		return nil, err
 	}
-	fqdn := strings.TrimSpace(req.FQDN)
+	fqdn := strings.TrimSpace(gateway.FQDN)
 	if fqdn == "" {
-		fqdn = strings.TrimSpace(gateway.FQDN)
+		return nil, fmt.Errorf("%w: gateway FQDN is required before enrollment", ErrInvalidRequest)
 	}
-	if err := validateGatewayCSRIdentity(csr, gateway, fqdn); err != nil {
+	if err := validateGatewayCSRRequest(csr, gateway, fqdn); err != nil {
 		return nil, err
 	}
 	if !s.store.ConsumeGatewayEnrollmentToken(gateway.ID, req.Token, s.clock()) {
 		return nil, ErrInvalidEnrollmentToken
 	}
 
-	certPEM, err := s.signer([]byte(req.CSRPEM), s.certificateValidityDays, s.pkiRole)
+	profile, err := gatewayCertificateProfile(gateway)
 	if err != nil {
+		return nil, err
+	}
+	certPEM, err := s.signer([]byte(req.CSRPEM), s.certificateValidityDays, s.pkiRole, profile)
+	if err != nil {
+		s.store.SaveGateway(gateway)
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
 	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
+		s.store.SaveGateway(gateway)
 		return nil, err
 	}
 	certFingerprint, certSerial := certificateIdentity(certPEM)
@@ -75,12 +74,6 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	gateway.CertExpiresAt = now.Add(s.certificateValidity()).Format(time.RFC3339)
 	gateway.OIDCClientID = ""
 	gateway.OIDCClientSecret = ""
-	if fqdn != "" {
-		gateway.FQDN = fqdn
-	}
-	if name := strings.TrimSpace(req.Name); name != "" {
-		gateway.Name = name
-	}
 	gateway.UpdatedAt = now
 	gateway.LastSeenAt = now
 	s.store.SaveGateway(gateway)
@@ -103,8 +96,12 @@ func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string
 	if err != nil {
 		return nil, err
 	}
-	if err := validateGatewayCSRIdentity(csr, gateway, strings.TrimSpace(gateway.FQDN)); err != nil {
+	if err := validateGatewayCSRRequest(csr, gateway, strings.TrimSpace(gateway.FQDN)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrForbidden, err)
+	}
+	profile, err := gatewayCertificateProfile(gateway)
+	if err != nil {
+		return nil, err
 	}
 
 	oldSerial := gateway.CertSerial
@@ -114,7 +111,7 @@ func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string
 		oldExpiresOn = parsedExpiry
 	}
 
-	certPEM, err := s.signer([]byte(csrPEM), s.certificateValidityDays, s.pkiRole)
+	certPEM, err := s.signer([]byte(csrPEM), s.certificateValidityDays, s.pkiRole, profile)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}

@@ -6,6 +6,8 @@ import {
   deletePolicy,
   deletePolicyAssignment,
   getDirectoryGroups,
+  getDevicePostureReports,
+  getIdPs,
   getOrganizations,
   getPolicies,
   getPolicyAssignments,
@@ -25,6 +27,7 @@ import {
   LAYERS,
   conditionSummary,
   conditionsFromForm,
+  deviceCheckOptionsFromReports,
   inferEnabledSections,
   policyFormFromRule,
 } from '../components/policies/policyModel';
@@ -34,8 +37,10 @@ export default function Policies() {
   const [policies, setPolicies] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [organizations, setOrganizations] = useState([]);
+  const [idps, setIdPs] = useState([]);
   const [resources, setResources] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [deviceCheckOptions, setDeviceCheckOptions] = useState(deviceCheckOptionsFromReports());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -49,9 +54,10 @@ export default function Policies() {
   const maps = useMemo(() => ({
     policies: new Map(policies.map((policy) => [policy.id, policy])),
     organizations: new Map(organizations.map((organization) => [organization.id, organization])),
+    idps: new Map(idps.map((idp) => [idp.id, idp])),
     resources: new Map(resources.map((resource) => [resource.id, resource])),
     groups: new Map(groups.map((group) => [group.id, group])),
-  }), [policies, organizations, resources, groups]);
+  }), [policies, organizations, idps, resources, groups]);
 
   const defaultOrganizationID = useMemo(
     () => searchParams.get('organization_id') || organizations[0]?.id || '',
@@ -62,18 +68,27 @@ export default function Policies() {
     setLoading(true);
     setError('');
     try {
-      const [policyData, assignmentData, organizationData, resourceData, groupData] = await Promise.all([
+      const [policyData, assignmentData, organizationData, resourceData, groupData, devicePostureData] = await Promise.all([
         getPolicies(),
         getPolicyAssignments(),
         getOrganizations(),
         getResources(),
         getDirectoryGroups(),
+        getDevicePostureReports().catch(() => []),
       ]);
+      const organizationList = Array.isArray(organizationData) ? organizationData : [];
+      const idpLists = await Promise.all(
+        organizationList.map((organization) => (
+          getIdPs(organization.id).catch(() => [])
+        )),
+      );
       setPolicies(Array.isArray(policyData) ? policyData : []);
       setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
-      setOrganizations(Array.isArray(organizationData) ? organizationData : []);
+      setOrganizations(organizationList);
+      setIdPs(idpLists.flat().filter(Boolean));
       setResources(Array.isArray(resourceData) ? resourceData : []);
       setGroups(Array.isArray(groupData) ? groupData : []);
+      setDeviceCheckOptions(deviceCheckOptionsFromReports(Array.isArray(devicePostureData) ? devicePostureData : []));
     } catch (e) {
       setError(e.message || 'Failed to load policies');
     } finally {
@@ -104,7 +119,7 @@ export default function Policies() {
           ...conditionSummary(policy),
         ].some((value) => String(value || '').toLowerCase().includes(needle));
       })
-      .sort((left, right) => (left.priority || 100) - (right.priority || 100));
+      .sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')));
   }, [policies, assignmentsForPolicy, query, levelFilter]);
 
   const openPolicyEditor = (mode, policy = null) => {
@@ -134,7 +149,7 @@ export default function Policies() {
     const payload = {
       name: policyForm.name.trim(),
       description: policyForm.description.trim(),
-      priority: parseInt(policyForm.priority, 10) || 100,
+      priority: 100,
       enabled: policyForm.enabled !== false,
       action: policyForm.action,
       conditions: conditionsFromForm(policyForm, editor?.enabledSections),
@@ -160,7 +175,7 @@ export default function Policies() {
       await createPolicy({
         name: `${policy.name} copy`,
         description: policy.description || '',
-        priority: (policy.priority || 100) + 1,
+        priority: 100,
         enabled: false,
         action: policy.action || 'allow',
         conditions: policy.conditions || {},
@@ -291,6 +306,7 @@ export default function Policies() {
         setForm={setPolicyForm}
         assignments={assignmentsForPolicy(editor.policyID)}
         maps={maps}
+        deviceCheckOptions={deviceCheckOptions}
         saving={saving}
         onBack={() => setEditor(null)}
         onSave={handleSavePolicy}

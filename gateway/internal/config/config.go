@@ -5,149 +5,88 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
+const (
+	FileName           = "config.json"
+	EnrollmentTokenEnv = "GATEWAY_ENROLLMENT_TOKEN"
+
+	PACAPath        = "certs/pa-ca.crt"
+	GatewayCertPath = "certs/gateway.crt"
+	GatewayKeyPath  = "certs/gateway.key"
+	GatewayCSRPath  = "certs/gateway.csr"
+)
+
 type Config struct {
-	ListenAddr string `json:"listen_addr"`
-	FQDN       string `json:"fqdn,omitempty"`
-	TenantID   string `json:"tenant_id,omitempty"`
-
-	TLSCert           string `json:"tls_cert,omitempty"`
-	TLSKey            string `json:"tls_key,omitempty"`
-	TLSCA             string `json:"tls_ca,omitempty"`
-	ClientCA          string `json:"client_ca,omitempty"`
-	CloudCA           string `json:"cloud_ca,omitempty"`
-	RequireClientCert bool   `json:"require_client_cert"`
-	LetsEncrypt       bool   `json:"letsencrypt,omitempty"`
-	AutocertCacheDir  string `json:"autocert_cache_dir,omitempty"`
-	AutocertHTTPAddr  string `json:"autocert_http_addr,omitempty"`
-
-	MTLSCert string `json:"mtls_cert,omitempty"`
-	MTLSKey  string `json:"mtls_key,omitempty"`
-	MTLSCSR  string `json:"mtls_csr,omitempty"`
-
-	CloudURL        string              `json:"cloud_url"`
-	CloudCertSHA256 string              `json:"cloud_cert_sha256,omitempty"`
-	EnrollmentToken string              `json:"enrollment_token,omitempty"`
+	PAURL           string              `json:"pa_url"`
+	EnrollmentToken string              `json:"-"`
 	ControlPlane    *ControlPlaneConfig `json:"control_plane,omitempty"`
-
-	PKIURL         string `json:"pki_url,omitempty"`
-	PKIToken       string `json:"pki_token,omitempty"`
-	PKIPath        string `json:"pki_path,omitempty"`
-	PKIRoleGateway string `json:"pki_role_gateway,omitempty"`
-
-	DevMode               bool `json:"dev_mode,omitempty"`
-	MaxRelayBandwidthMbps int  `json:"max_relay_bandwidth_mbps,omitempty"`
 }
 
 type ControlPlaneConfig struct {
-	Enabled             bool   `json:"enabled,omitempty"`
-	PAURL               string `json:"pa_url,omitempty"`
-	GatewayID           string `json:"gateway_id,omitempty"`
-	GatewayEndpoint     string `json:"gateway_endpoint,omitempty"`
-	ServerName          string `json:"server_name,omitempty"`
-	CAFile              string `json:"ca_file,omitempty"`
-	CertFile            string `json:"cert_file,omitempty"`
-	KeyFile             string `json:"key_file,omitempty"`
-	ReconnectMinSeconds int    `json:"reconnect_min_seconds,omitempty"`
-	ReconnectMaxSeconds int    `json:"reconnect_max_seconds,omitempty"`
+	GatewayID      string `json:"-"`
+	OrganizationID string `json:"-"`
+	FQDN           string `json:"-"`
 }
 
 func DefaultConfig() *Config {
-	return &Config{
-		ListenAddr:            ":9443",
-		RequireClientCert:     true,
-		PKIPath:               "pki_int",
-		PKIRoleGateway:        "ztna-gateway",
-		AutocertCacheDir:      "certs/autocert",
-		AutocertHTTPAddr:      ":80",
-		MaxRelayBandwidthMbps: 400,
-		ControlPlane: &ControlPlaneConfig{
-			Enabled:             true,
-			ReconnectMinSeconds: 1,
-			ReconnectMaxSeconds: 30,
-		},
-	}
+	return &Config{ControlPlane: &ControlPlaneConfig{}}
 }
 
-func LoadFromFile(path string) (*Config, error) {
+func Load() (*Config, error) {
 	cfg := DefaultConfig()
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return nil, fmt.Errorf("config path is required")
-	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(FileName)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
-	cfg.ApplyEnvOverrides()
-	if err := cfg.ResolveSecretRefs(); err != nil {
+	if err := cfg.ApplyEnvironment(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-func (cfg *Config) SaveToFile(path string) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
+func (cfg *Config) Validate() error {
+	if cfg == nil {
+		return fmt.Errorf("config is required")
 	}
-	return AtomicWriteFile(path, append(data, '\n'), 0o600)
-}
-
-func (cfg *Config) ApplyEnvOverrides() {
-	setString(&cfg.ListenAddr, "GATEWAY_LISTEN_ADDR")
-	setString(&cfg.FQDN, "GATEWAY_FQDN")
-	setString(&cfg.TenantID, "GATEWAY_TENANT_ID")
-	setString(&cfg.TLSCert, "GATEWAY_TLS_CERT")
-	setString(&cfg.TLSKey, "GATEWAY_TLS_KEY")
-	setString(&cfg.TLSCA, "GATEWAY_TLS_CA")
-	setString(&cfg.ClientCA, "GATEWAY_CLIENT_CA")
-	setString(&cfg.CloudCA, "GATEWAY_CLOUD_CA")
-	setString(&cfg.MTLSCert, "GATEWAY_MTLS_CERT")
-	setString(&cfg.MTLSKey, "GATEWAY_MTLS_KEY")
-	setString(&cfg.MTLSCSR, "GATEWAY_MTLS_CSR")
-	setString(&cfg.CloudURL, "CLOUD_URL")
-	setString(&cfg.CloudCertSHA256, "CLOUD_CERT_SHA256")
-	setString(&cfg.EnrollmentToken, "GATEWAY_ENROLLMENT_TOKEN")
-	setString(&cfg.PKIURL, "PKI_URL")
-	setString(&cfg.PKIToken, "PKI_TOKEN")
-	setString(&cfg.PKIPath, "PKI_PATH")
-	setString(&cfg.PKIRoleGateway, "PKI_ROLE_GATEWAY")
-	setBool(&cfg.RequireClientCert, "GATEWAY_REQUIRE_CLIENT_CERT")
-	setBool(&cfg.LetsEncrypt, "GATEWAY_LETSENCRYPT")
-	setBool(&cfg.DevMode, "GATEWAY_DEV_MODE")
-	setInt(&cfg.MaxRelayBandwidthMbps, "GATEWAY_MAX_RELAY_BANDWIDTH_MBPS")
-
 	if cfg.ControlPlane == nil {
 		cfg.ControlPlane = &ControlPlaneConfig{}
 	}
-	setBool(&cfg.ControlPlane.Enabled, "GATEWAY_CONTROL_ENABLED")
-	setString(&cfg.ControlPlane.PAURL, "GATEWAY_CONTROL_PA_URL")
-	setString(&cfg.ControlPlane.GatewayID, "GATEWAY_ID")
-	setString(&cfg.ControlPlane.GatewayEndpoint, "GATEWAY_ENDPOINT")
-	setString(&cfg.ControlPlane.ServerName, "GATEWAY_CONTROL_SERVER_NAME")
-	setString(&cfg.ControlPlane.CAFile, "GATEWAY_CONTROL_CA_FILE")
-	setString(&cfg.ControlPlane.CertFile, "GATEWAY_CONTROL_CERT_FILE")
-	setString(&cfg.ControlPlane.KeyFile, "GATEWAY_CONTROL_KEY_FILE")
-	setInt(&cfg.ControlPlane.ReconnectMinSeconds, "GATEWAY_CONTROL_RECONNECT_MIN_SECONDS")
-	setInt(&cfg.ControlPlane.ReconnectMaxSeconds, "GATEWAY_CONTROL_RECONNECT_MAX_SECONDS")
+	var validationErrors []string
+	addValidationError := func(message string) {
+		validationErrors = append(validationErrors, message)
+	}
+	requiredString := func(field, value string) {
+		if strings.TrimSpace(value) == "" {
+			addValidationError(fmt.Sprintf("%s is required", field))
+		}
+	}
+
+	requiredString("pa_url", cfg.PAURL)
+
+	if len(validationErrors) > 0 {
+		return fmt.Errorf("invalid config: %s", strings.Join(validationErrors, "; "))
+	}
+	return nil
 }
 
-func (cfg *Config) ResolveSecretRefs() error {
-	secretFields := []*string{&cfg.PKIToken, &cfg.EnrollmentToken}
-	for _, field := range secretFields {
-		resolved, err := resolveSecretRef(*field)
-		if err != nil {
-			return err
-		}
-		*field = resolved
+func (cfg *Config) ApplyEnvironment() error {
+	token := strings.TrimSpace(os.Getenv(EnrollmentTokenEnv))
+	if token == "" {
+		return nil
 	}
+	resolved, err := resolveSecretRef(token)
+	if err != nil {
+		return err
+	}
+	cfg.EnrollmentToken = resolved
 	return nil
 }
 
@@ -189,32 +128,4 @@ func resolveSecretRef(value string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
-}
-
-func setString(target *string, key string) {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		*target = value
-	}
-}
-
-func setBool(target *bool, key string) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err == nil {
-		*target = parsed
-	}
-}
-
-func setInt(target *int, key string) {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return
-	}
-	parsed, err := strconv.Atoi(value)
-	if err == nil {
-		*target = parsed
-	}
 }

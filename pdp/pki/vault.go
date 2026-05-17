@@ -91,17 +91,29 @@ func NewVaultClient(cfg VaultConfig) (*VaultClient, error) {
 
 // SignCSR signs a PEM CSR via Vault role-based issuance and returns PEM bundle.
 func (v *VaultClient) SignCSR(csrPEM []byte, role, ttl string) ([]byte, error) {
-	return v.signCSR(csrPEM, role, ttl, "sign")
+	return v.signCSR(csrPEM, role, ttl, "sign", SignCSROptions{})
 }
 
 // SignCSRVerbatim signs a PEM CSR while preserving the CSR subject exactly.
 // This is useful for endpoint identities whose common name is a device ID,
 // not a DNS hostname.
 func (v *VaultClient) SignCSRVerbatim(csrPEM []byte, role, ttl string) ([]byte, error) {
-	return v.signCSR(csrPEM, role, ttl, "sign-verbatim")
+	return v.signCSR(csrPEM, role, ttl, "sign-verbatim", SignCSROptions{})
 }
 
-func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string) ([]byte, error) {
+type SignCSROptions struct {
+	CommonName string
+	DNSNames   []string
+	URISANs    []string
+}
+
+// SignCSRWithOptions signs a CSR while forcing the certificate identity fields
+// from PA-controlled state instead of trusting SANs requested by the CSR.
+func (v *VaultClient) SignCSRWithOptions(csrPEM []byte, role, ttl string, options SignCSROptions) ([]byte, error) {
+	return v.signCSR(csrPEM, role, ttl, "sign", options)
+}
+
+func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string, options SignCSROptions) ([]byte, error) {
 	role = strings.TrimSpace(role)
 	if role == "" {
 		return nil, fmt.Errorf("vault role is required")
@@ -117,6 +129,15 @@ func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string) ([]byt
 	}
 	if strings.TrimSpace(ttl) != "" {
 		reqBody["ttl"] = strings.TrimSpace(ttl)
+	}
+	if value := strings.TrimSpace(options.CommonName); value != "" {
+		reqBody["common_name"] = value
+	}
+	if value := strings.Join(trimNonEmpty(options.DNSNames), ","); value != "" {
+		reqBody["alt_names"] = value
+	}
+	if value := strings.Join(trimNonEmpty(options.URISANs), ","); value != "" {
+		reqBody["uri_sans"] = value
 	}
 
 	endpoint := fmt.Sprintf("%s/v1/%s/%s/%s", v.baseURL, v.pkiPath, operation, url.PathEscape(role))
@@ -194,6 +215,17 @@ func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string) ([]byt
 	}
 
 	return []byte(b.String()), nil
+}
+
+func trimNonEmpty(values []string) []string {
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			trimmed = append(trimmed, value)
+		}
+	}
+	return trimmed
 }
 
 // GetCAPEM returns the current Vault PKI CA certificate chain in PEM format.

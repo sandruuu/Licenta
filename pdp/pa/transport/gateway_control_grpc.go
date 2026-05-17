@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	gatewayControlGRPCServiceName = "ztna.gateway.v1.GatewayControlService"
-	gatewayControlGRPCStreamPath  = "/ztna.gateway.v1.GatewayControlService/ControlStream"
+	gatewayControlGRPCServiceName = "gateway.GatewayControlService"
+	gatewayControlGRPCStreamPath  = "/gateway.GatewayControlService/ControlStream"
 
 	gatewayControlCommandProvisionSession = pagateway.CommandProvisionSession
 	gatewayControlCommandRevokeSession    = pagateway.CommandRevokeSession
@@ -134,7 +134,7 @@ func (s *Server) authenticateGatewayCertificate(peerCert *x509.Certificate) (*mo
 	if peerCert == nil {
 		return nil, 401, "client certificate required for gateway authentication"
 	}
-	tenantID, gatewayID, ok := pagateway.GatewayCertificateIdentity(peerCert)
+	organizationID, gatewayID, ok := pagateway.GatewayCertificateIdentity(peerCert)
 	if !ok {
 		return nil, 401, "client certificate has no gateway URI SAN identity"
 	}
@@ -143,9 +143,9 @@ func (s *Server) authenticateGatewayCertificate(peerCert *x509.Certificate) (*mo
 		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q not found or not enrolled", gatewayID)
 		return nil, 403, "gateway not enrolled or certificate identity not recognized"
 	}
-	if strings.TrimSpace(gateway.TenantID) != tenantID {
-		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q tenant mismatch cert=%q store=%q", gatewayID, tenantID, gateway.TenantID)
-		return nil, 403, "gateway certificate tenant does not match enrollment record"
+	if strings.TrimSpace(gateway.TenantID) != organizationID {
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q organization mismatch cert=%q store=%q", gatewayID, organizationID, gateway.TenantID)
+		return nil, 403, "gateway certificate organization does not match enrollment record"
 	}
 	if strings.TrimSpace(gateway.CertFingerprint) == "" {
 		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q enrolled but has no certificate fingerprint on record", gatewayID)

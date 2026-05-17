@@ -112,13 +112,14 @@ func (s *Server) initDeviceCatalogGRPC() {
 	grpcServer.RegisterService(&deviceTelemetryGRPCServiceDesc, &deviceTelemetryGRPCService{server: s})
 	grpcServer.RegisterService(&agentAuthorizationGRPCServiceDesc, &agentAuthorizationGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayEnrollmentGRPCServiceDesc, &gatewayEnrollmentGRPCService{server: s})
+	grpcServer.RegisterService(&gatewayTrustGRPCServiceDesc, &gatewayTrustGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayControlGRPCServiceDesc, &gatewayControlGRPCService{server: s})
 	s.grpcHandler = grpcServer
 }
 
 func (s *Server) deviceCatalogGRPCAuthInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if info != nil && isGatewayEnrollmentGRPCMethod(info.FullMethod) {
+		if info != nil && isGatewayGRPCMethod(info.FullMethod) {
 			return handler(ctx, req)
 		}
 		peerCert, ok := clientCertificateFromGRPCContext(ctx)
@@ -134,8 +135,10 @@ func (s *Server) deviceCatalogGRPCAuthInterceptor() grpc.UnaryServerInterceptor 
 	}
 }
 
-func isGatewayEnrollmentGRPCMethod(fullMethod string) bool {
-	return strings.HasPrefix(strings.TrimSpace(fullMethod), "/"+gatewayEnrollmentGRPCServiceName+"/")
+func isGatewayGRPCMethod(fullMethod string) bool {
+	fullMethod = strings.TrimSpace(fullMethod)
+	return strings.HasPrefix(fullMethod, "/"+gatewayEnrollmentGRPCServiceName+"/") ||
+		strings.HasPrefix(fullMethod, "/"+gatewayTrustGRPCServiceName+"/")
 }
 
 func clientCertificateFromGRPCContext(ctx context.Context) (*x509.Certificate, bool) {

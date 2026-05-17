@@ -3,7 +3,6 @@ package dataplane
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -15,8 +14,6 @@ import (
 	"log"
 	"math/big"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -24,25 +21,36 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gateway/internal/auth"
+	gatewaycert "gateway/internal/cert"
 	"gateway/internal/config"
+	"gateway/internal/controlplane"
 	"gateway/internal/provisioning"
-	"gateway/internal/relay"
 
 	"github.com/hashicorp/yamux"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 const (
-	maxConnections      int64 = 1000
-	maxConnectionsPerIP int64 = 100
-	relayBufferSize           = 64 * 1024
+	agentListenAddr          = ":9443"
+	relayDialTimeout         = 10 * time.Second
+	maxConnections           = 1000
+	maxConnectionsPerIP      = 100
+	relayBufferSizeBytes     = 64 * 1024
+	yamuxMaxStreamWindowSize = 256 * 1024
+	yamuxStreamOpenTimeout   = 30 * time.Second
+	yamuxStreamCloseTimeout  = 5 * time.Minute
+	revocationSyncInterval   = time.Minute
+	certExpiryCheckInterval  = 12 * time.Hour
+	certExpiryCriticalWindow = 7 * 24 * time.Hour
+	certExpiryWarningWindow  = 30 * 24 * time.Hour
+	certRenewalCheckInterval = 6 * time.Hour
+	certRenewalWindow        = 48 * time.Hour
+	maxRelayBandwidthMbps    = 400
 )
 
 type Gateway struct {
-	cfg   *config.Config
-	cloud *auth.CloudClient
-	relay *relay.Relay
+	cfg          *config.Config
+	controlPlane *controlplane.Client
+	relay        *Relay
 
 	provisioned *provisioning.Store
 
@@ -69,18 +77,18 @@ type activeRelay struct {
 	cancel     func(reason string)
 }
 
-func New(cfg *config.Config, cloud *auth.CloudClient, relayManager *relay.Relay) *Gateway {
+func New(cfg *config.Config, controlPlaneClient *controlplane.Client, relayManager *Relay) *Gateway {
 	if relayManager == nil {
-		relayManager = relay.New()
+		relayManager = NewRelay(relayDialTimeout)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Gateway{
-		cfg:         cfg,
-		cloud:       cloud,
-		relay:       relayManager,
-		provisioned: provisioning.NewStore(),
-		ctx:         ctx,
-		cancel:      cancel,
+		cfg:          cfg,
+		controlPlane: controlPlaneClient,
+		relay:        relayManager,
+		provisioned:  provisioning.NewStore(),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 }
 
@@ -137,7 +145,7 @@ func (gateway *Gateway) ListenAndServe() error {
 	go gateway.revocationSyncLoop()
 	go gateway.certExpiryLoop()
 
-	log.Printf("[GATEWAY] strict PEP listening on %s", gateway.cfg.ListenAddr)
+	log.Printf("[GATEWAY] strict PEP listening on %s", agentListenAddr)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -152,52 +160,47 @@ func (gateway *Gateway) ListenAndServe() error {
 }
 
 func (gateway *Gateway) listen() (net.Listener, error) {
-	addr := strings.TrimSpace(gateway.cfg.ListenAddr)
-	if addr == "" {
-		addr = ":9443"
-	}
-
 	tlsConfig, useTLS, err := gateway.buildServerTLSConfig()
 	if err != nil {
 		return nil, err
 	}
-	baseListener, err := net.Listen("tcp", addr)
+	baseListener, err := net.Listen("tcp", agentListenAddr)
 	if err != nil {
 		return nil, err
 	}
 	if !useTLS {
 		baseListener.Close()
-		return nil, fmt.Errorf("tls_cert and tls_key are required")
+		return nil, fmt.Errorf("gateway certificate and key are required")
 	}
 	return tls.NewListener(baseListener, tlsConfig), nil
 }
 
 func (gateway *Gateway) buildServerTLSConfig() (*tls.Config, bool, error) {
-	useAutocert := gateway.cfg.LetsEncrypt && strings.TrimSpace(gateway.cfg.FQDN) != ""
-	certPath := strings.TrimSpace(gateway.cfg.TLSCert)
-	keyPath := strings.TrimSpace(gateway.cfg.TLSKey)
-
-	if !useAutocert && (certPath == "" || keyPath == "") {
-		return nil, false, nil
-	}
-
 	clientCAPool, err := gateway.clientCAPool()
 	if err != nil {
 		return nil, false, err
 	}
-	if gateway.cfg.RequireClientCert && clientCAPool == nil {
-		return nil, false, fmt.Errorf("require_client_cert=true requires client_ca, tls_ca, cloud_ca, or a reachable cloud CA endpoint")
+	if clientCAPool == nil {
+		return nil, false, fmt.Errorf("Agent mTLS requires PA CA or a reachable PA CA endpoint")
+	}
+	if _, err := loadGatewayServerCertificate(); err != nil {
+		return nil, false, err
 	}
 
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		ClientCAs:  clientCAPool,
-		VerifyConnection: func(state tls.ConnectionState) error {
-			if gateway.cfg.RequireClientCert && len(state.PeerCertificates) == 0 {
-				return fmt.Errorf("client certificate is required")
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cert, err := loadGatewayServerCertificate()
+			if err != nil {
+				return nil, err
 			}
+			return &cert, nil
+		},
+		VerifyConnection: func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
-				return nil
+				return fmt.Errorf("client certificate is required")
 			}
 			cert := state.PeerCertificates[0]
 			for _, key := range serialLookupKeys(cert.SerialNumber) {
@@ -208,47 +211,22 @@ func (gateway *Gateway) buildServerTLSConfig() (*tls.Config, bool, error) {
 			return nil
 		},
 	}
-	if clientCAPool != nil {
-		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
-		if gateway.cfg.RequireClientCert {
-			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
-		}
-	}
 
-	if useAutocert {
-		cacheDir := firstNonEmpty(gateway.cfg.AutocertCacheDir, "certs/autocert")
-		manager := &autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			Cache:      autocert.DirCache(cacheDir),
-			HostPolicy: autocert.HostWhitelist(gateway.cfg.FQDN),
-		}
-		tlsConfig.GetCertificate = manager.GetCertificate
-		challengeAddr := firstNonEmpty(gateway.cfg.AutocertHTTPAddr, ":80")
-		go func() {
-			server := &http.Server{Addr: challengeAddr, Handler: manager.HTTPHandler(nil), ReadHeaderTimeout: 5 * time.Second}
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("[GATEWAY] ACME HTTP-01 server failed: %v", err)
-			}
-		}()
-		return tlsConfig, true, nil
-	}
-
-	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-	if err != nil {
-		return nil, false, fmt.Errorf("load TLS key pair: %w", err)
-	}
-	tlsConfig.Certificates = []tls.Certificate{cert}
 	return tlsConfig, true, nil
+}
+
+func loadGatewayServerCertificate() (tls.Certificate, error) {
+	cert, err := gatewaycert.LoadGatewayKeyPairAndValidateCert(config.GatewayCertPath, config.GatewayKeyPath)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("load gateway TLS key pair: %w", err)
+	}
+	return cert, nil
 }
 
 func (gateway *Gateway) clientCAPool() (*x509.CertPool, error) {
 	pool := x509.NewCertPool()
 	added := false
-	for _, path := range []string{gateway.cfg.ClientCA, gateway.cfg.TLSCA, gateway.cfg.CloudCA} {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
+	for _, path := range []string{config.PACAPath} {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read client CA %s: %w", path, err)
@@ -258,13 +236,13 @@ func (gateway *Gateway) clientCAPool() (*x509.CertPool, error) {
 		}
 		added = true
 	}
-	if gateway.cloud != nil {
-		if caPEM, err := gateway.cloud.GetCACert(); err == nil && len(caPEM) > 0 {
+	if gateway.controlPlane != nil {
+		if caPEM, err := gateway.controlPlane.GetCACert(); err == nil && len(caPEM) > 0 {
 			if pool.AppendCertsFromPEM(caPEM) {
 				added = true
 			}
-		} else if gateway.cfg.RequireClientCert {
-			log.Printf("[GATEWAY] cloud CA fetch failed: %v", err)
+		} else {
+			log.Printf("[GATEWAY] PA CA fetch failed: %v", err)
 		}
 	}
 	if !added {
@@ -306,9 +284,9 @@ func (gateway *Gateway) handleConnection(conn net.Conn) {
 	}
 
 	yamuxConfig := yamux.DefaultConfig()
-	yamuxConfig.MaxStreamWindowSize = 256 * 1024
-	yamuxConfig.StreamOpenTimeout = 30 * time.Second
-	yamuxConfig.StreamCloseTimeout = 5 * time.Minute
+	yamuxConfig.MaxStreamWindowSize = yamuxMaxStreamWindowSize
+	yamuxConfig.StreamOpenTimeout = yamuxStreamOpenTimeout
+	yamuxConfig.StreamCloseTimeout = yamuxStreamCloseTimeout
 	session, err := yamux.Server(conn, yamuxConfig)
 	if err != nil {
 		log.Printf("[GATEWAY] yamux session failed from %s: %v", state.remoteAddr, err)
@@ -342,64 +320,64 @@ func (gateway *Gateway) handleStream(stream net.Conn, state *connectionState) {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		_ = json.NewEncoder(stream).Encode(auth.ConnectResponse{Type: "connect_response", Status: "denied", Code: auth.CodeBadRequest, Message: "invalid JSON frame"})
+		_ = json.NewEncoder(stream).Encode(ConnectResponse{Type: "connect_response", Status: "denied", Code: CodeBadRequest, Message: "invalid JSON frame"})
 		return
 	}
 
 	switch envelope.Type {
 	case "hello":
-		var request auth.HelloRequest
+		var request HelloRequest
 		if err := json.Unmarshal(raw, &request); err != nil {
-			_ = json.NewEncoder(stream).Encode(auth.HelloResponse{Type: "hello_ack", Code: auth.CodeBadRequest, Message: "invalid hello frame"})
+			_ = json.NewEncoder(stream).Encode(HelloResponse{Type: "hello_ack", Code: CodeBadRequest, Message: "invalid hello frame"})
 			return
 		}
 		gateway.handleHello(stream, &request)
 	case "connect":
-		var request auth.ConnectRequest
+		var request ConnectRequest
 		if err := json.Unmarshal(raw, &request); err != nil {
-			_ = json.NewEncoder(stream).Encode(auth.ConnectResponse{Type: "connect_response", Status: "denied", Code: auth.CodeBadRequest, Message: "invalid connect frame"})
+			_ = json.NewEncoder(stream).Encode(ConnectResponse{Type: "connect_response", Status: "denied", Code: CodeBadRequest, Message: "invalid connect frame"})
 			return
 		}
 		gateway.handleConnectRequest(stream, &request, state)
 	default:
-		_ = json.NewEncoder(stream).Encode(auth.ConnectResponse{Type: "connect_response", Status: "denied", Code: auth.CodeBadRequest, Message: "unsupported gateway request type"})
+		_ = json.NewEncoder(stream).Encode(ConnectResponse{Type: "connect_response", Status: "denied", Code: CodeBadRequest, Message: "unsupported gateway request type"})
 	}
 }
 
-func (gateway *Gateway) handleHello(stream net.Conn, request *auth.HelloRequest) {
-	response := auth.HelloResponse{
+func (gateway *Gateway) handleHello(stream net.Conn, request *HelloRequest) {
+	response := HelloResponse{
 		Type:             "hello_ack",
-		Code:             auth.CodeOK,
-		ServerVersion:    auth.ProtocolVersion,
-		MinClientVersion: auth.ProtocolMinClientVersion,
-		MaxClientVersion: auth.ProtocolMaxClientVersion,
+		Code:             CodeOK,
+		ServerVersion:    ProtocolVersion,
+		MinClientVersion: ProtocolMinClientVersion,
+		MaxClientVersion: ProtocolMaxClientVersion,
 		Features:         []string{"pa-provisioned-connect", "yamux", "mtls"},
 	}
 	if request == nil || strings.TrimSpace(request.ClientVersion) == "" {
-		response.Code = auth.CodeBadRequest
+		response.Code = CodeBadRequest
 		response.Message = "client_version is required"
 	}
 	_ = json.NewEncoder(stream).Encode(response)
 }
 
-func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *auth.ConnectRequest, state *connectionState) {
+func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *ConnectRequest, state *connectionState) {
 	encoder := json.NewEncoder(stream)
 	session, code, message := gateway.validateProvisionedConnect(request, state)
 	if code != "" {
 		log.Printf("[GATEWAY] denied connect from %s device=%s resource=%s code=%s process=%s",
 			state.remoteAddr, request.DeviceID, request.ResourceID, code, processLogName(request.Process))
-		_ = encoder.Encode(auth.ConnectResponse{Type: "connect_response", Status: "denied", Code: code, Message: message})
+		_ = encoder.Encode(ConnectResponse{Type: "connect_response", Status: "denied", Code: code, Message: message})
 		return
 	}
 
 	targetConn, err := gateway.relay.Connect(session.InternalHost, session.InternalPort)
 	if err != nil {
 		log.Printf("[GATEWAY] relay connect failed session=%s target=%s:%d err=%v", session.ID, session.InternalHost, session.InternalPort, err)
-		_ = encoder.Encode(auth.ConnectResponse{Type: "connect_response", Status: "denied", Code: auth.CodeCloudUnreachable, Message: "internal resource is unavailable"})
+		_ = encoder.Encode(ConnectResponse{Type: "connect_response", Status: "denied", Code: CodeResourceUnavailable, Message: "internal resource is unavailable"})
 		return
 	}
 
-	if err := encoder.Encode(auth.ConnectResponse{Type: "connect_response", Status: "connected", Code: auth.CodeOK, Message: "connected"}); err != nil {
+	if err := encoder.Encode(ConnectResponse{Type: "connect_response", Status: "connected", Code: CodeOK, Message: "connected"}); err != nil {
 		_ = targetConn.Close()
 		return
 	}
@@ -439,7 +417,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *auth.Conn
 		}()
 	}
 
-	bytesPerSecond := relayLimitBytesPerSecond(session.MaxBandwidthMbps, gateway.cfg.MaxRelayBandwidthMbps)
+	bytesPerSecond := relayLimitBytesPerSecond(session.MaxBandwidthMbps, maxRelayBandwidthMbps)
 	log.Printf("[GATEWAY] relay opened id=%s session=%s device=%s resource=%s target=%s:%d process=%s",
 		relayID, session.ID, session.DeviceID, session.ResourceID, session.InternalHost, session.InternalPort, processLogName(request.Process))
 
@@ -447,7 +425,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *auth.Conn
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		n, err := rateLimitedCopy(targetConn, stream, bytesPerSecond, relayBufferSize)
+		n, err := rateLimitedCopy(targetConn, stream, bytesPerSecond, relayBufferSizeBytes)
 		if err != nil && relayCtx.Err() == nil {
 			log.Printf("[GATEWAY] client->target copy ended id=%s bytes=%d err=%v", relayID, n, err)
 		}
@@ -455,7 +433,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *auth.Conn
 	}()
 	go func() {
 		defer wg.Done()
-		n, err := rateLimitedCopy(stream, targetConn, bytesPerSecond, relayBufferSize)
+		n, err := rateLimitedCopy(stream, targetConn, bytesPerSecond, relayBufferSizeBytes)
 		if err != nil && relayCtx.Err() == nil {
 			log.Printf("[GATEWAY] target->client copy ended id=%s bytes=%d err=%v", relayID, n, err)
 		}
@@ -464,18 +442,18 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *auth.Conn
 	wg.Wait()
 }
 
-func (gateway *Gateway) validateProvisionedConnect(request *auth.ConnectRequest, state *connectionState) (*provisioning.Session, string, string) {
+func (gateway *Gateway) validateProvisionedConnect(request *ConnectRequest, state *connectionState) (*provisioning.Session, string, string) {
 	if request == nil {
-		return nil, auth.CodeBadRequest, "connect request is required"
+		return nil, CodeBadRequest, "connect request is required"
 	}
 	if strings.TrimSpace(request.SessionID) == "" || strings.TrimSpace(request.SessionToken) == "" {
-		return nil, auth.CodeSessionInvalid, "connect requires a PA-provisioned session_id and session_token"
+		return nil, CodeSessionInvalid, "connect requires a PA-provisioned session_id and session_token"
 	}
 	if state != nil && state.certDeviceID != "" && strings.TrimSpace(request.DeviceID) != state.certDeviceID {
-		return nil, auth.CodeAuthInvalid, "device certificate does not match connect request"
+		return nil, CodeAuthInvalid, "device certificate does not match connect request"
 	}
 	if gateway.provisioned == nil {
-		return nil, auth.CodeSessionInvalid, "no PA-provisioned sessions are available"
+		return nil, CodeSessionInvalid, "no PA-provisioned sessions are available"
 	}
 	session, err := gateway.provisioned.Validate(provisioning.ConnectCheck{
 		SessionID:    request.SessionID,
@@ -491,19 +469,20 @@ func (gateway *Gateway) validateProvisionedConnect(request *auth.ConnectRequest,
 	validationErr, _ := provisioning.AsValidationError(err)
 	switch validationErr.Code {
 	case provisioning.CodeBadRequest:
-		return nil, auth.CodeBadRequest, validationErr.Message
+		return nil, CodeBadRequest, validationErr.Message
 	default:
-		return nil, auth.CodeSessionInvalid, validationErr.Message
+		return nil, CodeSessionInvalid, validationErr.Message
 	}
 }
 
 func (gateway *Gateway) syncRevokedSerials() {
-	if gateway.cloud == nil {
+	if gateway.controlPlane == nil {
 		return
 	}
-	serials, source, err := gateway.cloud.GetRevokedSerialsByProvider()
+	serials, err := gateway.controlPlane.GetRevokedSerials()
 	if err != nil {
-		log.Printf("[GATEWAY] revocation sync warning: %v", err)
+		log.Printf("[GATEWAY] revocation sync failed: %v", err)
+		return
 	}
 	if len(serials) == 0 {
 		return
@@ -517,11 +496,11 @@ func (gateway *Gateway) syncRevokedSerials() {
 			gateway.revokedSerials.Store(key, true)
 		}
 	}
-	log.Printf("[GATEWAY] synced %d revoked certificate serial(s) from %s", len(serials), source)
+	log.Printf("[GATEWAY] synced %d revoked certificate serial(s) from PA", len(serials))
 }
 
 func (gateway *Gateway) revocationSyncLoop() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(revocationSyncInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -535,7 +514,7 @@ func (gateway *Gateway) revocationSyncLoop() {
 
 func (gateway *Gateway) certExpiryLoop() {
 	gateway.checkCertExpiry()
-	ticker := time.NewTicker(12 * time.Hour)
+	ticker := time.NewTicker(certExpiryCheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -549,10 +528,8 @@ func (gateway *Gateway) certExpiryLoop() {
 
 func (gateway *Gateway) checkCertExpiry() {
 	certFiles := map[string]string{
-		"tls_cert":  gateway.cfg.TLSCert,
-		"mtls_cert": gateway.cfg.MTLSCert,
-		"client_ca": gateway.cfg.ClientCA,
-		"cloud_ca":  gateway.cfg.CloudCA,
+		"gateway_cert": config.GatewayCertPath,
+		"pa_ca":        config.PACAPath,
 	}
 	for label, path := range certFiles {
 		path = strings.TrimSpace(path)
@@ -575,26 +552,23 @@ func (gateway *Gateway) checkCertExpiry() {
 		remaining := time.Until(cert.NotAfter)
 		if remaining < 0 {
 			log.Printf("[GATEWAY] certificate %s expired on %s", label, cert.NotAfter.Format(time.RFC3339))
-		} else if remaining < 7*24*time.Hour {
+		} else if remaining < certExpiryCriticalWindow {
 			log.Printf("[GATEWAY] certificate %s expires soon in %s", label, remaining.Round(time.Hour))
-		} else if remaining < 30*24*time.Hour {
+		} else if remaining < certExpiryWarningWindow {
 			log.Printf("[GATEWAY] certificate %s expires in %d days", label, int(remaining.Hours()/24))
 		}
 	}
 }
 
-func (gateway *Gateway) StartCertRenewalLoop(stop <-chan struct{}) {
-	const checkInterval = 6 * time.Hour
-	const renewThreshold = 48 * time.Hour
-
-	gateway.renewCertIfNeeded(renewThreshold)
-	ticker := time.NewTicker(checkInterval)
+func (gateway *Gateway) StartCertRenewalLoop(ctx context.Context) {
+	gateway.renewCertIfNeeded(certRenewalWindow)
+	ticker := time.NewTicker(certRenewalCheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			gateway.renewCertIfNeeded(renewThreshold)
-		case <-stop:
+			gateway.renewCertIfNeeded(certRenewalWindow)
+		case <-ctx.Done():
 			return
 		case <-gateway.ctx.Done():
 			return
@@ -603,14 +577,11 @@ func (gateway *Gateway) StartCertRenewalLoop(stop <-chan struct{}) {
 }
 
 func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
-	if gateway.cloud == nil {
+	if gateway.controlPlane == nil {
 		return
 	}
-	certPath := strings.TrimSpace(gateway.cfg.MTLSCert)
-	keyPath := strings.TrimSpace(gateway.cfg.MTLSKey)
-	if certPath == "" || keyPath == "" {
-		return
-	}
+	certPath := config.GatewayCertPath
+	keyPath := config.GatewayKeyPath
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
 		log.Printf("[GATEWAY] cannot read mTLS certificate for renewal: %v", err)
@@ -631,46 +602,56 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		return
 	}
 
-	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	newKey, err := gatewaycert.GenerateGatewayPrivateKey()
 	if err != nil {
 		log.Printf("[GATEWAY] generate renewal key failed: %v", err)
 		return
 	}
-	gatewayID, tenantID := gateway.identityForCertificateRenewal()
-	if gatewayID == "" || tenantID == "" {
-		log.Printf("[GATEWAY] cannot renew mTLS certificate: tenant_id and gateway_id are required")
+	gatewayID := gateway.identityForCertificateRenewal()
+	if gatewayID == "" {
+		log.Printf("[GATEWAY] cannot renew mTLS certificate: gateway identity is required")
 		return
 	}
-	fqdn := firstNonEmpty(gateway.cfg.FQDN, firstDNSName(cert))
-	identityURL, err := url.Parse(fmt.Sprintf(
-		"spiffe://ztna.local/tenant/%s/gateway/%s",
-		url.PathEscape(tenantID),
-		url.PathEscape(gatewayID),
-	))
+	ekuExtension, err := gatewaycert.GatewayExtendedKeyUsageExtension()
 	if err != nil {
-		log.Printf("[GATEWAY] build renewal identity URI failed: %v", err)
+		log.Printf("[GATEWAY] build renewal EKU extension failed: %v", err)
 		return
 	}
 	renewalCSR := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: gatewayID},
-		URIs:    []*url.URL{identityURL},
+		Subject:     pkix.Name{CommonName: gatewayID},
+		DNSNames:    append([]string(nil), cert.DNSNames...),
+		IPAddresses: append([]net.IP(nil), cert.IPAddresses...),
+		ExtraExtensions: []pkix.Extension{
+			ekuExtension,
+		},
 	}
-	if fqdn != "" {
-		renewalCSR.DNSNames = []string{fqdn}
-	}
+	renewalCSR.URIs = append(renewalCSR.URIs, cert.URIs...)
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, renewalCSR, newKey)
 	if err != nil {
 		log.Printf("[GATEWAY] create renewal CSR failed: %v", err)
 		return
 	}
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
-	result, err := gateway.cloud.RenewCert(string(csrPEM))
+	result, err := gateway.controlPlane.RenewCert(string(csrPEM))
 	if err != nil {
 		log.Printf("[GATEWAY] certificate renewal request failed: %v", err)
 		return
 	}
-	keyDER := x509.MarshalPKCS1PrivateKey(newKey)
-	if err := config.AtomicWriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+	renewedCert, err := gatewaycert.ParseGatewayCertificatePEM([]byte(result.CertPEM))
+	if err != nil {
+		log.Printf("[GATEWAY] renewed certificate parse failed: %v", err)
+		return
+	}
+	if err := gatewaycert.ValidateGatewayCertificate(renewedCert); err != nil {
+		log.Printf("[GATEWAY] renewed certificate rejected: %v", err)
+		return
+	}
+	keyPEM, err := gatewaycert.EncodePrivateKeyPEM(newKey)
+	if err != nil {
+		log.Printf("[GATEWAY] encode renewal key failed: %v", err)
+		return
+	}
+	if err := config.AtomicWriteFile(keyPath, keyPEM, 0o600); err != nil {
 		log.Printf("[GATEWAY] write renewal key failed: %v", err)
 		return
 	}
@@ -678,36 +659,25 @@ func (gateway *Gateway) renewCertIfNeeded(threshold time.Duration) {
 		log.Printf("[GATEWAY] write renewed certificate failed: %v", err)
 		return
 	}
-	if result.CAPEM != "" && strings.TrimSpace(gateway.cfg.CloudCA) != "" {
-		if err := config.AtomicWriteFile(gateway.cfg.CloudCA, []byte(result.CAPEM), 0o644); err != nil {
+	if result.CAPEM != "" {
+		if err := config.AtomicWriteFile(config.PACAPath, []byte(result.CAPEM), 0o644); err != nil {
 			log.Printf("[GATEWAY] write renewed CA failed: %v", err)
 		}
 	}
-	if err := gateway.cloud.ReloadTLSCert(certPath, keyPath); err != nil {
+	if err := gateway.controlPlane.ReloadTLSCert(certPath, keyPath); err != nil {
 		log.Printf("[GATEWAY] reload renewed mTLS certificate failed: %v", err)
 		return
 	}
-	log.Printf("[GATEWAY] renewed mTLS certificate for gateway_id=%s tenant_id=%s", gatewayID, tenantID)
+	log.Printf("[GATEWAY] renewed mTLS certificate for gateway_id=%s", gatewayID)
 }
 
-func (gateway *Gateway) identityForCertificateRenewal() (gatewayID, tenantID string) {
+func (gateway *Gateway) identityForCertificateRenewal() string {
 	if gateway == nil || gateway.cfg == nil {
-		return "", ""
-	}
-	tenantID = strings.TrimSpace(gateway.cfg.TenantID)
-	if gateway.cfg.ControlPlane != nil {
-		gatewayID = strings.TrimSpace(gateway.cfg.ControlPlane.GatewayID)
-	}
-	return gatewayID, tenantID
-}
-
-func firstDNSName(cert *x509.Certificate) string {
-	if cert == nil {
 		return ""
 	}
-	for _, name := range cert.DNSNames {
-		if strings.TrimSpace(name) != "" {
-			return strings.TrimSpace(name)
+	if gateway.cfg.ControlPlane != nil {
+		if gatewayID := strings.TrimSpace(gateway.cfg.ControlPlane.GatewayID); gatewayID != "" {
+			return gatewayID
 		}
 	}
 	return ""
@@ -761,10 +731,10 @@ func relayLimitBytesPerSecond(sessionMbps, globalMbps int) int {
 	if globalMbps > 0 {
 		return globalMbps * 1024 * 1024 / 8
 	}
-	return 50 * 1024 * 1024
+	return 0
 }
 
-func processLogName(process *auth.ProcessIdentity) string {
+func processLogName(process *ProcessIdentity) string {
 	if process == nil {
 		return "unknown"
 	}
@@ -831,7 +801,7 @@ func normalizedSerialKeys(serial string) []string {
 
 func rateLimitedCopy(dst io.Writer, src io.Reader, bytesPerSecond, bufferSize int) (int64, error) {
 	if bufferSize <= 0 {
-		bufferSize = 32 * 1024
+		return 0, fmt.Errorf("relay_buffer_size_bytes must be configured")
 	}
 	buffer := make([]byte, bufferSize)
 	var total int64
@@ -862,15 +832,6 @@ func rateLimitedCopy(dst io.Writer, src io.Reader, bytesPerSecond, bufferSize in
 			return total, readErr
 		}
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func atoi(value string) int {

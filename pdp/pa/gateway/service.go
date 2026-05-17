@@ -35,7 +35,13 @@ var (
 	ErrGatewayStoreUnavailable = errors.New("gateway store not initialized")
 )
 
-type CertificateSigner func(csrPEM []byte, validDays int, role string) ([]byte, error)
+type CertificateProfile struct {
+	CommonName string
+	DNSNames   []string
+	URISANs    []string
+}
+
+type CertificateSigner func(csrPEM []byte, validDays int, role string, profile CertificateProfile) ([]byte, error)
 
 type CertificateRevoker func(serial, certPEM, subjectID string, expiresOn time.Time)
 

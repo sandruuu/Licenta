@@ -11,6 +11,8 @@ import (
 	"pdp/config"
 	paenrollment "pdp/pa/enrollment"
 	"pdp/pa/events"
+	pagateway "pdp/pa/gateway"
+	"pdp/pki"
 	"pdp/util"
 )
 
@@ -98,6 +100,17 @@ func (s *Server) signCSR(csrPEM []byte, validDays int, vaultRole string) ([]byte
 			return s.externalPKI.SignCSRVerbatim(csrPEM, vaultRole, ttl)
 		}
 		return s.externalPKI.SignCSR(csrPEM, vaultRole, ttl)
+	}
+	return nil, fmt.Errorf("PKI signer not initialized")
+}
+
+func (s *Server) signGatewayCSR(csrPEM []byte, validDays int, vaultRole string, profile pagateway.CertificateProfile) ([]byte, error) {
+	if s.externalPKI != nil {
+		return s.externalPKI.SignCSRWithOptions(csrPEM, vaultRole, fmt.Sprintf("%dh", validDays*24), pki.SignCSROptions{
+			CommonName: profile.CommonName,
+			DNSNames:   profile.DNSNames,
+			URISANs:    profile.URISANs,
+		})
 	}
 	return nil, fmt.Errorf("PKI signer not initialized")
 }

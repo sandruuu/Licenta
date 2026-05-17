@@ -47,12 +47,8 @@ type FederationConfig struct {
 
 // GatewayEnrollRequest is sent by the gateway during enrollment.
 type GatewayEnrollRequest struct {
-	Token     string `json:"token"`
-	CSRPEM    string `json:"csr_pem"`
-	FQDN      string `json:"fqdn"`
-	Name      string `json:"name,omitempty"`
-	GatewayID string `json:"gateway_id,omitempty"`
-	TenantID  string `json:"tenant_id,omitempty"`
+	Token  string `json:"token"`
+	CSRPEM string `json:"csr_pem"`
 }
 
 // GatewayEnrollResponse is returned after successful enrollment.

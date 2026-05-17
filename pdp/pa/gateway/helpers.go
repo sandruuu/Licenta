@@ -117,20 +117,56 @@ func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
 	return csr, nil
 }
 
-func validateGatewayCSRIdentity(csr *x509.CertificateRequest, gateway *models.Gateway, fqdn string) error {
+func gatewayCertificateProfile(gateway *models.Gateway) (CertificateProfile, error) {
+	if gateway == nil {
+		return CertificateProfile{}, fmt.Errorf("%w: gateway identity is required", ErrInvalidCSR)
+	}
+	organizationID := strings.TrimSpace(gateway.TenantID)
+	gatewayID := strings.TrimSpace(gateway.ID)
+	fqdn := strings.TrimSpace(gateway.FQDN)
+	if organizationID == "" || gatewayID == "" {
+		return CertificateProfile{}, fmt.Errorf("%w: gateway organization_id and gateway_id are required", ErrInvalidCSR)
+	}
+	if fqdn == "" {
+		return CertificateProfile{}, fmt.Errorf("%w: gateway FQDN is required before certificate issuance", ErrInvalidRequest)
+	}
+	return CertificateProfile{
+		CommonName: fqdn,
+		DNSNames:   []string{fqdn},
+		URISANs:    []string{GatewayIdentityURI(organizationID, gatewayID)},
+	}, nil
+}
+
+func validateGatewayCSRRequest(csr *x509.CertificateRequest, gateway *models.Gateway, fqdn string) error {
 	if csr == nil || gateway == nil {
 		return fmt.Errorf("%w: CSR and gateway identity are required", ErrInvalidCSR)
 	}
-	tenantID := strings.TrimSpace(gateway.TenantID)
+	organizationID := strings.TrimSpace(gateway.TenantID)
 	gatewayID := strings.TrimSpace(gateway.ID)
-	if tenantID == "" || gatewayID == "" {
-		return fmt.Errorf("%w: gateway tenant_id and gateway_id are required", ErrInvalidCSR)
+	if organizationID == "" || gatewayID == "" {
+		return fmt.Errorf("%w: gateway organization_id and gateway_id are required", ErrInvalidCSR)
 	}
-	if !csrHasGatewayIdentity(csr, tenantID, gatewayID) {
-		return fmt.Errorf("%w: CSR must include URI SAN %q", ErrInvalidCSR, GatewayIdentityURI(tenantID, gatewayID))
+	expectedURI := GatewayIdentityURI(organizationID, gatewayID)
+	for _, identityURI := range csr.URIs {
+		if identityURI != nil && identityURI.String() != expectedURI {
+			return fmt.Errorf("%w: CSR URI SAN must not request a gateway identity other than %q", ErrInvalidCSR, expectedURI)
+		}
 	}
-	if fqdn = strings.TrimSpace(fqdn); fqdn != "" && !stringSliceContainsFold(csr.DNSNames, fqdn) {
-		return fmt.Errorf("%w: CSR DNS SAN must include gateway FQDN %q", ErrInvalidCSR, fqdn)
+	fqdn = strings.TrimSpace(fqdn)
+	for _, name := range csr.DNSNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if fqdn == "" || !strings.EqualFold(name, fqdn) {
+			return fmt.Errorf("%w: CSR DNS SAN must not request a gateway FQDN other than %q", ErrInvalidCSR, fqdn)
+		}
+	}
+	if len(csr.IPAddresses) > 0 {
+		return fmt.Errorf("%w: gateway CSR must not request IP SANs", ErrInvalidCSR)
+	}
+	if len(csr.EmailAddresses) > 0 {
+		return fmt.Errorf("%w: gateway CSR must not request email SANs", ErrInvalidCSR)
 	}
 	return nil
 }
@@ -146,8 +182,14 @@ func validateGatewayCertificate(certPEM []byte, csr *x509.CertificateRequest, ga
 	if !certificateHasGatewayIdentity(cert, gateway.TenantID, gateway.ID) {
 		return fmt.Errorf("%w: issued certificate does not contain expected gateway URI SAN", ErrInvalidCSR)
 	}
+	if fqdn := strings.TrimSpace(gateway.FQDN); fqdn != "" && !stringSliceContainsFold(cert.DNSNames, fqdn) {
+		return fmt.Errorf("%w: issued certificate does not contain expected gateway DNS SAN", ErrInvalidCSR)
+	}
 	if !publicKeysEqual(cert.PublicKey, csr.PublicKey) {
 		return fmt.Errorf("%w: issued certificate public key does not match CSR", ErrInvalidCSR)
+	}
+	if !extKeyUsageContains(cert.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+		return fmt.Errorf("%w: issued gateway certificate must allow server authentication", ErrInvalidCSR)
 	}
 	if !extKeyUsageContains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth) {
 		return fmt.Errorf("%w: issued gateway certificate must allow client authentication", ErrInvalidCSR)

@@ -1,7 +1,7 @@
 import { ChevronDown, Copy, Edit2, Globe2, Link2, Shield, ShieldCheck, Trash2, Unlink, Users } from 'lucide-react';
 import Badge from '../ui/Badge';
 import DataTable from '../ui/DataTable';
-import { conditionSummary, targetLabel } from './policyModel';
+import { assignmentScopeLabel, conditionSummary, targetLabel } from './policyModel';
 
 function formatTimestamp(value) {
   if (!value) return '-';
@@ -35,6 +35,7 @@ function AssignmentPill({ assignment, maps }) {
   const groupOnly = assignment.level === 'group';
   const resourceGroup = assignment.level === 'resource_group';
   const Icon = global ? Globe2 : groupOnly || resourceGroup ? Users : Shield;
+  const scope = assignmentScopeLabel(assignment, maps);
   const tone = resourceGroup
     ? 'bg-accent-muted text-accent'
     : groupOnly
@@ -50,11 +51,14 @@ function AssignmentPill({ assignment, maps }) {
   }
 
   return (
-    <span className="inline-flex max-w-full items-center gap-2 rounded-full px-2.5 py-1 text-xs font-bold text-text-primary">
+    <span className="inline-flex max-w-full items-start gap-2 rounded-md px-2.5 py-1 text-xs font-bold text-text-primary">
       <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full ${tone}`}>
         <Icon size={12} />
       </span>
-      <span className="truncate">{assignmentLabel(assignment, maps)}</span>
+      <span className="min-w-0">
+        <span className="block truncate">{assignmentLabel(assignment, maps)}</span>
+        {scope && <span className="mt-0.5 block truncate text-[11px] font-semibold text-text-muted">{scope}</span>}
+      </span>
     </span>
   );
 }

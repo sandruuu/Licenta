@@ -10,64 +10,48 @@ import (
 const gatewayIdentityTrustDomain = "ztna.local"
 
 // GatewayIdentityURI is the stable certificate identity used for gateway mTLS.
-// FQDN remains a network attribute; tenant_id + gateway_id are the authorization
-// boundary and the gateway instance identity.
-func GatewayIdentityURI(tenantID, gatewayID string) string {
-	tenantID = strings.TrimSpace(tenantID)
+// FQDN remains a network attribute; organization_id + gateway_id are the
+// authorization boundary and the gateway instance identity.
+func GatewayIdentityURI(organizationID, gatewayID string) string {
+	organizationID = strings.TrimSpace(organizationID)
 	gatewayID = strings.TrimSpace(gatewayID)
-	if tenantID == "" || gatewayID == "" {
+	if organizationID == "" || gatewayID == "" {
 		return ""
 	}
-	return fmt.Sprintf("spiffe://%s/tenant/%s/gateway/%s",
+	return fmt.Sprintf("spiffe://%s/organization/%s/gateway/%s",
 		gatewayIdentityTrustDomain,
-		url.PathEscape(tenantID),
+		url.PathEscape(organizationID),
 		url.PathEscape(gatewayID),
 	)
 }
 
-// GatewayCertificateIdentity extracts tenant_id and gateway_id from the
+// GatewayCertificateIdentity extracts organization_id and gateway_id from the
 // gateway URI SAN. It intentionally ignores CommonName because CN/FQDN is
-// mutable and ambiguous across tenants.
-func GatewayCertificateIdentity(cert *x509.Certificate) (tenantID, gatewayID string, ok bool) {
+// mutable and ambiguous across organizations.
+func GatewayCertificateIdentity(cert *x509.Certificate) (organizationID, gatewayID string, ok bool) {
 	if cert == nil {
 		return "", "", false
 	}
 	for _, identityURI := range cert.URIs {
-		tenantID, gatewayID, ok = parseGatewayIdentityURI(identityURI)
+		organizationID, gatewayID, ok = parseGatewayIdentityURI(identityURI)
 		if ok {
-			return tenantID, gatewayID, true
+			return organizationID, gatewayID, true
 		}
 	}
 	return "", "", false
 }
 
-func csrHasGatewayIdentity(csr *x509.CertificateRequest, tenantID, gatewayID string) bool {
-	if csr == nil {
-		return false
-	}
-	expected := GatewayIdentityURI(tenantID, gatewayID)
-	if expected == "" {
-		return false
-	}
-	for _, identityURI := range csr.URIs {
-		if identityURI != nil && identityURI.String() == expected {
-			return true
-		}
-	}
-	return false
-}
-
-func certificateHasGatewayIdentity(cert *x509.Certificate, tenantID, gatewayID string) bool {
+func certificateHasGatewayIdentity(cert *x509.Certificate, organizationID, gatewayID string) bool {
 	if cert == nil {
 		return false
 	}
-	expectedTenantID := strings.TrimSpace(tenantID)
+	expectedOrganizationID := strings.TrimSpace(organizationID)
 	expectedGatewayID := strings.TrimSpace(gatewayID)
-	actualTenantID, actualGatewayID, ok := GatewayCertificateIdentity(cert)
-	return ok && actualTenantID == expectedTenantID && actualGatewayID == expectedGatewayID
+	actualOrganizationID, actualGatewayID, ok := GatewayCertificateIdentity(cert)
+	return ok && actualOrganizationID == expectedOrganizationID && actualGatewayID == expectedGatewayID
 }
 
-func parseGatewayIdentityURI(identityURI *url.URL) (tenantID, gatewayID string, ok bool) {
+func parseGatewayIdentityURI(identityURI *url.URL) (organizationID, gatewayID string, ok bool) {
 	if identityURI == nil {
 		return "", "", false
 	}
@@ -75,10 +59,10 @@ func parseGatewayIdentityURI(identityURI *url.URL) (tenantID, gatewayID string, 
 		return "", "", false
 	}
 	parts := strings.Split(strings.Trim(identityURI.EscapedPath(), "/"), "/")
-	if len(parts) != 4 || parts[0] != "tenant" || parts[2] != "gateway" {
+	if len(parts) != 4 || parts[0] != "organization" || parts[2] != "gateway" {
 		return "", "", false
 	}
-	tenantID, err := url.PathUnescape(parts[1])
+	organizationID, err := url.PathUnescape(parts[1])
 	if err != nil {
 		return "", "", false
 	}
@@ -86,10 +70,10 @@ func parseGatewayIdentityURI(identityURI *url.URL) (tenantID, gatewayID string, 
 	if err != nil {
 		return "", "", false
 	}
-	tenantID = strings.TrimSpace(tenantID)
+	organizationID = strings.TrimSpace(organizationID)
 	gatewayID = strings.TrimSpace(gatewayID)
-	if tenantID == "" || gatewayID == "" {
+	if organizationID == "" || gatewayID == "" {
 		return "", "", false
 	}
-	return tenantID, gatewayID, true
+	return organizationID, gatewayID, true
 }
