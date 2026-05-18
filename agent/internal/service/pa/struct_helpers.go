@@ -30,6 +30,17 @@ func structFieldBool(value *structpb.Struct, key string) bool {
 	return field.GetBoolValue()
 }
 
+func structFieldStruct(value *structpb.Struct, key string) *structpb.Struct {
+	if value == nil {
+		return nil
+	}
+	field, ok := value.GetFields()[key]
+	if !ok || field == nil {
+		return nil
+	}
+	return field.GetStructValue()
+}
+
 func structFieldNumber(value *structpb.Struct, key string) (float64, bool) {
 	if value == nil {
 		return 0, false

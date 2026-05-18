@@ -71,6 +71,7 @@ func TestFileCatalogCacheStoreRoundTrip(t *testing.T) {
 		PolicyEpoch:    "epoch-1",
 		DNSSuffixes:    []string{"Example.Test", "example.test", ".internal.test"},
 		Resources:      []catalog.Resource{{FQDN: "Admin.Example.Test.", ResourceID: "res-1", Protocol: "HTTPS", Port: 443}},
+		PosturePolicy:  catalog.PosturePolicy{RequiredChecks: []string{"Firewall"}, RequiredCheckStatus: "good"},
 		TTLSeconds:     300,
 		FetchedAt:      now.Add(-time.Minute),
 		ExpiresAt:      now.Add(4 * time.Minute),
@@ -82,7 +83,7 @@ func TestFileCatalogCacheStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	if loaded.DeviceID != "device-1" || loaded.CatalogVersion != "v1" || loaded.PolicyEpoch != "epoch-1" || len(loaded.DNSSuffixes) != 2 || loaded.DNSSuffixes[0] != "example.test" || loaded.DNSSuffixes[1] != "internal.test" || len(loaded.Resources) != 1 || loaded.Resources[0].FQDN != "admin.example.test" || !loaded.UpdatedAt.Equal(now) {
+	if loaded.DeviceID != "device-1" || loaded.CatalogVersion != "v1" || loaded.PolicyEpoch != "epoch-1" || len(loaded.DNSSuffixes) != 2 || loaded.DNSSuffixes[0] != "example.test" || loaded.DNSSuffixes[1] != "internal.test" || len(loaded.Resources) != 1 || loaded.Resources[0].FQDN != "admin.example.test" || len(loaded.PosturePolicy.RequiredChecks) != 1 || loaded.PosturePolicy.RequiredChecks[0] != "Firewall" || loaded.PosturePolicy.RequiredCheckStatus != "good" || !loaded.UpdatedAt.Equal(now) {
 		t.Fatalf("loaded cache = %+v", loaded)
 	}
 	data, err := os.ReadFile(path)
@@ -119,6 +120,7 @@ func TestServiceRestoresCatalogCacheAndReappliesDNS(t *testing.T) {
 		PolicyEpoch:    "epoch-cache",
 		DNSSuffixes:    []string{"example.test"},
 		Resources:      []catalog.Resource{{FQDN: "cached.example.test", ResourceID: "res-cache", Protocol: "https", Port: 443}},
+		PosturePolicy:  catalog.PosturePolicy{RequiredChecks: []string{"Firewall"}, RequiredCheckStatus: "good"},
 		TTLSeconds:     300,
 		FetchedAt:      now.Add(-time.Minute),
 		ExpiresAt:      now.Add(4 * time.Minute),
@@ -142,6 +144,9 @@ func TestServiceRestoresCatalogCacheAndReappliesDNS(t *testing.T) {
 	if status.CatalogStatus != catalogStatusReady || status.CatalogVersion != "v-cache" || status.CatalogPolicyEpoch != "epoch-cache" || status.CatalogDNSSuffixCount != 1 || status.CatalogResourceCount != 1 || status.SyntheticResourceCount != 1 {
 		t.Fatalf("status = %+v", status)
 	}
+	if len(service.catalog.PosturePolicy.RequiredChecks) != 1 || service.catalog.PosturePolicy.RequiredChecks[0] != "Firewall" {
+		t.Fatalf("posture policy = %+v", service.catalog.PosturePolicy)
+	}
 	if len(dnsConfigurator.configs) != 1 || len(dnsConfigurator.configs[0].DNSSuffixes) != 1 || dnsConfigurator.configs[0].DNSSuffixes[0] != "example.test" {
 		t.Fatalf("dns configs = %+v", dnsConfigurator.configs)
 	}
@@ -162,7 +167,6 @@ func TestServicePersistsEnrollmentMetadataAfterRunnerSuccess(t *testing.T) {
 		EnrollmentValidator: fakeEnrollmentValidator{result: &enrollment.ValidationResult{
 			DeviceID: "device-1",
 			Nonce:    "nonce-1",
-			UserSID:  "S-1-5-21-1",
 		}},
 	})
 	service.enrollment.Nonce = "nonce-1"

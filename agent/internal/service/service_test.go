@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -356,6 +357,52 @@ func TestServiceReturnsDevicePostureReport(t *testing.T) {
 	status := service.status()
 	if status.DevicePostureStatus != "collected" || status.DevicePostureCheckCount != 1 || !status.DevicePostureCollectedAt.Equal(now) {
 		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestServiceAppliesCatalogPosturePolicy(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	service := newTestService(serviceTestOptions{
+		AuthorizedUserSID: "S-1-5-21-1",
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:             func() time.Time { return now },
+		IdentityProvider:  testIdentityProviderWithDevice("S-1-5-21-1", "device-1"),
+		PostureCollector: fakePostureCollector{report: ipc.DevicePostureReport{
+			DeviceID:    "device-1",
+			Hostname:    "host-1",
+			OS:          "Windows",
+			CollectedAt: now,
+			Checks: []ipc.DevicePostureCheck{{
+				Name:        "Firewall",
+				Status:      ipc.DevicePostureStatusWarning,
+				Description: "Some firewall profiles are disabled",
+			}},
+		}},
+	})
+	service.catalog.PosturePolicy = catalog.PosturePolicy{
+		RequiredChecks:      []string{"Firewall", "Disk Encryption"},
+		RequiredCheckStatus: ipc.DevicePostureStatusGood,
+	}
+
+	request, err := ipc.NewRequest("req-1", ipc.OperationGetDevicePosture, ipc.DevicePostureRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	response, err := service.HandleIPC(context.Background(), request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	var report ipc.DevicePostureReport
+	if err := ipc.DecodeBody(response.Body, &report); err != nil {
+		t.Fatalf("DecodeBody returned error: %v", err)
+	}
+	firewall := findPostureCheck(report, "Firewall")
+	if firewall == nil || firewall.Status != ipc.DevicePostureStatusCritical || firewall.Details["Observed Status"] != ipc.DevicePostureStatusWarning || firewall.Details["Expected Status"] != ipc.DevicePostureStatusGood || firewall.Details["Compliance"] != "Not compliant" {
+		t.Fatalf("firewall check = %+v", firewall)
+	}
+	disk := findPostureCheck(report, "Disk Encryption")
+	if disk == nil || disk.Status != ipc.DevicePostureStatusCritical || disk.Details["Observed Status"] != "missing" {
+		t.Fatalf("disk check = %+v", disk)
 	}
 }
 
@@ -935,6 +982,15 @@ func testPostureReport(collectedAt time.Time, firewallStatus string) ipc.DeviceP
 			Description: "Firewall state",
 		}},
 	}
+}
+
+func findPostureCheck(report ipc.DevicePostureReport, name string) *ipc.DevicePostureCheck {
+	for index := range report.Checks {
+		if strings.EqualFold(report.Checks[index].Name, name) {
+			return &report.Checks[index]
+		}
+	}
+	return nil
 }
 
 func (runner *fakeEnrollmentRunner) Enroll(_ context.Context, input enrollment.RunnerInput) (*enrollment.RunnerResult, error) {

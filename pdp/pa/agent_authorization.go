@@ -84,7 +84,9 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		Process:      req.Process,
 	}
 	if pa != nil && pa.Store != nil {
-		if health, ok := pa.Store.GetDeviceHealth(deviceID); ok {
+		if posture, ok := pa.Store.GetDevicePosture(deviceID); ok {
+			accessReq.DeviceHealth = deviceHealthFromPosture(posture)
+		} else if health, ok := pa.Store.GetDeviceHealth(deviceID); ok {
 			accessReq.DeviceHealth = health
 		}
 	}
@@ -259,6 +261,38 @@ func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Reso
 		return nil, "", newAccessError(AccessErrorConflict, fmt.Sprintf("connected gateway %s has no endpoint", gateway.ID), nil)
 	}
 	return gateway, endpoint, nil
+}
+
+func deviceHealthFromPosture(report *models.DevicePostureReport) *models.DeviceHealthReport {
+	if report == nil {
+		return nil
+	}
+	score := 100
+	if len(report.Checks) > 0 {
+		points := 0
+		for _, check := range report.Checks {
+			switch strings.ToLower(strings.TrimSpace(check.Status)) {
+			case "good", "ok", "pass", "passed", "healthy":
+				points += 100
+			case "warning":
+				points += 70
+			case "unavailable", "unknown":
+				points += 50
+			default:
+				points += 0
+			}
+		}
+		score = points / len(report.Checks)
+	}
+	return &models.DeviceHealthReport{
+		DeviceID:     report.DeviceID,
+		Hostname:     report.Hostname,
+		OS:           report.OS,
+		Checks:       append([]models.HealthCheck(nil), report.Checks...),
+		OverallScore: score,
+		ReportedAt:   report.ReportedAt,
+		TenantID:     report.TenantID,
+	}
 }
 
 func ResourceVisibleForRole(resource *models.Resource, role string) bool {

@@ -3,6 +3,7 @@ package tray
 import (
 	"context"
 	"embed"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"agent/internal/platform/process"
+	servicestate "agent/internal/service/state"
 	"agent/internal/shared/ipc"
 )
 
@@ -191,21 +193,28 @@ func (app *GUIApp) context() context.Context {
 func (app *GUIApp) unavailableDashboard(err error) ipc.AgentDashboard {
 	now := time.Now().UTC()
 	reason := strings.TrimSpace(err.Error())
+	enrollmentState := unavailableEnrollmentState()
+	connectionState := "disconnected"
+	connectionMessage := "Agent service IPC is unavailable"
+	if enrollmentState == ipc.EnrollmentStateUnenrolled {
+		connectionState = "unenrolled"
+		connectionMessage = "Device is not enrolled; Agent service IPC is unavailable"
+	}
 	return ipc.AgentDashboard{
 		Connection: ipc.DashboardConnection{
-			State:        "disconnected",
-			Message:      "Agent service IPC is unavailable",
+			State:        connectionState,
+			Message:      connectionMessage,
 			ServiceState: "unavailable",
 		},
 		Status: ipc.AgentStatus{
 			ServiceState:    "unavailable",
 			ServicePID:      0,
 			ServiceUser:     "LocalSystem",
-			EnrollmentState: ipc.EnrollmentStateUnknown,
+			EnrollmentState: enrollmentState,
 			ReportedAt:      now,
 			LastError:       reason,
 		},
-		Enrollment:  ipc.EnrollmentInfo{State: ipc.EnrollmentStateUnknown, LastError: reason},
+		Enrollment:  ipc.EnrollmentInfo{State: enrollmentState, LastError: reason},
 		Certificate: ipc.CertificateInfo{LastError: reason},
 		User: ipc.AuthenticatedUser{
 			UserSID:      app.identity.UserSID,
@@ -227,6 +236,17 @@ func (app *GUIApp) unavailableDashboard(err error) ipc.AgentDashboard {
 		AccessEvents:   []ipc.AccessEvent{app.pipeUnavailableEvent(err)},
 		ReportedAt:     now,
 	}
+}
+
+func unavailableEnrollmentState() ipc.EnrollmentState {
+	state, err := servicestate.NewDefaultEnrollmentStore(time.Now).Load(context.Background())
+	if err == nil {
+		return state.EnrollmentState
+	}
+	if errors.Is(err, servicestate.ErrEnrollmentNotFound) {
+		return ipc.EnrollmentStateUnenrolled
+	}
+	return ipc.EnrollmentStateUnknown
 }
 
 func (app *GUIApp) pipeUnavailableEvent(err error) ipc.AccessEvent {

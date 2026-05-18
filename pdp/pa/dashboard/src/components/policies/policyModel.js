@@ -117,7 +117,7 @@ export const EMPTY_POLICY_FORM = {
   enabled: true,
   action: 'allow',
   required_checks: '',
-  required_check_status: '',
+  required_check_status: 'good',
 };
 
 export const EMPTY_ASSIGNMENT_FORM = {
@@ -191,7 +191,7 @@ export function policyFormFromRule(rule) {
     enabled: rule?.enabled !== false,
     action: rule?.action || 'allow',
     required_checks: listToText(requiredDeviceChecksFromValue(conditions.required_checks)),
-    required_check_status: conditions.required_check_status || '',
+    required_check_status: conditions.required_check_status || 'good',
   };
 }
 
@@ -208,7 +208,7 @@ export function conditionsFromForm(form, enabledSections = inferEnabledSections(
   const requiredChecks = requiredDeviceChecksFromValue(form.required_checks);
   return compactObject({
     required_checks: enabledSections.device ? requiredChecks : [],
-    required_check_status: enabledSections.device && requiredChecks.length ? form.required_check_status : '',
+    required_check_status: enabledSections.device && requiredChecks.length ? (form.required_check_status || 'good') : '',
   });
 }
 

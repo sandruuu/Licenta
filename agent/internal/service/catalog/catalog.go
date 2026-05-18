@@ -8,12 +8,13 @@ import (
 )
 
 type Catalog struct {
-	Version     string
-	DNSSuffixes []string
-	Resources   []Resource
-	TTLSeconds  int
-	NotModified bool
-	PolicyEpoch string
+	Version       string
+	DNSSuffixes   []string
+	Resources     []Resource
+	TTLSeconds    int
+	NotModified   bool
+	PolicyEpoch   string
+	PosturePolicy PosturePolicy
 }
 
 type Resource struct {
@@ -21,6 +22,11 @@ type Resource struct {
 	ResourceID string `json:"resource_id,omitempty"`
 	Protocol   string `json:"protocol,omitempty"`
 	Port       int    `json:"port,omitempty"`
+}
+
+type PosturePolicy struct {
+	RequiredChecks      []string `json:"required_checks,omitempty"`
+	RequiredCheckStatus string   `json:"required_check_status,omitempty"`
 }
 
 func NormalizeResources(values []Resource) []Resource {
@@ -67,6 +73,37 @@ func NormalizeSuffixes(values []string) []string {
 	}
 	sort.Strings(suffixes)
 	return suffixes
+}
+
+func NormalizePosturePolicy(policy PosturePolicy) PosturePolicy {
+	checks := normalizeCheckNames(policy.RequiredChecks)
+	if len(checks) == 0 {
+		return PosturePolicy{}
+	}
+	status := strings.ToLower(strings.TrimSpace(policy.RequiredCheckStatus))
+	switch status {
+	case "good", "warning", "critical", "unavailable":
+	default:
+		status = "good"
+	}
+	return PosturePolicy{RequiredChecks: checks, RequiredCheckStatus: status}
+}
+
+func normalizeCheckNames(values []string) []string {
+	seen := make(map[string]string, len(values))
+	for _, value := range values {
+		check := strings.TrimSpace(value)
+		if check == "" {
+			continue
+		}
+		seen[strings.ToLower(check)] = check
+	}
+	checks := make([]string, 0, len(seen))
+	for _, check := range seen {
+		checks = append(checks, check)
+	}
+	sort.Strings(checks)
+	return checks
 }
 
 func normalizeSuffix(value string) string {

@@ -26,16 +26,17 @@ type CatalogCacheStore interface {
 }
 
 type CatalogCache struct {
-	Version        int                `json:"version"`
-	DeviceID       string             `json:"device_id"`
-	CatalogVersion string             `json:"catalog_version"`
-	PolicyEpoch    string             `json:"policy_epoch,omitempty"`
-	DNSSuffixes    []string           `json:"dns_suffixes"`
-	Resources      []catalog.Resource `json:"resources,omitempty"`
-	TTLSeconds     int                `json:"ttl_seconds,omitempty"`
-	FetchedAt      time.Time          `json:"fetched_at"`
-	ExpiresAt      time.Time          `json:"expires_at,omitempty"`
-	UpdatedAt      time.Time          `json:"updated_at"`
+	Version        int                   `json:"version"`
+	DeviceID       string                `json:"device_id"`
+	CatalogVersion string                `json:"catalog_version"`
+	PolicyEpoch    string                `json:"policy_epoch,omitempty"`
+	DNSSuffixes    []string              `json:"dns_suffixes"`
+	Resources      []catalog.Resource    `json:"resources,omitempty"`
+	PosturePolicy  catalog.PosturePolicy `json:"posture_policy,omitempty"`
+	TTLSeconds     int                   `json:"ttl_seconds,omitempty"`
+	FetchedAt      time.Time             `json:"fetched_at"`
+	ExpiresAt      time.Time             `json:"expires_at,omitempty"`
+	UpdatedAt      time.Time             `json:"updated_at"`
 }
 
 type CatalogCacheFileStore struct {
@@ -86,6 +87,7 @@ func (store *CatalogCacheFileStore) Load(ctx context.Context) (CatalogCache, err
 	}
 	cache.DNSSuffixes = catalog.NormalizeSuffixes(cache.DNSSuffixes)
 	cache.Resources = catalog.NormalizeResources(cache.Resources)
+	cache.PosturePolicy = catalog.NormalizePosturePolicy(cache.PosturePolicy)
 	return cache, nil
 }
 
@@ -105,6 +107,7 @@ func (store *CatalogCacheFileStore) Save(ctx context.Context, cache CatalogCache
 	cache.UpdatedAt = store.clock().UTC()
 	cache.DNSSuffixes = catalog.NormalizeSuffixes(cache.DNSSuffixes)
 	cache.Resources = catalog.NormalizeResources(cache.Resources)
+	cache.PosturePolicy = catalog.NormalizePosturePolicy(cache.PosturePolicy)
 	if err := cache.Validate(); err != nil {
 		return err
 	}

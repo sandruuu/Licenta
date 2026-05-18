@@ -46,6 +46,30 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
 	})
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:       "policy-posture-1",
+		Name:     "Require managed endpoint posture",
+		Priority: 1,
+		Enabled:  true,
+		Conditions: models.RuleConditions{
+			AllowedRoles:        []string{"admin"},
+			RequiredChecks:      []string{"Firewall", "Disk Encryption"},
+			RequiredCheckStatus: "good",
+		},
+		Action:    "allow",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:        "assignment-posture-1",
+		PolicyID:  "policy-posture-1",
+		TenantID:  transportTestTenantID,
+		Level:     "organization",
+		Priority:  1,
+		Enabled:   true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
 
 	service := &deviceCatalogGRPCService{server: server}
 	request, err := structpb.NewStruct(map[string]interface{}{"access_token": accessToken})
@@ -88,6 +112,15 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 	resource := resources[0].GetStructValue().GetFields()
 	if resource["fqdn"].GetStringValue() != "admin.example.test" || resource["resource_id"].GetStringValue() != "res-1" || resource["protocol"].GetStringValue() != "https" || int(resource["port"].GetNumberValue()) != 443 {
 		t.Fatalf("resource = %+v", resource)
+	}
+	posturePolicy := fields["posture_policy"].GetStructValue()
+	if posturePolicy == nil {
+		t.Fatalf("missing posture policy: %+v", fields)
+	}
+	postureFields := posturePolicy.GetFields()
+	checks := postureFields["required_checks"].GetListValue().GetValues()
+	if len(checks) != 2 || checks[0].GetStringValue() != "Disk Encryption" || checks[1].GetStringValue() != "Firewall" || postureFields["required_check_status"].GetStringValue() != "good" {
+		t.Fatalf("posture policy = %+v", posturePolicy.AsMap())
 	}
 }
 

@@ -35,11 +35,12 @@ func catalogFromStruct(value *structpb.Struct, currentVersion string) (catalog.C
 		version = strings.TrimSpace(currentVersion)
 	}
 	catalogSnapshot := catalog.Catalog{
-		Version:     version,
-		DNSSuffixes: catalog.NormalizeSuffixes(structFieldStringList(value, "dns_suffixes")),
-		Resources:   catalog.NormalizeResources(structFieldResourceList(value, "resources", "entries")),
-		NotModified: structFieldBool(value, "not_modified"),
-		PolicyEpoch: strings.TrimSpace(structFieldString(value, "policy_epoch")),
+		Version:       version,
+		DNSSuffixes:   catalog.NormalizeSuffixes(structFieldStringList(value, "dns_suffixes")),
+		Resources:     catalog.NormalizeResources(structFieldResourceList(value, "resources", "entries")),
+		NotModified:   structFieldBool(value, "not_modified"),
+		PolicyEpoch:   strings.TrimSpace(structFieldString(value, "policy_epoch")),
+		PosturePolicy: catalog.NormalizePosturePolicy(posturePolicyFromStruct(structFieldStruct(value, "posture_policy"))),
 	}
 	if ttl, ok := structFieldNumber(value, "ttl_seconds"); ok {
 		catalogSnapshot.TTLSeconds = int(ttl)
@@ -48,4 +49,14 @@ func catalogFromStruct(value *structpb.Struct, currentVersion string) (catalog.C
 		return catalog.Catalog{}, errors.New("catalog version is required")
 	}
 	return catalogSnapshot, nil
+}
+
+func posturePolicyFromStruct(value *structpb.Struct) catalog.PosturePolicy {
+	if value == nil {
+		return catalog.PosturePolicy{}
+	}
+	return catalog.PosturePolicy{
+		RequiredChecks:      structFieldStringList(value, "required_checks"),
+		RequiredCheckStatus: strings.TrimSpace(structFieldString(value, "required_check_status")),
+	}
 }

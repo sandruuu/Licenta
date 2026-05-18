@@ -219,6 +219,7 @@ type deviceCatalogState struct {
 	PolicyEpoch         string
 	DNSSuffixes         []string
 	Resources           []catalog.Resource
+	PosturePolicy       catalog.PosturePolicy
 	TTLSeconds          int
 	ExpiresAt           time.Time
 	NextSyncAt          time.Time

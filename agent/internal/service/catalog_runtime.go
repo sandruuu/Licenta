@@ -88,6 +88,7 @@ func (service *Service) cacheCatalog(catalogSnapshot catalog.Catalog) {
 	service.catalog.PolicyEpoch = strings.TrimSpace(catalogSnapshot.PolicyEpoch)
 	service.catalog.DNSSuffixes = append([]string(nil), catalogSnapshot.DNSSuffixes...)
 	service.catalog.Resources = append([]catalog.Resource(nil), catalogSnapshot.Resources...)
+	service.catalog.PosturePolicy = catalog.NormalizePosturePolicy(catalogSnapshot.PosturePolicy)
 	service.catalog.TTLSeconds = catalogSnapshot.TTLSeconds
 	service.catalog.ExpiresAt = service.catalogExpiresAt(catalogSnapshot.TTLSeconds)
 	service.catalog.NextSyncAt = service.catalogNextSyncAt(catalogSnapshot.TTLSeconds)
@@ -230,6 +231,7 @@ func (service *Service) persistedCatalogSnapshot() (servicestate.CatalogCache, b
 		PolicyEpoch:    strings.TrimSpace(service.catalog.PolicyEpoch),
 		DNSSuffixes:    append([]string(nil), service.catalog.DNSSuffixes...),
 		Resources:      append([]catalog.Resource(nil), service.catalog.Resources...),
+		PosturePolicy:  catalog.NormalizePosturePolicy(service.catalog.PosturePolicy),
 		TTLSeconds:     service.catalog.TTLSeconds,
 		FetchedAt:      fetchedAt,
 		ExpiresAt:      service.catalog.ExpiresAt,
@@ -296,6 +298,7 @@ func (service *Service) restoreCatalogCache(ctx context.Context) {
 	service.catalog.PolicyEpoch = strings.TrimSpace(cache.PolicyEpoch)
 	service.catalog.DNSSuffixes = append([]string(nil), cache.DNSSuffixes...)
 	service.catalog.Resources = append([]catalog.Resource(nil), cache.Resources...)
+	service.catalog.PosturePolicy = catalog.NormalizePosturePolicy(cache.PosturePolicy)
 	service.catalog.TTLSeconds = cache.TTLSeconds
 	service.catalog.ExpiresAt = cache.ExpiresAt
 	service.catalog.NextSyncAt = time.Time{}

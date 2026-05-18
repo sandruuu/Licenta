@@ -24,7 +24,7 @@ func TestNewGUIAppPreservesTimeout(t *testing.T) {
 func TestWailsAppOptionsUsesWindowConfig(t *testing.T) {
 	app := NewGUIApp(Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	wailsOptions := wailsAppOptions(app, defaultGUIWindowConfig)
-	if wailsOptions.Title != defaultGUIWindowConfig.Title || wailsOptions.Width != defaultGUIWindowConfig.Width || wailsOptions.Height != defaultGUIWindowConfig.Height || wailsOptions.MinWidth != defaultGUIWindowConfig.MinWidth || wailsOptions.MinHeight != defaultGUIWindowConfig.MinHeight {
+	if wailsOptions.Title != defaultGUIWindowConfig.Title || wailsOptions.Width != defaultGUIWindowConfig.Width || wailsOptions.Height != defaultGUIWindowConfig.Height || !wailsOptions.DisableResize {
 		t.Fatalf("wails options = %+v", wailsOptions)
 	}
 	if len(wailsOptions.Bind) != 1 || wailsOptions.Bind[0] != app {

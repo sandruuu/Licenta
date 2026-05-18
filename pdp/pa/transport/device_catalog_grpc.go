@@ -72,6 +72,10 @@ func (service *deviceCatalogGRPCService) GetCatalog(ctx context.Context, request
 			"port":        float64(resource.Port),
 		})
 	}
+	postureChecks := make([]interface{}, 0, len(snapshot.PosturePolicy.RequiredChecks))
+	for _, check := range snapshot.PosturePolicy.RequiredChecks {
+		postureChecks = append(postureChecks, check)
+	}
 
 	response, err := structpb.NewStruct(map[string]interface{}{
 		"version":      snapshot.Version,
@@ -80,6 +84,10 @@ func (service *deviceCatalogGRPCService) GetCatalog(ctx context.Context, request
 		"ttl_seconds":  float64(snapshot.TTLSeconds),
 		"not_modified": snapshot.NotModified,
 		"policy_epoch": snapshot.PolicyEpoch,
+		"posture_policy": map[string]interface{}{
+			"required_checks":       postureChecks,
+			"required_check_status": snapshot.PosturePolicy.RequiredCheckStatus,
+		},
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "build catalog response: %v", err)
