@@ -18,6 +18,8 @@ import (
 
 const (
 	AgentTokenAudience      = "ztna-pdp"
+	AgentSessionAudience    = "ztna-agent-api"
+	AgentSessionPurpose     = "ztna.agent_session"
 	EnrollmentTokenAudience = "ztna-enrollment"
 	EnrollmentTokenPurpose  = "device_enrollment"
 	EnrollmentTokenTTL      = 5 * time.Minute
@@ -34,19 +36,50 @@ type JWTManager struct {
 	issuer                string
 }
 
+type ConfirmationClaims struct {
+	CertificateThumbprintSHA256 string `json:"x5t#S256,omitempty"`
+}
+
 // CustomClaims extends the standard JWT claims with application-specific fields
 type CustomClaims struct {
 	jwt.RegisteredClaims
-	UserID   string   `json:"user_id"`
-	Username string   `json:"username"`
-	Role     string   `json:"role"`
-	DeviceID string   `json:"device_id,omitempty"`
-	UserSID  string   `json:"user_sid,omitempty"`
-	Purpose  string   `json:"purpose,omitempty"`
-	Nonce    string   `json:"nonce,omitempty"` // OIDC nonce for replay protection (§3.1.2.1)
-	MFADone  bool     `json:"mfa_done"`
-	ACR      string   `json:"acr,omitempty"`
-	AMR      []string `json:"amr,omitempty"`
+	UserID                      string              `json:"user_id"`
+	Username                    string              `json:"username"`
+	Role                        string              `json:"role"`
+	TenantID                    string              `json:"tenant_id,omitempty"`
+	DeviceID                    string              `json:"device_id,omitempty"`
+	SessionID                   string              `json:"session_id,omitempty"`
+	UserSID                     string              `json:"user_sid,omitempty"`
+	LocalUserSIDHash            string              `json:"local_user_sid_hash,omitempty"`
+	WindowsLogonSessionID       string              `json:"windows_logon_session_id,omitempty"`
+	WindowsSessionID            string              `json:"windows_session_id,omitempty"`
+	CertificateThumbprintSHA256 string              `json:"x5t#S256,omitempty"`
+	Confirmation                *ConfirmationClaims `json:"cnf,omitempty"`
+	Purpose                     string              `json:"purpose,omitempty"`
+	Nonce                       string              `json:"nonce,omitempty"` // OIDC nonce for replay protection (§3.1.2.1)
+	MFADone                     bool                `json:"mfa_done"`
+	ACR                         string              `json:"acr,omitempty"`
+	AMR                         []string            `json:"amr,omitempty"`
+	Scopes                      []string            `json:"scope,omitempty"`
+	PolicyEpoch                 int                 `json:"policy_epoch,omitempty"`
+}
+
+type AgentSessionTokenRequest struct {
+	SessionID                   string
+	UserID                      string
+	Username                    string
+	Role                        string
+	TenantID                    string
+	DeviceID                    string
+	LocalUserSIDHash            string
+	WindowsLogonSessionID       string
+	WindowsSessionID            string
+	CertificateThumbprintSHA256 string
+	PostureRevision             string
+	PolicyEpoch                 int
+	Scopes                      []string
+	ACR                         string
+	AMR                         []string
 }
 
 // MFAClaims is a temporary token issued for MFA step-up verification.
@@ -64,9 +97,11 @@ type MFAClaims struct {
 // JWK represents a JSON Web Key for the JWKS endpoint
 type JWK struct {
 	Kty string `json:"kty"`
-	Crv string `json:"crv"`
-	X   string `json:"x"`
-	Y   string `json:"y"`
+	Crv string `json:"crv,omitempty"`
+	N   string `json:"n,omitempty"`
+	E   string `json:"e,omitempty"`
+	X   string `json:"x,omitempty"`
+	Y   string `json:"y,omitempty"`
 	Kid string `json:"kid"`
 	Use string `json:"use"`
 	Alg string `json:"alg"`
@@ -155,6 +190,77 @@ func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce s
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 	token.Header["kid"] = j.keyID
 	return token.SignedString(j.privateKey)
+}
+
+func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (string, time.Time, error) {
+	if strings.TrimSpace(req.SessionID) == "" {
+		return "", time.Time{}, fmt.Errorf("session_id is required")
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		return "", time.Time{}, fmt.Errorf("user_id is required")
+	}
+	if strings.TrimSpace(req.DeviceID) == "" {
+		return "", time.Time{}, fmt.Errorf("device_id is required")
+	}
+	if strings.TrimSpace(req.CertificateThumbprintSHA256) == "" {
+		return "", time.Time{}, fmt.Errorf("device certificate thumbprint is required")
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(j.tokenExpiry)
+	jti, err := generateJTI()
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("generate JTI: %w", err)
+	}
+	scopes := req.Scopes
+	if len(scopes) == 0 {
+		scopes = []string{"catalog:read", "posture:write", "flow:authorize", "session:renew", "session:revoke"}
+	}
+	acr := strings.TrimSpace(req.ACR)
+	if acr == "" {
+		acr = "urn:ztna:loa:1"
+	}
+	amr := req.AMR
+	if len(amr) == 0 {
+		amr = []string{"idp"}
+	}
+	certificateThumbprint := strings.ToLower(strings.TrimSpace(req.CertificateThumbprintSHA256))
+
+	claims := CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    j.issuer,
+			Subject:   "device:" + strings.TrimSpace(req.DeviceID),
+			Audience:  jwt.ClaimStrings{AgentSessionAudience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			NotBefore: jwt.NewNumericDate(now),
+			ID:        jti,
+		},
+		UserID:                      strings.TrimSpace(req.UserID),
+		Username:                    strings.TrimSpace(req.Username),
+		Role:                        strings.TrimSpace(req.Role),
+		TenantID:                    strings.TrimSpace(req.TenantID),
+		DeviceID:                    strings.TrimSpace(req.DeviceID),
+		SessionID:                   strings.TrimSpace(req.SessionID),
+		LocalUserSIDHash:            strings.TrimSpace(req.LocalUserSIDHash),
+		WindowsLogonSessionID:       strings.TrimSpace(req.WindowsLogonSessionID),
+		WindowsSessionID:            strings.TrimSpace(req.WindowsSessionID),
+		CertificateThumbprintSHA256: certificateThumbprint,
+		Confirmation:                &ConfirmationClaims{CertificateThumbprintSHA256: certificateThumbprint},
+		Purpose:                     AgentSessionPurpose,
+		MFADone:                     true,
+		ACR:                         acr,
+		AMR:                         append([]string(nil), amr...),
+		Scopes:                      append([]string(nil), scopes...),
+		PolicyEpoch:                 req.PolicyEpoch,
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header["kid"] = j.keyID
+	signed, err := token.SignedString(j.privateKey)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("sign agent session token: %w", err)
+	}
+	return signed, expiresAt, nil
 }
 
 // GenerateEnrollmentToken mints a short-lived, device-bound bearer token for

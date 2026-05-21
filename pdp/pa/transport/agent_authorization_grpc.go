@@ -33,6 +33,10 @@ func (service *agentAuthorizationGRPCService) AuthorizeResource(ctx context.Cont
 	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
 		return nil, status.Error(codes.PermissionDenied, "missing client certificate identity")
 	}
+	peerCert, ok := clientCertificateFromGRPCContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "client certificate required")
+	}
 	token, err := catalogBearerTokenFromGRPC(ctx, request)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, err.Error())
@@ -41,7 +45,7 @@ func (service *agentAuthorizationGRPCService) AuthorizeResource(ctx context.Cont
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	response, statusCode, err := service.server.authorizeAgentResource(ctx, enrollment, token, authorizeRequest, "")
+	response, statusCode, err := service.server.authorizeAgentResource(ctx, enrollment, clientCertificateFingerprint(peerCert), token, authorizeRequest, "")
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCode), err.Error())
 	}

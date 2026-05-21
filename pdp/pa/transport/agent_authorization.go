@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"pdp/models"
@@ -32,7 +33,7 @@ type agentAuthorizeResponse struct {
 	ExpiresAt       string   `json:"expires_at,omitempty"`
 }
 
-func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.DeviceEnrollment, token string, req agentAuthorizeRequest, sourceIP string) (agentAuthorizeResponse, int, error) {
+func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.DeviceEnrollment, certificateThumbprint, token string, req agentAuthorizeRequest, sourceIP string) (agentAuthorizeResponse, int, error) {
 	if s == nil || s.pa == nil {
 		return agentAuthorizeResponse{}, http.StatusServiceUnavailable, newAccessErrorForTransport("policy administrator is not available")
 	}
@@ -41,13 +42,14 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 		deviceID = enrollment.DeviceID
 	}
 	result, err := s.pa.AuthorizeAgentResource(ctx, pa.AgentAuthorizationRequest{
-		DeviceID:   deviceID,
-		UserToken:  token,
-		ResourceID: req.ResourceID,
-		Protocol:   req.Protocol,
-		Port:       req.Port,
-		Process:    req.Process,
-		SourceIP:   sourceIP,
+		DeviceID:             deviceID,
+		DeviceCertThumbprint: strings.TrimSpace(certificateThumbprint),
+		UserToken:            token,
+		ResourceID:           req.ResourceID,
+		Protocol:             req.Protocol,
+		Port:                 req.Port,
+		Process:              req.Process,
+		SourceIP:             sourceIP,
 	}, s.gatewayControl)
 	if err != nil {
 		return agentAuthorizeResponse{}, httpStatusForAccessError(err), err

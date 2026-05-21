@@ -12,39 +12,6 @@ import (
 // Pending Auth Session operations (in-memory, ephemeral)
 // ─────────────────────────────────────────────
 
-func (s *Store) SavePendingAuth(session *models.PendingAuthSession) {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-	s.PendingAuth[session.ID] = session
-}
-
-func (s *Store) GetPendingAuth(id string) (*models.PendingAuthSession, bool) {
-	s.pendingMu.RLock()
-	defer s.pendingMu.RUnlock()
-	sess, ok := s.PendingAuth[id]
-	return sess, ok
-}
-
-func (s *Store) DeletePendingAuth(id string) {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-	delete(s.PendingAuth, id)
-}
-
-func (s *Store) CleanExpiredPendingAuth() int {
-	s.pendingMu.Lock()
-	defer s.pendingMu.Unlock()
-	count := 0
-	now := time.Now()
-	for id, sess := range s.PendingAuth {
-		if sess.ExpiresAt.Before(now) {
-			delete(s.PendingAuth, id)
-			count++
-		}
-	}
-	return count
-}
-
 // ─────────────────────────────────────────────
 // Pending Enroll Session operations (in-memory, ephemeral)
 // ─────────────────────────────────────────────
@@ -95,7 +62,6 @@ func (s *Store) StartAutoSave(interval time.Duration, stopChan <-chan struct{}) 
 			case <-stopChan:
 				return
 			case <-ticker.C:
-				s.CleanExpiredPendingAuth()
 				s.CleanExpiredPendingEnroll()
 				s.CleanExpiredRevokedTokens()
 			}

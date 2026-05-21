@@ -1,7 +1,6 @@
 package ipc
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -17,52 +16,6 @@ func TestPingRequestRoundTrip(t *testing.T) {
 	}
 	if ping.Message != "hello" || ping.TrayPID != 10 {
 		t.Fatalf("ping = %+v", ping)
-	}
-}
-
-func TestStartEnrollmentRequestRoundTrip(t *testing.T) {
-	sentAt := time.Now().UTC()
-	expiresAt := sentAt.Add(time.Hour)
-	request, err := NewRequest("req-1", OperationStartEnrollment, StartEnrollmentRequest{
-		AccessToken:          "header.payload.signature",
-		AccessTokenExpiresAt: expiresAt,
-		Nonce:                "nonce-1",
-		DeviceID:             "device-1",
-		UserSID:              "S-1-5-21-1",
-		KeyName:              "ZTNA_DeviceKey",
-		UserEmail:            "alice@example.com",
-		SentAt:               sentAt,
-	})
-	if err != nil {
-		t.Fatalf("NewRequest returned error: %v", err)
-	}
-	var payload StartEnrollmentRequest
-	if err := DecodeBody(request.Body, &payload); err != nil {
-		t.Fatalf("DecodeBody returned error: %v", err)
-	}
-	if payload.AccessToken == "" || payload.Nonce != "nonce-1" || payload.KeyName != "ZTNA_DeviceKey" || !payload.AccessTokenExpiresAt.Equal(expiresAt) {
-		t.Fatalf("payload = %+v", payload)
-	}
-}
-
-func TestUpdateAccessTokenRequestRoundTrip(t *testing.T) {
-	expiresAt := time.Now().UTC().Add(time.Hour)
-	request, err := NewRequest("req-1", OperationUpdateAccessToken, UpdateAccessTokenRequest{
-		AccessToken: "header.payload.signature",
-		ExpiresAt:   expiresAt,
-		DeviceID:    "device-1",
-		UserSID:     "S-1-5-21-1",
-		SentAt:      time.Now().UTC(),
-	})
-	if err != nil {
-		t.Fatalf("NewRequest returned error: %v", err)
-	}
-	var payload UpdateAccessTokenRequest
-	if err := DecodeBody(request.Body, &payload); err != nil {
-		t.Fatalf("DecodeBody returned error: %v", err)
-	}
-	if payload.AccessToken != "header.payload.signature" || payload.DeviceID != "device-1" || !payload.ExpiresAt.Equal(expiresAt) {
-		t.Fatalf("payload = %+v", payload)
 	}
 }
 
@@ -102,20 +55,15 @@ func TestDevicePostureReportRoundTrip(t *testing.T) {
 func TestAgentDashboardRoundTrip(t *testing.T) {
 	reportedAt := time.Now().UTC()
 	response, err := NewResponse("req-1", AgentDashboard{
-		Connection:  DashboardConnection{State: "connected", ServiceState: "running"},
-		Status:      AgentStatus{ServiceState: "running", EnrollmentState: EnrollmentStateEnrolled, ReportedAt: reportedAt},
-		Enrollment:  EnrollmentInfo{State: EnrollmentStateEnrolled, DeviceID: "device-1", KeyExists: true},
-		Certificate: CertificateInfo{SHA256: "abc", ExpiresAt: reportedAt.Add(time.Hour), Valid: true},
-		User:        AuthenticatedUser{UserSID: "S-1-5-21-1", Email: "alice@example.com", SessionState: "ready"},
+		Connection: DashboardConnection{State: "connected", ServiceState: "running"},
+		Status:     AgentStatus{ServiceState: "running", EnrollmentState: EnrollmentStateUnenrolled, ReportedAt: reportedAt},
+		Enrollment: EnrollmentInfo{State: EnrollmentStateUnenrolled},
 		Posture: DevicePostureReport{DeviceID: "device-1", Checks: []DevicePostureCheck{{
 			Name:        "Firewall",
 			Status:      DevicePostureStatusGood,
 			Description: "All firewall profiles are active",
 		}}},
-		Resources:      []CatalogResource{{FQDN: "admin.example.test", ResourceID: "res-1", Protocol: "tcp", Port: 443, Status: "available"}},
-		ActiveSessions: []ActiveSession{{ID: "sess-1", FQDN: "admin.example.test", State: "active"}},
-		AccessEvents:   []AccessEvent{{ID: "evt-1", Decision: "deny", Reason: "token required", OccurredAt: reportedAt}},
-		ReportedAt:     reportedAt,
+		ReportedAt: reportedAt,
 	})
 	if err != nil {
 		t.Fatalf("NewResponse returned error: %v", err)
@@ -124,38 +72,7 @@ func TestAgentDashboardRoundTrip(t *testing.T) {
 	if err := DecodeBody(response.Body, &dashboard); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if dashboard.Connection.State != "connected" || len(dashboard.Resources) != 1 || len(dashboard.AccessEvents) != 1 {
+	if dashboard.Connection.State != "connected" || dashboard.Enrollment.State != EnrollmentStateUnenrolled || len(dashboard.Posture.Checks) != 1 {
 		t.Fatalf("dashboard = %+v", dashboard)
-	}
-}
-
-func TestPipeSecurityDescriptorAllowsInteractiveUsersByDefault(t *testing.T) {
-	descriptor, err := PipeSecurityDescriptor("")
-	if err != nil {
-		t.Fatalf("PipeSecurityDescriptor returned error: %v", err)
-	}
-	for _, required := range []string{"SY", "BA", "IU"} {
-		if !strings.Contains(descriptor, required) {
-			t.Fatalf("descriptor %q does not contain %q", descriptor, required)
-		}
-	}
-	for _, forbidden := range []string{"WD", "AN", "AU"} {
-		if strings.Contains(descriptor, forbidden) {
-			t.Fatalf("descriptor %q contains broad SID %q", descriptor, forbidden)
-		}
-	}
-}
-
-func TestPipeSecurityDescriptorAddsAuthorizedUserSID(t *testing.T) {
-	userSID := "S-1-5-21-1000-2000-3000-1001"
-	descriptor, err := PipeSecurityDescriptor(userSID)
-	if err != nil {
-		t.Fatalf("PipeSecurityDescriptor returned error: %v", err)
-	}
-	if !strings.Contains(descriptor, userSID) {
-		t.Fatalf("descriptor %q does not contain authorized SID", descriptor)
-	}
-	if _, err := PipeSecurityDescriptor("Everyone"); err == nil {
-		t.Fatalf("PipeSecurityDescriptor accepted invalid SID")
 	}
 }

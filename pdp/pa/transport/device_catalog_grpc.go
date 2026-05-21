@@ -37,11 +37,15 @@ func (service *deviceCatalogGRPCService) GetCatalog(ctx context.Context, request
 	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
 		return nil, status.Error(codes.PermissionDenied, "missing client certificate identity")
 	}
+	peerCert, ok := clientCertificateFromGRPCContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "client certificate required for catalog")
+	}
 	token, err := catalogBearerTokenFromGRPC(ctx, request)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
-	claims, statusCode, err := service.server.validateDeviceCatalogToken(token, enrollment.DeviceID)
+	claims, statusCode, err := service.server.validateDeviceCatalogToken(token, enrollment.DeviceID, clientCertificateFingerprint(peerCert))
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCode), err.Error())
 	}
@@ -116,6 +120,8 @@ func (s *Server) initDeviceCatalogGRPC() {
 		s.gatewayControl = NewGatewayControlRegistry()
 	}
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.deviceCatalogGRPCAuthInterceptor()))
+	grpcServer.RegisterService(&agentEnrollmentGRPCServiceDesc, &agentEnrollmentGRPCService{server: s})
+	grpcServer.RegisterService(&agentSessionGRPCServiceDesc, &agentSessionGRPCService{server: s})
 	grpcServer.RegisterService(&deviceCatalogGRPCServiceDesc, &deviceCatalogGRPCService{server: s})
 	grpcServer.RegisterService(&deviceTelemetryGRPCServiceDesc, &deviceTelemetryGRPCService{server: s})
 	grpcServer.RegisterService(&agentAuthorizationGRPCServiceDesc, &agentAuthorizationGRPCService{server: s})
@@ -127,7 +133,7 @@ func (s *Server) initDeviceCatalogGRPC() {
 
 func (s *Server) deviceCatalogGRPCAuthInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if info != nil && isGatewayGRPCMethod(info.FullMethod) {
+		if info != nil && (isGatewayGRPCMethod(info.FullMethod) || isAgentEnrollmentGRPCMethod(info.FullMethod)) {
 			return handler(ctx, req)
 		}
 		peerCert, ok := clientCertificateFromGRPCContext(ctx)
@@ -147,6 +153,10 @@ func isGatewayGRPCMethod(fullMethod string) bool {
 	fullMethod = strings.TrimSpace(fullMethod)
 	return strings.HasPrefix(fullMethod, "/"+gatewayEnrollmentGRPCServiceName+"/") ||
 		strings.HasPrefix(fullMethod, "/"+gatewayTrustGRPCServiceName+"/")
+}
+
+func isAgentEnrollmentGRPCMethod(fullMethod string) bool {
+	return strings.HasPrefix(strings.TrimSpace(fullMethod), "/"+agentEnrollmentGRPCServiceName+"/")
 }
 
 func clientCertificateFromGRPCContext(ctx context.Context) (*x509.Certificate, bool) {

@@ -21,7 +21,7 @@ import (
 func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
-	accessToken := newDeviceCatalogAccessToken(t, server, dataStore, "device-1", "admin")
+	accessToken := newDeviceCatalogAccessToken(t, server, dataStore, "device-1", "admin", clientCertificateFingerprint(cert))
 	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
 		ID:              "enroll-1",
 		DeviceID:        "device-1",

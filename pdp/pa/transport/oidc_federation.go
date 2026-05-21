@@ -136,6 +136,12 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Missing code or state parameter", http.StatusBadRequest)
 		return
 	}
+	if s.handleEnrollmentFederatedCallback(w, r, code, state) {
+		return
+	}
+	if s.handleAgentSessionFederatedCallback(w, r, code, state) {
+		return
+	}
 
 	// Retrieve the federation session (one-time use)
 	fedSession, ok := s.pa.Auth.OIDC.GetFederationSession(state)
@@ -176,10 +182,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Extract identity from the external id_token
-	claims, err := s.pa.Auth.Federation.MapExternalClaims(
-		tokenResp.IDToken,
-		claimMapping,
-	)
+	claims, err := s.pa.Auth.Federation.ValidateAndMapExternalClaims(fedCfg, tokenResp.IDToken, fedSession.Nonce, claimMapping)
 	if err != nil {
 		log.Printf("[FEDERATION] Claim mapping failed: %v", err)
 		http.Error(w, "Failed to extract identity from external IdP", http.StatusBadGateway)

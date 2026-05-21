@@ -42,6 +42,7 @@ type Server struct {
 
 	authLimiterMu sync.Mutex
 	authLimiter   map[string]*enrollRateEntry // reuse: per-IP rate limit for login/register
+	agentSessions *agentSessionStore
 
 	// PA event broker for CAEP-style state-change notifications.
 	events *events.Broker
@@ -66,6 +67,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 		sessionGateways: make(map[string]string),
 		enrollLimiter:   make(map[string]*enrollRateEntry),
 		authLimiter:     make(map[string]*enrollRateEntry),
+		agentSessions:   newAgentSessionStore(),
 		events:          events.NewBroker(policyAdmin.Cfg.Runtime.EventBufferSize),
 	}
 
@@ -110,6 +112,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	}
 	if policyAdmin.Enrollment != nil {
 		policyAdmin.Enrollment.SetCertificateAuthority(s.signCSR, s.revokeCertificate, s.deviceRole)
+		policyAdmin.Enrollment.SetInteractiveDeviceCertificateIssuer(s.signDeviceEnrollmentCSR)
 		if policyAdmin.Auth != nil && policyAdmin.Auth.JWT != nil {
 			policyAdmin.Enrollment.SetEnrollmentTokenIssuer(policyAdmin.Auth.JWT.GenerateEnrollmentTokenForUserSID)
 		}
@@ -131,7 +134,6 @@ func (s *Server) hydrateOIDCClients() {
 		return
 	}
 	s.pa.Auth.OIDC.RegisterNativeConnectAppClient()
-	s.pa.Auth.OIDC.RegisterNativeAgentClient()
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {
@@ -157,18 +159,15 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/config/public", s.handlePublicConfig)
 	s.mux.HandleFunc("/health", s.handleHealthCheck)
-	s.mux.HandleFunc("/api/ca/cert", s.handleCACert)                    // Public: returns CA certificate PEM
-	s.mux.HandleFunc("/api/cert-fingerprint", s.handleCertFingerprint)  // Public: returns server TLS cert SHA-256 fingerprint
-	s.mux.HandleFunc("/api/enroll/token", s.handleIssueEnrollmentToken) // Device-bound, short-lived token for service EST simpleenroll
+	s.mux.HandleFunc("/api/ca/cert", s.handleCACert)                   // Public: returns CA certificate PEM
+	s.mux.HandleFunc("/api/cert-fingerprint", s.handleCertFingerprint) // Public: returns server TLS cert SHA-256 fingerprint
 
 	// ─────────────────────────────────────────────
 	// Browser auth flow endpoints (Duo-like)
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)                   // Serve React access login page
-	s.mux.HandleFunc("/api/auth/start-session", s.handleStartSession)       // Connect-app creates pending session
-	s.mux.HandleFunc("/api/auth/session-status", s.handleSessionStatus)     // Connect-app polls session status
-	s.mux.HandleFunc("/api/auth/session-info", s.handleSessionInfo)         // Browser gets session device health
-	s.mux.HandleFunc("/api/auth/complete-session", s.handleCompleteSession) // Browser completes auth
+	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)              // Serve React access login page
+	s.mux.HandleFunc("/browser/enroll/", s.handleBrowserEnroll)        // Browser side of TrustAgent enrollment
+	s.mux.HandleFunc("/browser/session/", s.handleBrowserAgentSession) // Browser side of TrustAgent user login
 
 	// ─────────────────────────────────────────────
 	// OIDC / OAuth2 endpoints (Cloud acts as IdP)
@@ -220,16 +219,9 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/directory/groups", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDirectoryGroups)))
 
 	// ─────────────────────────────────────────────
-	// Device enrollment endpoints
+	// Device enrollment lifecycle endpoints
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/api/enroll", s.handleDeviceEnroll)                                                                 // Device submits CSR (no auth — bootstrapping)
-	s.mux.HandleFunc("/api/enroll/status", s.handleEnrollmentStatus)                                                      // Device polls enrollment status
 	s.mux.Handle("/api/enroll/renew", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleCertRenewal)))) // Device renews short-lived cert (mTLS identity)
-	s.mux.HandleFunc("/api/enroll/start-session", s.handleEnrollStartSession)                                             // Device starts browser-based enrollment
-	s.mux.HandleFunc("/api/enroll/complete-session", s.handleEnrollCompleteSession)                                       // Browser completes enrollment after OIDC login
-	s.mux.HandleFunc("/api/enroll/session-status", s.handleEnrollSessionStatus)                                           // Device polls enrollment session status
-	s.mux.HandleFunc("/.well-known/est/ztna/cacerts", s.handleESTCACerts)                                                 // EST CA bundle discovery
-	s.mux.HandleFunc("/.well-known/est/ztna/simpleenroll", s.handleESTSimpleEnroll)                                       // EST-style authenticated endpoint enrollment
 	s.mux.Handle("/api/admin/enrollments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminEnrollments)))             // List enrollments
 	s.mux.Handle("/api/admin/enrollments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminEnrollmentAction)))       // Approve/revoke
 

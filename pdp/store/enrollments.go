@@ -17,10 +17,10 @@ import (
 // SaveDeviceEnrollment creates or updates a device enrollment record
 func (s *Store) SaveDeviceEnrollment(e *models.DeviceEnrollment) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO device_enrollments
-		(id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial, status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial, status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.ID, e.DeviceID, e.Component, e.Hostname, e.PublicKeyFingerprint, e.CertFingerprint, e.CertSerial,
-		e.Status, e.CSRPEM, e.CertPEM, fmtTime(e.EnrolledAt), fmtTime(e.ExpiresAt), e.ApprovedBy, e.UserID, e.Username)
+		e.Status, e.CSRPEM, e.CertPEM, fmtTime(e.EnrolledAt), fmtTime(e.ExpiresAt), e.ApprovedBy, e.UserID, e.Username, e.TenantID)
 	if err != nil {
 		log.Printf("[STORE] Failed to save device enrollment %s: %v", e.ID, err)
 	}
@@ -29,7 +29,7 @@ func (s *Store) SaveDeviceEnrollment(e *models.DeviceEnrollment) {
 // GetDeviceEnrollment retrieves an enrollment by ID
 func (s *Store) GetDeviceEnrollment(id string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
 		FROM device_enrollments WHERE id = ?`, id)
 	return s.scanEnrollment(row)
 }
@@ -37,7 +37,7 @@ func (s *Store) GetDeviceEnrollment(id string) (*models.DeviceEnrollment, bool) 
 // GetDeviceEnrollmentByDeviceID retrieves an enrollment by device_id
 func (s *Store) GetDeviceEnrollmentByDeviceID(deviceID string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
 		FROM device_enrollments WHERE device_id = ? ORDER BY enrolled_at DESC LIMIT 1`, deviceID)
 	return s.scanEnrollment(row)
 }
@@ -45,7 +45,7 @@ func (s *Store) GetDeviceEnrollmentByDeviceID(deviceID string) (*models.DeviceEn
 // GetDeviceEnrollmentByComponent retrieves an enrollment by device_id and component
 func (s *Store) GetDeviceEnrollmentByComponent(deviceID, component string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
 		FROM device_enrollments WHERE device_id = ? AND component = ? ORDER BY enrolled_at DESC LIMIT 1`, deviceID, component)
 	return s.scanEnrollment(row)
 }
@@ -53,7 +53,7 @@ func (s *Store) GetDeviceEnrollmentByComponent(deviceID, component string) (*mod
 // ListDeviceEnrollments returns all enrollments
 func (s *Store) ListDeviceEnrollments() []*models.DeviceEnrollment {
 	rows, err := s.db.Query(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
 		FROM device_enrollments ORDER BY enrolled_at DESC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list enrollments: %v", err)
@@ -66,7 +66,7 @@ func (s *Store) ListDeviceEnrollments() []*models.DeviceEnrollment {
 		e := &models.DeviceEnrollment{}
 		var enrolledAt, expiresAt string
 		if err := rows.Scan(&e.ID, &e.DeviceID, &e.Component, &e.Hostname, &e.PublicKeyFingerprint, &e.CertFingerprint, &e.CertSerial,
-			&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username); err != nil {
+			&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.TenantID); err != nil {
 			continue
 		}
 		e.EnrolledAt = parseTime(enrolledAt)
@@ -80,7 +80,7 @@ func (s *Store) scanEnrollment(row *sql.Row) (*models.DeviceEnrollment, bool) {
 	e := &models.DeviceEnrollment{}
 	var enrolledAt, expiresAt string
 	err := row.Scan(&e.ID, &e.DeviceID, &e.Component, &e.Hostname, &e.PublicKeyFingerprint, &e.CertFingerprint, &e.CertSerial,
-		&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username)
+		&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.TenantID)
 	if err != nil {
 		return nil, false
 	}

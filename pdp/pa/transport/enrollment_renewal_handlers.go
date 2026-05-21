@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 
 	"pdp/models"
 	paenrollment "pdp/pa/enrollment"
@@ -70,20 +69,4 @@ func (s *Server) writeEnrollmentRenewalError(w http.ResponseWriter, deviceID str
 		log.Printf("[ENROLL] Renewal: failed to sign CSR for device %s: %v", deviceID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to sign certificate"})
 	}
-}
-
-func enrollmentClientMessage(err error) string {
-	message := err.Error()
-	for _, prefix := range []string{
-		paenrollment.ErrInvalidRequest.Error(),
-		paenrollment.ErrForbidden.Error(),
-		paenrollment.ErrNotFound.Error(),
-		paenrollment.ErrInvalidState.Error(),
-		paenrollment.ErrInvalidCSR.Error(),
-	} {
-		if strings.HasPrefix(message, prefix+": ") {
-			return strings.TrimPrefix(message, prefix+": ")
-		}
-	}
-	return message
 }

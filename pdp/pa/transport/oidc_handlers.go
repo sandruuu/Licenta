@@ -15,7 +15,7 @@ import (
 // handleOIDCAuthorize is the OIDC Authorization Endpoint.
 // Native endpoint clients redirect the user's browser here to start authentication.
 //
-// GET /auth/authorize?client_id=ztna-agent&response_type=code&redirect_uri=http://127.0.0.1/callback&state=xyz&scope=openid
+// GET /auth/authorize?client_id=connect-app&response_type=code&redirect_uri=http://127.0.0.1/callback&state=xyz&scope=openid
 //
 // Flow:
 //  1. Validates client_id and redirect_uri

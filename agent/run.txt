@@ -1,2 +1,0 @@
-cd C:\Users\laura\Desktop\Licenta\agent\packaging
-.\build-enterprise-package.ps1

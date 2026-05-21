@@ -2,6 +2,7 @@ package enrollment
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	"pdp/models"
@@ -105,19 +106,24 @@ type DeviceRoleResolver func(component string) string
 
 type EnrollmentTokenIssuer func(userID, username, role, deviceID, nonce, userSID string) (string, time.Duration, error)
 
+type InteractiveDeviceCertificateIssuer func(csrPEM []byte, validDays int, role, deviceID string) ([]byte, error)
+
 type Config struct {
 	CertificateValidityDays int
 	BrowserSessionTTL       time.Duration
 }
 
 type Service struct {
+	mu                      sync.RWMutex
 	store                   *store.Store
 	signer                  CertificateSigner
+	interactiveIssuer       InteractiveDeviceCertificateIssuer
 	revoker                 CertificateRevoker
 	deviceRole              DeviceRoleResolver
 	enrollmentTokenIssuer   EnrollmentTokenIssuer
 	certificateValidityDays int
 	browserSessionTTL       time.Duration
+	interactiveSessions     map[string]*InteractiveSession
 }
 
 func NewService(store *store.Store, cfgs ...Config) *Service {
@@ -137,6 +143,7 @@ func NewService(store *store.Store, cfgs ...Config) *Service {
 		store:                   store,
 		certificateValidityDays: cfg.CertificateValidityDays,
 		browserSessionTTL:       cfg.BrowserSessionTTL,
+		interactiveSessions:     make(map[string]*InteractiveSession),
 	}
 }
 
@@ -154,4 +161,11 @@ func (s *Service) SetEnrollmentTokenIssuer(issuer EnrollmentTokenIssuer) {
 		return
 	}
 	s.enrollmentTokenIssuer = issuer
+}
+
+func (s *Service) SetInteractiveDeviceCertificateIssuer(issuer InteractiveDeviceCertificateIssuer) {
+	if s == nil {
+		return
+	}
+	s.interactiveIssuer = issuer
 }

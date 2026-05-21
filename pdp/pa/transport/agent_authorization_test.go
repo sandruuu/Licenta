@@ -9,6 +9,8 @@ import (
 
 	"pdp/models"
 
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -40,7 +42,7 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 		ExpiresAt:       time.Now().Add(time.Hour),
 	}
 	store.SaveDeviceEnrollment(enrollment)
-	accessToken := newDeviceCatalogAccessToken(t, server, store, "device-1", "admin")
+	accessToken := newDeviceCatalogAccessToken(t, server, store, "device-1", "admin", clientCertificateFingerprint(deviceCert))
 
 	gatewayCtx, cancelGateway := context.WithCancel(gatewayControlPeerContext(gatewayCert))
 	defer cancelGateway()
@@ -71,7 +73,8 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	serviceCtx := context.WithValue(context.Background(), deviceEnrollmentContextKey, enrollment)
+	serviceCtx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: *deviceTLSState(deviceCert)}})
+	serviceCtx = context.WithValue(serviceCtx, deviceEnrollmentContextKey, enrollment)
 	responseCh := make(chan *structpb.Struct, 1)
 	errorCh := make(chan error, 1)
 	go func() {

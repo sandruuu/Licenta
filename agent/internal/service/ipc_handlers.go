@@ -6,10 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/platform/process"
-	"agent/internal/service/dnsresolver"
-	agentnetwork "agent/internal/service/network"
-	"agent/internal/service/tunnel"
 	"agent/internal/shared/ipc"
 )
 
@@ -32,24 +28,6 @@ func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*i
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
 		return ipc.NewResponse(request.ID, service.dashboard(ctx))
-	case ipc.OperationGetCatalogResources:
-		var payload ipc.CatalogResourcesRequest
-		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
-			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
-		}
-		return ipc.NewResponse(request.ID, service.catalogResourcesResponse())
-	case ipc.OperationGetActiveSessions:
-		var payload ipc.ActiveSessionsRequest
-		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
-			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
-		}
-		return ipc.NewResponse(request.ID, service.activeSessionsResponse())
-	case ipc.OperationGetAccessEvents:
-		var payload ipc.AccessEventsRequest
-		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
-			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
-		}
-		return ipc.NewResponse(request.ID, service.accessEventsResponse())
 	case ipc.OperationGetDevicePosture:
 		var payload ipc.DevicePostureRequest
 		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
@@ -60,22 +38,40 @@ func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*i
 			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil
 		}
 		return ipc.NewResponse(request.ID, report)
-	case ipc.OperationStartEnrollment:
-		var payload ipc.StartEnrollmentRequest
+	case ipc.OperationStartEnrollmentInteractive:
+		var payload ipc.StartEnrollmentInteractiveRequest
 		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
-		response, code, err := service.startEnrollment(ctx, payload)
+		response, code, err := service.enrollment.StartInteractive(ctx)
 		if err != nil {
 			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil
 		}
 		return ipc.NewResponse(request.ID, response)
-	case ipc.OperationUpdateAccessToken:
-		var payload ipc.UpdateAccessTokenRequest
+	case ipc.OperationStartUserLoginInteractive:
+		var payload ipc.StartUserLoginInteractiveRequest
 		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
-		response, code, err := service.updateAccessToken(ctx, payload)
+		peer, ok := ipc.PeerIdentityFromContext(ctx)
+		if !ok {
+			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, "verified IPC peer identity is required"), nil
+		}
+		response, code, err := service.userSessions.StartInteractive(ctx, peer)
+		if err != nil {
+			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil
+		}
+		return ipc.NewResponse(request.ID, response)
+	case ipc.OperationLogoutUserSession:
+		var payload ipc.LogoutUserSessionRequest
+		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
+			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
+		}
+		peer, ok := ipc.PeerIdentityFromContext(ctx)
+		if !ok {
+			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, "verified IPC peer identity is required"), nil
+		}
+		response, code, err := service.userSessions.Logout(ctx, peer)
 		if err != nil {
 			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil
 		}
@@ -86,112 +82,43 @@ func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*i
 }
 
 func (service *Service) ping(payload ipc.PingRequest) ipc.PingResponse {
-	identity := process.Current()
+	identity := currentProcessIdentity()
 	message := strings.TrimSpace(payload.Message)
 	if message == "" {
 		message = "ping"
 	}
 	return ipc.PingResponse{
-		Message:           "pong from service",
-		Echo:              message,
-		Protocol:          ipc.ProtocolVersion,
-		PipeName:          ipc.PipePath(),
-		ServiceState:      string(service.State()),
-		ServicePID:        identity.PID,
-		ServiceUser:       identity.Username,
-		ServiceUserSID:    identity.UserSID,
-		AuthorizedUserSID: service.AuthorizedUserSID(),
-		ReceivedAt:        time.Now().UTC(),
+		Message:        "pong from service",
+		Echo:           message,
+		Protocol:       ipc.ProtocolVersion,
+		PipeName:       ipc.PipePath(),
+		ServiceState:   string(service.State()),
+		ServicePID:     identity.PID,
+		ServiceUser:    identity.Username,
+		ServiceUserSID: identity.UserSID,
+		ReceivedAt:     time.Now().UTC(),
 	}
 }
 
 func (service *Service) status() ipc.AgentStatus {
-	service.refreshIdentitySnapshot(context.Background())
-	identity := process.Current()
+	identity := currentProcessIdentity()
 	service.mu.RLock()
-	enrollment := service.enrollment
-	session := service.session
 	posture := service.posture
-	catalogState := service.catalog
 	serviceState := service.state
-	authorizedUserSID := service.authorizedUserSID
 	service.mu.RUnlock()
-	syntheticStatus := dnsresolver.Status{State: dnsresolver.StatusWaiting}
-	if service.syntheticResolver != nil {
-		syntheticStatus = service.syntheticResolver.Status()
-	}
-	networkStatus := agentnetwork.Status{State: agentnetwork.StatusDisabled}
-	if service.networkManager != nil {
-		networkStatus = service.networkManager.Status()
-	}
-	gatewayStatus := tunnel.Status{State: tunnel.StatusDisabled}
-	if service.gatewayTunnel != nil {
-		gatewayStatus = service.gatewayTunnel.Status()
-	}
+	enrollment := service.enrollment.Snapshot()
 	return ipc.AgentStatus{
 		ServiceState:             string(serviceState),
 		ServicePID:               identity.PID,
 		ServiceUser:              identity.Username,
 		ServiceUserSID:           identity.UserSID,
-		AuthorizedUserSID:        authorizedUserSID,
 		EnrollmentState:          enrollment.State,
-		DeviceID:                 enrollment.DeviceID,
-		DeviceIDSource:           enrollment.DeviceIDSource,
-		ActiveUserSID:            enrollment.ActiveUserSID,
-		KeyName:                  enrollment.KeyName,
-		KeyExists:                enrollment.KeyExists,
-		KeyProvider:              enrollment.KeyProvider,
-		EnrollmentNonce:          enrollment.Nonce,
-		CertificateSHA256:        enrollment.CertificateSHA256,
-		CertificateExpiresAt:     enrollment.CertificateNotAfter,
+		EnrollmentDeviceID:       enrollment.DeviceID,
+		EnrollmentLastError:      enrollment.LastError,
 		DevicePostureStatus:      posture.Status,
 		DevicePostureCheckCount:  len(posture.Report.Checks),
 		DevicePostureCollectedAt: posture.LastCollectedAt,
-		DevicePostureReportedAt:  posture.LastReportedAt,
 		DevicePostureLastError:   posture.LastError,
-		DevicePostureReportError: posture.LastReportError,
-		SessionState:             session.State,
-		AccessTokenExpiresAt:     session.ExpiresAt,
-		CatalogStatus:            catalogState.Status,
-		CatalogVersion:           catalogState.Version,
-		CatalogPolicyEpoch:       catalogState.PolicyEpoch,
-		CatalogDNSSuffixCount:    len(catalogState.DNSSuffixes),
-		CatalogResourceCount:     len(catalogState.Resources),
-		CatalogLastSyncedAt:      catalogState.LastSyncedAt,
-		CatalogNextSyncAt:        catalogState.NextSyncAt,
-		CatalogNextRetryAt:       catalogState.NextRetryAt,
-		CatalogLastError:         catalogState.LastError,
-		SyntheticDNSStatus:       syntheticStatus.State,
-		SyntheticDNSSuffixCount:  syntheticStatus.DNSSuffixCount,
-		SyntheticResourceCount:   syntheticStatus.ResourceCount,
-		SyntheticMappingCount:    syntheticStatus.ActiveMappingCount,
-		SyntheticCGNATRange:      syntheticStatus.CGNATRange,
-		SyntheticDNSUpdatedAt:    syntheticStatus.LastUpdatedAt,
-		SyntheticDNSLastError:    syntheticStatus.LastError,
-		NetworkStatus:            networkStatus.State,
-		TUNName:                  networkStatus.TUNName,
-		TUNIP:                    networkStatus.TUNIP,
-		TUNNetmask:               networkStatus.TUNNetmask,
-		TUNRouteCIDR:             networkStatus.CGNATRange,
-		NetworkUpdatedAt:         networkStatus.UpdatedAt,
-		NetworkPacketsRead:       networkStatus.PacketsRead,
-		NetworkTCPPackets:        networkStatus.TCPPackets,
-		NetworkMatchedPackets:    networkStatus.MatchedPackets,
-		NetworkUnmatchedPackets:  networkStatus.UnmatchedPackets,
-		NetworkDroppedPackets:    networkStatus.DroppedPackets,
-		NetworkForwarderReady:    networkStatus.ForwarderConfigured,
-		NetworkLastPacketAt:      networkStatus.LastPacketAt,
-		NetworkLastPacketError:   networkStatus.LastPacketError,
-		NetworkLastError:         networkStatus.LastError,
-		GatewayTunnelStatus:      gatewayStatus.State,
-		GatewayAddress:           gatewayStatus.GatewayAddress,
-		GatewayTunnelConnectedAt: gatewayStatus.ConnectedAt,
-		GatewayTunnelUpdatedAt:   gatewayStatus.UpdatedAt,
-		GatewayTunnelLastError:   gatewayStatus.LastError,
-		GatewayTunnelStreamCount: gatewayStatus.StreamCount,
-		LastError:                enrollment.LastError,
-		IdentityError:            enrollment.IdentityError,
-		IdentityCheckedAt:        enrollment.IdentityCheckedAt,
 		ReportedAt:               service.clock().UTC(),
 	}
 }

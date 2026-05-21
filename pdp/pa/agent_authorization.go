@@ -16,13 +16,14 @@ import (
 )
 
 type AgentAuthorizationRequest struct {
-	DeviceID   string
-	UserToken  string
-	ResourceID string
-	Protocol   string
-	Port       int
-	Process    *models.ProcessIdentity
-	SourceIP   string
+	DeviceID             string
+	DeviceCertThumbprint string
+	UserToken            string
+	ResourceID           string
+	Protocol             string
+	Port                 int
+	Process              *models.ProcessIdentity
+	SourceIP             string
 }
 
 type AgentAuthorizationResponse struct {
@@ -60,7 +61,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	if deviceID == "" {
 		return AgentAuthorizationResponse{}, newAccessError(AccessErrorPermissionDenied, "device identity is required", nil)
 	}
-	claims, err := pa.ValidateDeviceUserToken(req.UserToken, deviceID)
+	claims, err := pa.ValidateDeviceUserTokenBoundForScope(req.UserToken, deviceID, req.DeviceCertThumbprint, "flow:authorize")
 	if err != nil {
 		return AgentAuthorizationResponse{}, err
 	}
@@ -153,12 +154,43 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 }
 
 func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (*auth.CustomClaims, error) {
+	return pa.ValidateDeviceUserTokenBoundForScope(token, deviceID, "", "flow:authorize")
+}
+
+func (pa *PolicyAdministrator) ValidateDeviceUserTokenBound(token, deviceID, certificateThumbprint string) (*auth.CustomClaims, error) {
+	return pa.validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, "", true)
+}
+
+func (pa *PolicyAdministrator) ValidateDeviceUserTokenBoundForScope(token, deviceID, certificateThumbprint, requiredScope string) (*auth.CustomClaims, error) {
+	return pa.validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope, false)
+}
+
+func (pa *PolicyAdministrator) validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope string, allowLegacyAgentToken bool) (*auth.CustomClaims, error) {
 	if pa == nil || pa.Auth == nil || pa.Auth.JWT == nil || pa.Store == nil {
 		return nil, newAccessError(AccessErrorServiceUnavailable, "identity services are not available", nil)
 	}
-	claims, err := pa.Auth.JWT.ParseAuthTokenForAudience(strings.TrimSpace(token), auth.AgentTokenAudience)
-	if err != nil || claims == nil || claims.Purpose != "" {
-		return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired user token", err)
+	trimmedToken := strings.TrimSpace(token)
+	claims, err := pa.Auth.JWT.ParseAuthTokenForAudience(trimmedToken, auth.AgentSessionAudience)
+	if err == nil && claims != nil {
+		if claims.Purpose != auth.AgentSessionPurpose {
+			return nil, newAccessError(AccessErrorUnauthenticated, "invalid agent session token purpose", nil)
+		}
+		if expected := strings.ToLower(strings.TrimSpace(certificateThumbprint)); expected != "" {
+			if agentSessionCertificateThumbprint(claims) != expected {
+				return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is not bound to the mTLS device certificate", nil)
+			}
+		}
+		if scope := strings.TrimSpace(requiredScope); scope != "" && !agentSessionHasScope(claims, scope) {
+			return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is missing required scope "+scope, nil)
+		}
+	} else {
+		if !allowLegacyAgentToken || strings.TrimSpace(requiredScope) != "" {
+			return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired agent session token", err)
+		}
+		claims, err = pa.Auth.JWT.ParseAuthTokenForAudience(trimmedToken, auth.AgentTokenAudience)
+		if err != nil || claims == nil || claims.Purpose != "" {
+			return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired user token", err)
+		}
 	}
 	if claims.ID != "" && pa.Store.IsTokenRevoked(claims.ID) {
 		return nil, newAccessError(AccessErrorUnauthenticated, "token has been revoked", nil)
@@ -175,6 +207,34 @@ func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (
 	}
 	claims.Role = user.Role
 	return claims, nil
+}
+
+func agentSessionCertificateThumbprint(claims *auth.CustomClaims) string {
+	if claims == nil {
+		return ""
+	}
+	if claims.Confirmation != nil {
+		if thumbprint := strings.ToLower(strings.TrimSpace(claims.Confirmation.CertificateThumbprintSHA256)); thumbprint != "" {
+			return thumbprint
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(claims.CertificateThumbprintSHA256))
+}
+
+func agentSessionHasScope(claims *auth.CustomClaims, requiredScope string) bool {
+	if claims == nil {
+		return false
+	}
+	requiredScope = strings.TrimSpace(requiredScope)
+	if requiredScope == "" {
+		return true
+	}
+	for _, scope := range claims.Scopes {
+		if strings.EqualFold(strings.TrimSpace(scope), requiredScope) {
+			return true
+		}
+	}
+	return false
 }
 
 func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationRequest, claims *auth.CustomClaims) (resolvedAgentAuthorization, error) {

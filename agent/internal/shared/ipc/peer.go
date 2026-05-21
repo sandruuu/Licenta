@@ -7,9 +7,12 @@ import (
 )
 
 type PeerIdentity struct {
-	UserSID           string
-	Verified          bool
-	VerificationError string
+	ProcessID             uint32
+	UserSID               string
+	WindowsLogonSessionID string
+	WindowsSessionID      string
+	Verified              bool
+	VerificationError     string
 }
 
 type peerIdentityContextKey struct{}
@@ -19,6 +22,8 @@ func ContextWithPeerIdentity(ctx context.Context, identity PeerIdentity) context
 		ctx = context.Background()
 	}
 	identity.UserSID = strings.TrimSpace(identity.UserSID)
+	identity.WindowsLogonSessionID = strings.TrimSpace(identity.WindowsLogonSessionID)
+	identity.WindowsSessionID = strings.TrimSpace(identity.WindowsSessionID)
 	identity.VerificationError = strings.TrimSpace(identity.VerificationError)
 	if identity.UserSID == "" {
 		identity.Verified = false

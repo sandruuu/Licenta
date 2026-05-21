@@ -1,0 +1,177 @@
+package usersession
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"agent/internal/service/enrollment"
+	"agent/internal/shared/ipc"
+)
+
+const (
+	StatusWaitingForUserLogin = "WAITING_FOR_USER_LOGIN"
+	StatusReadyToClaim        = "READY_TO_CLAIM"
+	StatusDenied              = "DENIED"
+	StatusClaimed             = "CLAIMED"
+
+	DefaultTimeout      = 10 * time.Minute
+	DefaultPollInterval = 3 * time.Second
+)
+
+type Config struct {
+	PDPGRPCEndpoint   string
+	PDPTLSServerName  string
+	PDPCAFile         string
+	LoginTimeout      time.Duration
+	LoginPollInterval time.Duration
+}
+
+type Dependencies struct {
+	Logger          *slog.Logger
+	Client          Client
+	Enrollment      EnrollmentProvider
+	DeviceIdentity  enrollment.DeviceIdentity
+	PostureSnapshot func() ipc.DevicePostureReport
+	Clock           func() time.Time
+}
+
+type EnrollmentProvider interface {
+	Record(context.Context) (enrollment.EnrollmentRecord, error)
+}
+
+type Client interface {
+	StartSession(context.Context, StartSessionRequest) (StartSessionResponse, error)
+	SessionStatus(context.Context, SessionStatusRequest) (SessionStatusResponse, error)
+	ClaimSession(context.Context, ClaimSessionRequest) (ClaimSessionResponse, error)
+	GetCatalog(context.Context, GetCatalogRequest) (CatalogResponse, error)
+	RevokeSession(context.Context, RevokeSessionRequest) error
+	Close() error
+}
+
+type StartSessionRequest struct {
+	DeviceID              string
+	AgentVersion          string
+	DeviceCertThumbprint  string
+	PostureRevision       string
+	LocalUserSIDHash      string
+	WindowsLogonSessionID string
+	WindowsSessionID      string
+}
+
+type StartSessionResponse struct {
+	SessionRequestID string
+	AuthURL          string
+	ClaimSecret      string
+	ExpiresAt        time.Time
+	PollInterval     time.Duration
+	Status           string
+}
+
+type SessionStatusRequest struct {
+	SessionRequestID string
+	ClaimSecret      string
+}
+
+type SessionStatusResponse struct {
+	Status string
+	Reason string
+}
+
+type ClaimSessionRequest struct {
+	SessionRequestID      string
+	ClaimSecret           string
+	PostureRevision       string
+	LocalUserSIDHash      string
+	WindowsLogonSessionID string
+	WindowsSessionID      string
+}
+
+type ClaimSessionResponse struct {
+	AgentSessionID    string
+	AgentSessionToken string
+	ExpiresAt         time.Time
+	PolicyEpoch       int
+	DisplayName       string
+	Email             string
+}
+
+type GetCatalogRequest struct {
+	AgentSessionToken string
+	CurrentVersion    string
+}
+
+type CatalogResponse struct {
+	Version     string
+	Resources   []ipc.CatalogResource
+	TTLSeconds  int
+	PolicyEpoch string
+}
+
+type RevokeSessionRequest struct {
+	AgentSessionToken string
+	SessionID         string
+}
+
+type RuntimeState struct {
+	UserSession ipc.UserSessionInfo
+	Catalog     ipc.CatalogInfo
+}
+
+type sessionState struct {
+	key               string
+	peer              ipc.PeerIdentity
+	state             string
+	sessionRequestID  string
+	claimSecret       string
+	authURL           string
+	expiresAt         time.Time
+	pollInterval      time.Duration
+	agentSessionID    string
+	agentSessionToken string
+	displayName       string
+	email             string
+	message           string
+	lastError         string
+	catalog           ipc.CatalogInfo
+	cancel            context.CancelFunc
+}
+
+type Manager struct {
+	mu              sync.RWMutex
+	logger          *slog.Logger
+	config          Config
+	client          Client
+	enrollment      EnrollmentProvider
+	deviceIdentity  enrollment.DeviceIdentity
+	postureSnapshot func() ipc.DevicePostureReport
+	clock           func() time.Time
+	sessions        map[string]*sessionState
+}
+
+func localUserKey(peer ipc.PeerIdentity) (string, error) {
+	if !peer.Verified || strings.TrimSpace(peer.UserSID) == "" {
+		return "", fmt.Errorf("verified IPC peer identity is required")
+	}
+	if strings.TrimSpace(peer.WindowsLogonSessionID) == "" {
+		return "", fmt.Errorf("verified Windows logon session is required")
+	}
+	if strings.TrimSpace(peer.WindowsSessionID) == "" {
+		return "", fmt.Errorf("verified Windows session is required")
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(peer.UserSID),
+		strings.TrimSpace(peer.WindowsLogonSessionID),
+		strings.TrimSpace(peer.WindowsSessionID),
+	}, "|"), nil
+}
+
+func sidHash(sid string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(sid)))
+	return hex.EncodeToString(sum[:])
+}

@@ -1,9 +1,3 @@
-export const navigationItems = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'enrollment', label: 'Enrollment' },
-  { id: 'security', label: 'Security' },
-];
-
 export const fallbackDashboard = {
   connection: {
     state: 'unenrolled',
@@ -15,18 +9,15 @@ export const fallbackDashboard = {
   enrollment: {
     state: 'UNENROLLED',
   },
-  certificate: {
-    valid: false,
+  user_session: {
+    state: 'SIGNED_OUT',
   },
-  user: {
-    session_state: 'signed_out',
+  catalog: {
+    resources: [],
   },
   posture: {
     checks: [],
   },
-  resources: [],
-  active_sessions: [],
-  access_events: [],
   reported_at: new Date().toISOString(),
 };
 
@@ -36,6 +27,19 @@ export function isWailsRuntimeReady() {
 
 export function normalizeStatus(value) {
   return String(value || 'unknown').trim().toLowerCase();
+}
+
+export function enrollmentStateOf(dashboard) {
+  return String(
+    dashboard?.status?.enrollment_state ||
+      dashboard?.enrollment?.state ||
+      dashboard?.connection?.state ||
+      '',
+  ).trim().toUpperCase();
+}
+
+export function isDeviceEnrolled(dashboard) {
+  return enrollmentStateOf(dashboard) === 'ENROLLED';
 }
 
 export function formatDateTime(value) {

@@ -3,31 +3,28 @@ package ipc
 import "encoding/json"
 
 const (
-	ProtocolVersion = "ztna-agent-ipc.v1"
-	PipeName        = `\\.\pipe\ztna-agent`
+	ProtocolVersion = "trust-agent-ipc.v1"
+	PipeName        = `\\.\pipe\trust-agent`
 	MaxMessageBytes = 1 << 20
 )
 
 type Operation string
 
 const (
-	OperationPing                Operation = "Ping"
-	OperationGetStatus           Operation = "GetStatus"
-	OperationGetDashboard        Operation = "GetDashboard"
-	OperationGetCatalogResources Operation = "GetCatalogResources"
-	OperationGetActiveSessions   Operation = "GetActiveSessions"
-	OperationGetAccessEvents     Operation = "GetAccessEvents"
-	OperationGetDevicePosture    Operation = "GetDevicePosture"
-	OperationStartEnrollment     Operation = "StartEnrollment"
-	OperationUpdateAccessToken   Operation = "UpdateAccessToken"
+	OperationPing                       Operation = "Ping"
+	OperationGetStatus                  Operation = "GetStatus"
+	OperationGetDashboard               Operation = "GetDashboard"
+	OperationGetDevicePosture           Operation = "GetDevicePosture"
+	OperationStartEnrollmentInteractive Operation = "StartEnrollmentInteractive"
+	OperationStartUserLoginInteractive  Operation = "StartUserLoginInteractive"
+	OperationLogoutUserSession          Operation = "LogoutUserSession"
 )
 
 type EnrollmentState string
 
 const (
-	EnrollmentStateUnknown    EnrollmentState = "UNKNOWN"
 	EnrollmentStateUnenrolled EnrollmentState = "UNENROLLED"
-	EnrollmentStatePending    EnrollmentState = "PENDING"
+	EnrollmentStateEnrolling  EnrollmentState = "ENROLLING"
 	EnrollmentStateEnrolled   EnrollmentState = "ENROLLED"
 	EnrollmentStateFailed     EnrollmentState = "FAILED"
 )
@@ -56,20 +53,17 @@ const (
 	ErrorCodeInvalidRequest     = "invalid_request"
 	ErrorCodeUnsupported        = "unsupported_operation"
 	ErrorCodeInternal           = "internal_error"
-	ErrorCodeRateLimited        = "rate_limited"
 	ErrorCodeServiceUnavailable = "service_unavailable"
 )
 
 func SupportedOperations() map[Operation]struct{} {
 	return map[Operation]struct{}{
-		OperationPing:                {},
-		OperationGetStatus:           {},
-		OperationGetDashboard:        {},
-		OperationGetCatalogResources: {},
-		OperationGetActiveSessions:   {},
-		OperationGetAccessEvents:     {},
-		OperationGetDevicePosture:    {},
-		OperationStartEnrollment:     {},
-		OperationUpdateAccessToken:   {},
+		OperationPing:                       {},
+		OperationGetStatus:                  {},
+		OperationGetDashboard:               {},
+		OperationGetDevicePosture:           {},
+		OperationStartEnrollmentInteractive: {},
+		OperationStartUserLoginInteractive:  {},
+		OperationLogoutUserSession:          {},
 	}
 }

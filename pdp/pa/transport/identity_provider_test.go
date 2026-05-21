@@ -53,7 +53,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 	server := newIdentityProviderTestServer(dataStore)
 
 	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?tenant_id=tenant-2", nil)
-	idpCfg, tenant, err := server.resolveIdentityProvider(request, "ztna-agent")
+	idpCfg, tenant, err := server.resolveIdentityProvider(request, "connect-app")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider returned error: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=alice@example.test", nil)
-	idpCfg, tenant, err = server.resolveIdentityProvider(request, "ztna-agent")
+	idpCfg, tenant, err = server.resolveIdentityProvider(request, "connect-app")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider domain returned error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?tenant_id=tenant-2&login_hint=alice@example.test", nil)
-	if _, _, err = server.resolveIdentityProvider(request, "ztna-agent"); err == nil {
+	if _, _, err = server.resolveIdentityProvider(request, "connect-app"); err == nil {
 		t.Fatalf("expected tenant/login_hint mismatch to be rejected")
 	}
 }
@@ -107,7 +107,7 @@ func TestResolveIdentityProviderUsesTenantDomainForDefaultIdP(t *testing.T) {
 	server := newIdentityProviderTestServer(dataStore)
 
 	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=alice@company-a.test", nil)
-	idpCfg, resolvedTenant, err := server.resolveIdentityProvider(request, "ztna-agent")
+	idpCfg, resolvedTenant, err := server.resolveIdentityProvider(request, "connect-app")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider primary domain returned error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestResolveIdentityProviderUsesTenantDomainForDefaultIdP(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=bob@branch.company-a.test", nil)
-	idpCfg, resolvedTenant, err = server.resolveIdentityProvider(request, "ztna-agent")
+	idpCfg, resolvedTenant, err = server.resolveIdentityProvider(request, "connect-app")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider domain alias returned error: %v", err)
 	}

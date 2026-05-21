@@ -14,10 +14,11 @@ import (
 	"pdp/config"
 	"pdp/models"
 	"pdp/pa"
+	"pdp/pa/auth"
 	"pdp/store"
 )
 
-func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.Store, deviceID, role string) string {
+func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.Store, deviceID, role, certificateThumbprint string) string {
 	t.Helper()
 	dataStore.SaveUser(&models.User{
 		ID:        "user-1",
@@ -28,9 +29,21 @@ func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	})
-	token, err := server.pa.Auth.JWT.GenerateAuthToken("user-1", "alice@example.test", role, deviceID, "", false)
+	token, _, err := server.pa.Auth.JWT.GenerateAgentSessionToken(auth.AgentSessionTokenRequest{
+		SessionID:                   "sess-test",
+		UserID:                      "user-1",
+		Username:                    "alice@example.test",
+		Role:                        role,
+		TenantID:                    transportTestTenantID,
+		DeviceID:                    deviceID,
+		CertificateThumbprintSHA256: certificateThumbprint,
+		LocalUserSIDHash:            "sid-hash",
+		WindowsLogonSessionID:       "logon-session",
+		WindowsSessionID:            "1",
+		PolicyEpoch:                 1,
+	})
 	if err != nil {
-		t.Fatalf("GenerateAuthToken returned error: %v", err)
+		t.Fatalf("GenerateAgentSessionToken returned error: %v", err)
 	}
 	return token
 }

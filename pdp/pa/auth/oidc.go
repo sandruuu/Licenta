@@ -81,7 +81,6 @@ type OIDCClient struct {
 
 const (
 	NativeConnectAppClientID = "connect-app"
-	NativeAgentClientID      = "ztna-agent"
 )
 
 // AuthorizationCode is a short-lived code exchanged for tokens.
@@ -163,13 +162,6 @@ func (m *OIDCManager) RegisterNativeConnectAppClient() {
 	m.registerNativeEndpointClient(NativeConnectAppClientID, "ZTNA Connect-App")
 }
 
-// RegisterNativeAgentClient registers the final endpoint agent as an
-// OAuth/OIDC native public client. It has no shared secret and must use PKCE
-// S256 with a loopback redirect URI.
-func (m *OIDCManager) RegisterNativeAgentClient() {
-	m.registerNativeEndpointClient(NativeAgentClientID, "ZTNA Agent")
-}
-
 func (m *OIDCManager) registerNativeEndpointClient(clientID, name string) {
 	m.RegisterClient(&OIDCClient{
 		ClientID: clientID,
@@ -185,7 +177,7 @@ func (m *OIDCManager) registerNativeEndpointClient(clientID, name string) {
 
 func IsNativeEndpointClientID(clientID string) bool {
 	switch strings.TrimSpace(clientID) {
-	case NativeConnectAppClientID, NativeAgentClientID:
+	case NativeConnectAppClientID:
 		return true
 	default:
 		return false

@@ -19,39 +19,3 @@ type Session struct {
 	LastActivity time.Time `json:"last_activity"`
 	Revoked      bool      `json:"revoked"`
 }
-
-// PendingAuthSession represents a browser-based login session.
-type PendingAuthSession struct {
-	ID           string              `json:"id"`
-	DeviceID     string              `json:"device_id"`
-	Hostname     string              `json:"hostname"`
-	Status       string              `json:"status"`
-	AuthToken    string              `json:"auth_token,omitempty"`
-	MFAToken     string              `json:"mfa_token,omitempty"`
-	UserID       string              `json:"user_id,omitempty"`
-	Username     string              `json:"username,omitempty"`
-	DeviceHealth *DeviceHealthReport `json:"device_health,omitempty"`
-	CreatedAt    time.Time           `json:"created_at"`
-	ExpiresAt    time.Time           `json:"expires_at"`
-}
-
-// StartAuthSessionRequest is sent by the connect app to initiate browser auth.
-type StartAuthSessionRequest struct {
-	DeviceID     string              `json:"device_id"`
-	Hostname     string              `json:"hostname"`
-	DeviceHealth *DeviceHealthReport `json:"device_health,omitempty"`
-}
-
-// StartAuthSessionResponse contains the session ID and browser URL.
-type StartAuthSessionResponse struct {
-	SessionID string `json:"session_id"`
-	AuthURL   string `json:"auth_url"`
-	ExpiresIn int    `json:"expires_in"`
-}
-
-// AuthSessionStatusResponse is returned when the connect app polls status.
-type AuthSessionStatusResponse struct {
-	Status    string `json:"status"`
-	AuthToken string `json:"auth_token,omitempty"`
-	Message   string `json:"message,omitempty"`
-}

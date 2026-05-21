@@ -71,6 +71,16 @@ function Find-InnoSetupCompiler {
 }
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+$staleOutputs = @(
+    "trust-agent.exe",
+    "TrustAgent-Setup.exe"
+)
+foreach ($staleOutput in $staleOutputs) {
+    $stalePath = Join-Path $OutputDir $staleOutput
+    if (Test-Path -LiteralPath $stalePath) {
+        Remove-Item -LiteralPath $stalePath -Force
+    }
+}
 
 Push-Location $agentRoot
 try {
@@ -87,11 +97,12 @@ try {
     }
     Normalize-ViteAssets $distDir $javascriptName $stylesheetName
 
-    go build -tags "desktop,production" -ldflags "-H windowsgui" -o (Join-Path $OutputDir "ztna-agent.exe") ./cmd/agent
-    go build -o (Join-Path $OutputDir "ztna-agent-installer.exe") ./cmd/agent-installer
+    go build -tags "desktop,production" -ldflags "-H windowsgui" -o (Join-Path $OutputDir "trust-agent.exe") ./cmd/agent
 } finally {
     Pop-Location
 }
+
+Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination (Join-Path $OutputDir "install-service.ps1") -Force
 
 $resolvedConfigPath = $ConfigPath.Trim()
 if ($resolvedConfigPath -eq "") {
@@ -106,11 +117,11 @@ if ($resolvedConfigPath -ne "") {
 
 $iscc = Find-InnoSetupCompiler
 if ($iscc.Trim() -ne "") {
-    $installerScript = Join-Path $scriptDir "ztna-agent-installer.iss"
-    & $iscc "/DSourceDir=$OutputDir" "/O$OutputDir" "/FZTNA-Agent-Setup" $installerScript
-    Write-Host "Windows setup created at $(Join-Path $OutputDir 'ZTNA-Agent-Setup.exe')"
+    $installerScript = Join-Path $scriptDir "trust-agent-setup.iss"
+    & $iscc "/DSourceDir=$OutputDir" "/O$OutputDir" "/FTrustAgent-Setup" $installerScript
+    Write-Host "Windows setup created at $(Join-Path $OutputDir 'TrustAgent-Setup.exe')"
 } else {
-    Write-Host "Inno Setup compiler (ISCC.exe) was not found. Skipping ZTNA-Agent-Setup.exe."
+    Write-Host "Inno Setup compiler (ISCC.exe) was not found. Skipping TrustAgent-Setup.exe."
     Write-Host "Install Inno Setup 6 to generate the custom Windows installer."
 }
 

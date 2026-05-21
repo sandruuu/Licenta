@@ -5,30 +5,38 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/service/deviceidentity"
-	"agent/internal/service/deviceposture"
-	"agent/internal/service/enrollmentflow"
-	servicestate "agent/internal/service/state"
+	"agent/internal/service/enrollment"
+	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
 )
 
 func New(config Config, dependencies Dependencies) *Service {
 	config = normalizeConfig(config)
 	dependencies = dependenciesWithDefaults(dependencies)
-	service := newBaseService(config, dependencies)
-
-	service.configurePAClient(config, dependencies)
-	service.configureDNS(config, dependencies)
-	service.configureGatewayRelay(config, dependencies)
-	service.configureNetworkManager(config, dependencies)
-	service.restoreStartupState()
-
-	return service
+	return newBaseService(config, dependencies)
 }
 
 func normalizeConfig(config Config) Config {
-	config.AuthorizedUserSID = strings.TrimSpace(config.AuthorizedUserSID)
-	config.DNSServer = strings.TrimSpace(config.DNSServer)
+	config.PDPGRPCEndpoint = strings.TrimSpace(config.PDPGRPCEndpoint)
+	config.PDPTLSServerName = strings.TrimSpace(config.PDPTLSServerName)
+	config.PDPCAFile = strings.TrimSpace(config.PDPCAFile)
+	config.EnrollmentStatePath = strings.TrimSpace(config.EnrollmentStatePath)
+	config.DeviceKeyName = strings.TrimSpace(config.DeviceKeyName)
+	if config.DeviceKeyName == "" {
+		config.DeviceKeyName = defaultDeviceKeyName
+	}
+	if config.EnrollmentTimeout <= 0 {
+		config.EnrollmentTimeout = defaultEnrollmentTimeout
+	}
+	if config.EnrollmentPollInterval <= 0 {
+		config.EnrollmentPollInterval = defaultEnrollmentPollInterval
+	}
+	if config.LoginTimeout <= 0 {
+		config.LoginTimeout = defaultLoginTimeout
+	}
+	if config.LoginPollInterval <= 0 {
+		config.LoginPollInterval = defaultLoginPollInterval
+	}
 	return config
 }
 
@@ -52,79 +60,74 @@ func dependenciesWithDefaults(dependencies Dependencies) Dependencies {
 }
 
 func newBaseService(config Config, dependencies Dependencies) *Service {
-	return &Service{
-		logger:                     dependencies.Logger,
-		state:                      StateStopped,
-		authorizedUserSID:          config.AuthorizedUserSID,
-		listenerFactory:            dependencies.ListenerFactory,
-		enrollmentValidator:        dependencies.EnrollmentValidator,
-		identityProvider:           identityProviderFromDependencies(config, dependencies),
-		postureCollector:           postureCollectorFromDependencies(dependencies),
-		postureReporter:            dependencies.PostureReporter,
-		postureInterval:            config.PostureInterval,
-		criticalInterval:           config.CriticalInterval,
-		heartbeatInterval:          config.HeartbeatInterval,
-		postureReportTimeout:       config.PostureReportTimeout,
-		catalogClient:              dependencies.CatalogClient,
-		dnsConfigurator:            dependencies.DNSConfigurator,
-		catalogInterval:            config.CatalogInterval,
-		catalogCacheTTL:            config.CatalogCacheTTL,
-		catalogRetryBackoff:        append([]time.Duration(nil), config.CatalogRetryBackoff...),
-		accessTokenExpirySkew:      config.AccessTokenExpirySkew,
-		dnsServer:                  config.DNSServer,
-		enrollmentRunner:           dependencies.EnrollmentRunner,
-		enrollmentRenewer:          dependencies.EnrollmentRenewer,
-		stateStore:                 stateStoreFromDependencies(dependencies),
-		catalogCacheStore:          catalogCacheStoreFromDependencies(config, dependencies),
-		certificateLoader:          certificateLoaderFromDependencies(dependencies),
-		certificateRenewalInterval: config.CertificateRenewalInterval,
-		certificateRenewBefore:     config.CertificateRenewBefore,
-		certificateRenewalTimeout:  config.CertificateRenewalTimeout,
-		clock:                      dependencies.Clock,
-		rateLimiter:                enrollmentflow.NewRateLimiter(config.EnrollmentRateLimitMax, config.EnrollmentRateLimitWindow),
-		enrollment: enrollmentState{
-			State:         ipc.EnrollmentStateUnenrolled,
-			ActiveUserSID: config.AuthorizedUserSID,
-			KeyName:       deviceidentity.KeyNameForDevice(),
-			Nonce:         randomNonce(),
+	postureStatus := statusDisabled
+	if dependencies.PostureCollector != nil {
+		postureStatus = postureStatusUnknown
+	}
+	deviceIdentity := dependencies.DeviceIdentity
+	if deviceIdentity == nil {
+		deviceIdentity = enrollment.NewDefaultDeviceIdentity()
+	}
+	enrollmentManager := enrollment.NewManager(enrollmentConfig(config), enrollment.Dependencies{
+		Logger:         dependencies.Logger,
+		Client:         dependencies.EnrollmentClient,
+		DeviceIdentity: deviceIdentity,
+		Store:          dependencies.EnrollmentStore,
+		Clock:          dependencies.Clock,
+	})
+	var service *Service
+	userSessionManager := usersession.NewManager(userSessionConfig(config), usersession.Dependencies{
+		Logger:         dependencies.Logger,
+		Client:         dependencies.UserSessionClient,
+		Enrollment:     enrollmentManager,
+		DeviceIdentity: deviceIdentity,
+		PostureSnapshot: func() ipc.DevicePostureReport {
+			if service == nil {
+				return ipc.DevicePostureReport{}
+			}
+			return service.cachedPostureReport()
 		},
-		posture: devicePostureState{Status: postureStatusUnknown},
-		session: sessionState{State: sessionStatusMissing},
-		catalog: deviceCatalogState{Status: catalogStatusWaitingForEnrollment},
+		Clock: dependencies.Clock,
+	})
+	service = &Service{
+		logger:           dependencies.Logger,
+		state:            StateStopped,
+		listenerFactory:  dependencies.ListenerFactory,
+		postureCollector: postureCollectorFromDependencies(dependencies),
+		enrollment:       enrollmentManager,
+		userSessions:     userSessionManager,
+		clock:            dependencies.Clock,
+		posture:          devicePostureState{Status: postureStatus},
+		config:           config,
 	}
-}
-
-func identityProviderFromDependencies(config Config, dependencies Dependencies) deviceidentity.Provider {
-	if dependencies.IdentityProvider != nil {
-		return dependencies.IdentityProvider
-	}
-	return deviceidentity.NewProvider(deviceidentity.Options{AuthorizedUserSID: config.AuthorizedUserSID, Clock: dependencies.Clock})
+	return service
 }
 
 func postureCollectorFromDependencies(dependencies Dependencies) DevicePostureCollector {
 	if dependencies.PostureCollector != nil {
 		return dependencies.PostureCollector
 	}
-	return deviceposture.NewCollector()
+	return nil
 }
 
-func stateStoreFromDependencies(dependencies Dependencies) servicestate.EnrollmentStore {
-	if dependencies.StateStore != nil {
-		return dependencies.StateStore
+func enrollmentConfig(config Config) enrollment.Config {
+	return enrollment.Config{
+		PDPGRPCEndpoint:        config.PDPGRPCEndpoint,
+		PDPTLSServerName:       config.PDPTLSServerName,
+		PDPCAFile:              config.PDPCAFile,
+		EnrollmentTimeout:      config.EnrollmentTimeout,
+		EnrollmentPollInterval: config.EnrollmentPollInterval,
+		EnrollmentStatePath:    config.EnrollmentStatePath,
+		DeviceKeyName:          config.DeviceKeyName,
 	}
-	return servicestate.NewDefaultEnrollmentStore(dependencies.Clock)
 }
 
-func catalogCacheStoreFromDependencies(config Config, dependencies Dependencies) servicestate.CatalogCacheStore {
-	if dependencies.CatalogCacheStore != nil || strings.TrimSpace(config.PAURL) == "" {
-		return dependencies.CatalogCacheStore
+func userSessionConfig(config Config) usersession.Config {
+	return usersession.Config{
+		PDPGRPCEndpoint:   config.PDPGRPCEndpoint,
+		PDPTLSServerName:  config.PDPTLSServerName,
+		PDPCAFile:         config.PDPCAFile,
+		LoginTimeout:      config.LoginTimeout,
+		LoginPollInterval: config.LoginPollInterval,
 	}
-	return servicestate.NewDefaultCatalogCacheStore(dependencies.Clock)
-}
-
-func certificateLoaderFromDependencies(dependencies Dependencies) MachineCertificateLoader {
-	if dependencies.CertificateLoader != nil {
-		return dependencies.CertificateLoader
-	}
-	return deviceidentity.LoadMachineTLSCertificate
 }

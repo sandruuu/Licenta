@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -131,6 +135,11 @@ func (fp *FederationProvider) Discover(issuer string) (*OIDCDiscovery, error) {
 	if disc.AuthorizationEndpoint == "" || disc.TokenEndpoint == "" {
 		return nil, fmt.Errorf("discovery document missing required endpoints")
 	}
+	expectedIssuer := strings.TrimRight(strings.TrimSpace(issuer), "/")
+	actualIssuer := strings.TrimRight(strings.TrimSpace(disc.Issuer), "/")
+	if actualIssuer == "" || actualIssuer != expectedIssuer {
+		return nil, fmt.Errorf("discovery issuer mismatch: expected %q, got %q", expectedIssuer, actualIssuer)
+	}
 
 	fp.mu.Lock()
 	fp.cache[issuer] = &discoveryCache{
@@ -229,10 +238,191 @@ func (fp *FederationProvider) ExchangeExternalCode(fedCfg *models.FederationConf
 	return &tokenResp, nil
 }
 
-// MapExternalClaims extracts identity claims from the external id_token.
-// It parses the JWT without signature validation (the token was received
-// directly from the external IdP's token endpoint over TLS, so it is trusted).
-// The claimMapping maps our field names to external claim names.
+func (fp *FederationProvider) ValidateAndMapExternalClaims(fedCfg *models.FederationConfig, idToken, expectedNonce string, claimMapping map[string]string) (*FederatedClaims, error) {
+	if fedCfg == nil {
+		return nil, fmt.Errorf("federation config is required")
+	}
+	disc, err := fp.Discover(fedCfg.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(disc.JWKSURI) == "" {
+		return nil, fmt.Errorf("discovery document missing jwks_uri")
+	}
+	keySet, err := fp.fetchJWKS(disc.JWKSURI)
+	if err != nil {
+		return nil, err
+	}
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(idToken, claims, func(token *jwt.Token) (interface{}, error) {
+		alg := fmt.Sprint(token.Header["alg"])
+		if !isAllowedExternalIDTokenAlg(alg) {
+			return nil, fmt.Errorf("unsupported id_token alg %q", alg)
+		}
+		kid, _ := token.Header["kid"].(string)
+		if strings.TrimSpace(kid) == "" {
+			return nil, fmt.Errorf("id_token header missing kid")
+		}
+		return keySet.keyFor(kid, alg)
+	}, jwt.WithIssuer(disc.Issuer), jwt.WithAudience(fedCfg.ClientID), jwt.WithExpirationRequired(), jwt.WithLeeway(30*time.Second))
+	if err != nil {
+		return nil, fmt.Errorf("validate id_token: %w", err)
+	}
+	if token == nil || !token.Valid {
+		return nil, fmt.Errorf("id_token is invalid")
+	}
+	if err := validateAuthorizedParty(claims, fedCfg.ClientID); err != nil {
+		return nil, err
+	}
+	if expectedNonce = strings.TrimSpace(expectedNonce); expectedNonce != "" {
+		nonce, _ := claims["nonce"].(string)
+		if nonce != expectedNonce {
+			return nil, fmt.Errorf("id_token nonce mismatch")
+		}
+	}
+	return fp.mapExternalMapClaims(claims, claimMapping)
+}
+
+func isAllowedExternalIDTokenAlg(alg string) bool {
+	switch strings.TrimSpace(alg) {
+	case "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateAuthorizedParty(claims jwt.MapClaims, clientID string) error {
+	audiences := claimStringList(claims["aud"])
+	if len(audiences) <= 1 {
+		return nil
+	}
+	azp, _ := claims["azp"].(string)
+	if strings.TrimSpace(azp) != strings.TrimSpace(clientID) {
+		return fmt.Errorf("id_token authorized party mismatch")
+	}
+	return nil
+}
+
+func claimStringList(value interface{}) []string {
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil
+		}
+		return []string{strings.TrimSpace(v)}
+	case []string:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			if strings.TrimSpace(item) != "" {
+				values = append(values, strings.TrimSpace(item))
+			}
+		}
+		return values
+	case []interface{}:
+		values := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				values = append(values, strings.TrimSpace(s))
+			}
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func (fp *FederationProvider) fetchJWKS(jwksURI string) (*JWKS, error) {
+	client := &http.Client{Timeout: fp.httpTimeout}
+	resp, err := client.Get(jwksURI)
+	if err != nil {
+		return nil, fmt.Errorf("fetch jwks: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("jwks endpoint returned %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read jwks body: %w", err)
+	}
+	var jwks JWKS
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return nil, fmt.Errorf("parse jwks: %w", err)
+	}
+	return &jwks, nil
+}
+
+func (set *JWKS) keyFor(kid, alg string) (interface{}, error) {
+	if set == nil {
+		return nil, fmt.Errorf("jwks is empty")
+	}
+	for _, key := range set.Keys {
+		if key.Kid != kid {
+			continue
+		}
+		switch key.Kty {
+		case "RSA":
+			if !strings.HasPrefix(alg, "RS") && !strings.HasPrefix(alg, "PS") {
+				return nil, fmt.Errorf("unexpected alg %q for RSA key", alg)
+			}
+			return rsaPublicKeyFromJWK(key)
+		case "EC":
+			if !strings.HasPrefix(alg, "ES") {
+				return nil, fmt.Errorf("unexpected alg %q for EC key", alg)
+			}
+			return ecPublicKeyFromJWK(key)
+		default:
+			return nil, fmt.Errorf("unsupported jwk kty %q", key.Kty)
+		}
+	}
+	return nil, fmt.Errorf("jwks key %q not found", kid)
+}
+
+func rsaPublicKeyFromJWK(key JWK) (*rsa.PublicKey, error) {
+	modulus, err := base64.RawURLEncoding.DecodeString(key.N)
+	if err != nil {
+		return nil, fmt.Errorf("decode rsa modulus: %w", err)
+	}
+	exponentBytes, err := base64.RawURLEncoding.DecodeString(key.E)
+	if err != nil {
+		return nil, fmt.Errorf("decode rsa exponent: %w", err)
+	}
+	exponent := 0
+	for _, b := range exponentBytes {
+		exponent = exponent<<8 + int(b)
+	}
+	if exponent == 0 {
+		return nil, fmt.Errorf("rsa exponent is empty")
+	}
+	return &rsa.PublicKey{N: new(big.Int).SetBytes(modulus), E: exponent}, nil
+}
+
+func ecPublicKeyFromJWK(key JWK) (*ecdsa.PublicKey, error) {
+	xBytes, err := base64.RawURLEncoding.DecodeString(key.X)
+	if err != nil {
+		return nil, fmt.Errorf("decode ec x: %w", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(key.Y)
+	if err != nil {
+		return nil, fmt.Errorf("decode ec y: %w", err)
+	}
+	var curve elliptic.Curve
+	switch key.Crv {
+	case "P-256":
+		curve = elliptic.P256()
+	case "P-384":
+		curve = elliptic.P384()
+	case "P-521":
+		curve = elliptic.P521()
+	default:
+		return nil, fmt.Errorf("unsupported ec curve %q", key.Crv)
+	}
+	return &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(xBytes), Y: new(big.Int).SetBytes(yBytes)}, nil
+}
+
+// MapExternalClaims extracts identity claims from an already trusted external
+// id_token. Browser callback paths should use ValidateAndMapExternalClaims.
 func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map[string]string) (*FederatedClaims, error) {
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
 	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
@@ -244,7 +434,10 @@ func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map
 	if !ok {
 		return nil, fmt.Errorf("unexpected claims type")
 	}
+	return fp.mapExternalMapClaims(mapClaims, claimMapping)
+}
 
+func (fp *FederationProvider) mapExternalMapClaims(mapClaims jwt.MapClaims, claimMapping map[string]string) (*FederatedClaims, error) {
 	mapping := copyClaimMapping(fp.defaultClaimMapping)
 	// Override with user-configured mappings
 	for k, v := range claimMapping {

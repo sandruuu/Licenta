@@ -26,10 +26,6 @@ type Store struct {
 	// triggers/extensions.
 	auditMu sync.Mutex
 
-	// PendingAuth is ephemeral (browser auth sessions, 5-min TTL) — kept in memory
-	pendingMu   sync.RWMutex
-	PendingAuth map[string]*models.PendingAuthSession
-
 	// PendingEnroll is ephemeral (browser enrollment sessions, 5-min TTL) — kept in memory
 	enrollMu      sync.RWMutex
 	PendingEnroll map[string]*models.PendingEnrollSession
@@ -39,7 +35,6 @@ type Store struct {
 func New(dataDir string) *Store {
 	s := &Store{
 		dataDir:       dataDir,
-		PendingAuth:   make(map[string]*models.PendingAuthSession),
 		PendingEnroll: make(map[string]*models.PendingEnrollSession),
 	}
 	if dataDir != "" {

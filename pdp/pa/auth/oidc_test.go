@@ -44,29 +44,10 @@ func TestNativeConnectAppLoopbackRedirectValidation(t *testing.T) {
 			t.Fatalf("ValidateRedirectURI(%q) = true, want false", redirectURI)
 		}
 	}
-}
-
-func TestNativeAgentLoopbackRedirectValidation(t *testing.T) {
-	mgr := newTestOIDCManager()
-	mgr.RegisterNativeAgentClient()
-
-	client, err := mgr.ValidateClientID(NativeAgentClientID)
-	if err != nil {
-		t.Fatalf("ValidateClientID() error = %v", err)
+	if !IsNativeEndpointClientID(NativeConnectAppClientID) {
+		t.Fatalf("native endpoint client helper rejected connect-app")
 	}
-	if !client.Public || !client.RequirePKCE {
-		t.Fatalf("native agent client must be public and require PKCE: %+v", client)
-	}
-	if !mgr.ValidateRedirectURI(client, "http://127.0.0.1:49152/callback") {
-		t.Fatalf("native agent loopback redirect was rejected")
-	}
-	if mgr.ValidateRedirectURI(client, "http://evil.example:49152/callback") {
-		t.Fatalf("native agent accepted non-loopback redirect")
-	}
-	if !IsNativeEndpointClientID(NativeAgentClientID) || !IsNativeEndpointClientID(NativeConnectAppClientID) {
-		t.Fatalf("native endpoint client helper rejected registered client IDs")
-	}
-	if IsNativeEndpointClientID("gateway") {
+	if IsNativeEndpointClientID("ztna-agent") || IsNativeEndpointClientID("gateway") {
 		t.Fatalf("native endpoint client helper accepted unrelated client ID")
 	}
 }

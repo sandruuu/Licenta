@@ -10,20 +10,20 @@ import (
 	"github.com/Microsoft/go-winio"
 )
 
-func Listen(authorizedUserSID string) (net.Listener, error) {
-	return ListenAt(PipePath(), authorizedUserSID)
+func Listen() (net.Listener, error) {
+	return ListenAt(PipePath())
 }
 
-func ListenAt(pipePath, authorizedUserSID string) (net.Listener, error) {
-	securityDescriptor, err := PipeSecurityDescriptor(authorizedUserSID)
+func ListenAt(pipePath string) (net.Listener, error) {
+	securityDescriptor, err := PipeSecurityDescriptor("")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build named pipe security descriptor: %w", err)
 	}
 	listener, err := winio.ListenPipe(pipePath, &winio.PipeConfig{
-		SecurityDescriptor: securityDescriptor,
 		MessageMode:        true,
 		InputBufferSize:    MaxMessageBytes,
 		OutputBufferSize:   MaxMessageBytes,
+		SecurityDescriptor: securityDescriptor,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("listen on named pipe %s: %w", pipePath, err)

@@ -3,79 +3,12 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 
-	"agent/internal/service/catalog"
 	"agent/internal/shared/ipc"
 )
 
-func (service *Service) sendHeartbeatIfReady(ctx context.Context) error {
-	reporter, ok := service.postureReporter.(DeviceHeartbeatReporter)
-	if !ok || reporter == nil {
-		return nil
-	}
-	if !service.postureReportingReady() {
-		service.setPostureStatus(postureStatusWaitingForEnrollment, "")
-		return nil
-	}
-	service.mu.RLock()
-	deviceID := strings.TrimSpace(service.enrollment.DeviceID)
-	service.mu.RUnlock()
-	if deviceID == "" {
-		return nil
-	}
-	if err := reporter.SendHeartbeat(ctx, deviceID); err != nil {
-		service.mu.Lock()
-		service.posture.LastReportError = err.Error()
-		service.mu.Unlock()
-		return err
-	}
-	return nil
-}
-
-func (service *Service) reportPostureIfReady(ctx context.Context, reason string) (bool, error) {
-	if service.postureReporter == nil {
-		return false, nil
-	}
-	if !service.postureReportingReady() {
-		service.setPostureStatus(postureStatusWaitingForEnrollment, "")
-		return false, nil
-	}
-	report, err := service.collectDevicePosture(ctx)
-	if err != nil {
-		return false, err
-	}
-	return service.sendPostureReport(ctx, report, reason)
-}
-
-func (service *Service) reportCriticalPostureIfChanged(ctx context.Context) (bool, error) {
-	if service.postureReporter == nil {
-		return false, nil
-	}
-	if !service.postureReportingReady() {
-		service.setPostureStatus(postureStatusWaitingForEnrollment, "")
-		return false, nil
-	}
-	previous := service.cachedPostureReport()
-	report, err := service.collectDevicePosture(ctx)
-	if err != nil {
-		return false, err
-	}
-	if !hasNewCriticalPosture(previous, report) {
-		return false, nil
-	}
-	return service.sendPostureReport(ctx, report, "critical_change")
-}
-
 func (service *Service) collectDevicePosture(ctx context.Context) (ipc.DevicePostureReport, error) {
-	service.mu.RLock()
-	deviceID := strings.TrimSpace(service.enrollment.DeviceID)
-	service.mu.RUnlock()
-	report, err := service.postureCollector.Collect(ctx, deviceID)
-	if err == nil {
-		report = service.applyPosturePolicy(report)
-	}
+	report, err := service.postureCollector.Collect(ctx, "")
 	service.cachePostureReport(report, err)
 	if err != nil {
 		return ipc.DevicePostureReport{}, err
@@ -102,131 +35,10 @@ func (service *Service) cachePostureReport(report ipc.DevicePostureReport, err e
 	}
 }
 
-func (service *Service) applyPosturePolicy(report ipc.DevicePostureReport) ipc.DevicePostureReport {
-	service.mu.RLock()
-	policy := catalog.NormalizePosturePolicy(service.catalog.PosturePolicy)
-	service.mu.RUnlock()
-	return applyPosturePolicy(report, policy)
-}
-
-func applyPosturePolicy(report ipc.DevicePostureReport, policy catalog.PosturePolicy) ipc.DevicePostureReport {
-	policy = catalog.NormalizePosturePolicy(policy)
-	if len(policy.RequiredChecks) == 0 {
-		return report
-	}
-	expectedStatus := strings.TrimSpace(policy.RequiredCheckStatus)
-	if expectedStatus == "" {
-		expectedStatus = ipc.DevicePostureStatusGood
-	}
-	requiredChecks := make(map[string]string, len(policy.RequiredChecks))
-	for _, check := range policy.RequiredChecks {
-		normalized := strings.ToLower(strings.TrimSpace(check))
-		if normalized != "" {
-			requiredChecks[normalized] = strings.TrimSpace(check)
-		}
-	}
-
-	seen := make(map[string]struct{}, len(report.Checks))
-	for index := range report.Checks {
-		name := strings.TrimSpace(report.Checks[index].Name)
-		normalized := strings.ToLower(name)
-		if normalized == "" {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		if _, required := requiredChecks[normalized]; !required {
-			annotatePostureCheck(&report.Checks[index], "No", "", "Not evaluated")
-			continue
-		}
-		observedStatus := strings.ToLower(strings.TrimSpace(report.Checks[index].Status))
-		annotatePostureCheck(&report.Checks[index], "Yes", expectedStatus, "")
-		if strings.EqualFold(observedStatus, expectedStatus) {
-			report.Checks[index].Status = ipc.DevicePostureStatusGood
-			report.Checks[index].Details["Compliance"] = "Compliant"
-			continue
-		}
-		report.Checks[index].Status = ipc.DevicePostureStatusCritical
-		report.Checks[index].Details["Compliance"] = "Not compliant"
-		report.Checks[index].Description = fmt.Sprintf("%s does not meet endpoint policy", firstNonEmpty(name, report.Checks[index].Name))
-	}
-
-	for normalized, displayName := range requiredChecks {
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		report.Checks = append(report.Checks, ipc.DevicePostureCheck{
-			Name:        displayName,
-			Status:      ipc.DevicePostureStatusCritical,
-			Description: fmt.Sprintf("%s was required by endpoint policy but was not reported", displayName),
-			Details: map[string]string{
-				"Policy Required": "Yes",
-				"Expected Status": expectedStatus,
-				"Observed Status": "missing",
-				"Compliance":      "Not compliant",
-			},
-		})
-	}
-	return report
-}
-
-func annotatePostureCheck(check *ipc.DevicePostureCheck, required, expectedStatus, compliance string) {
-	if check == nil {
-		return
-	}
-	observedStatus := strings.TrimSpace(check.Status)
-	if check.Details == nil {
-		check.Details = map[string]string{}
-	}
-	check.Details["Observed Status"] = observedStatus
-	check.Details["Policy Required"] = required
-	if expectedStatus != "" {
-		check.Details["Expected Status"] = expectedStatus
-	}
-	if compliance != "" {
-		check.Details["Compliance"] = compliance
-	}
-}
-
-func (service *Service) sendPostureReport(ctx context.Context, report ipc.DevicePostureReport, reason string) (bool, error) {
-	if service.postureReporter == nil {
-		return false, nil
-	}
-	if strings.TrimSpace(report.DeviceID) == "" {
-		return false, errors.New("device_id is required for posture reporting")
-	}
-	if err := service.postureReporter.ReportDevicePosture(ctx, report); err != nil {
-		service.mu.Lock()
-		service.posture.Status = postureStatusReportError
-		service.posture.LastReportError = err.Error()
-		service.mu.Unlock()
-		return false, err
-	}
-	service.mu.Lock()
-	service.posture.Status = postureStatusReported
-	service.posture.LastReportError = ""
-	service.posture.LastReportedAt = service.clock().UTC()
-	service.mu.Unlock()
-	service.logger.Info("Device posture reported", "device_id", report.DeviceID, "checks", len(report.Checks), "reason", reason)
-	return true, nil
-}
-
 func (service *Service) cachedPostureReport() ipc.DevicePostureReport {
 	service.mu.RLock()
 	defer service.mu.RUnlock()
 	return clonePostureReport(service.posture.Report)
-}
-
-func (service *Service) postureReportingReady() bool {
-	service.mu.RLock()
-	defer service.mu.RUnlock()
-	return service.enrollment.State == ipc.EnrollmentStateEnrolled && strings.TrimSpace(service.enrollment.DeviceID) != ""
-}
-
-func (service *Service) setPostureStatus(status, lastError string) {
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	service.posture.Status = status
-	service.posture.LastError = strings.TrimSpace(lastError)
 }
 
 func clonePostureReport(report ipc.DevicePostureReport) ipc.DevicePostureReport {
@@ -244,24 +56,6 @@ func clonePostureReport(report ipc.DevicePostureReport) ipc.DevicePostureReport 
 		}
 	}
 	return clone
-}
-
-func hasNewCriticalPosture(previous, current ipc.DevicePostureReport) bool {
-	previousStatuses := make(map[string]string, len(previous.Checks))
-	for _, check := range previous.Checks {
-		previousStatuses[strings.ToLower(strings.TrimSpace(check.Name))] = strings.ToLower(strings.TrimSpace(check.Status))
-	}
-	for _, check := range current.Checks {
-		name := strings.ToLower(strings.TrimSpace(check.Name))
-		if name != "firewall" && name != "antivirus" {
-			continue
-		}
-		status := strings.ToLower(strings.TrimSpace(check.Status))
-		if status == ipc.DevicePostureStatusCritical && previousStatuses[name] != ipc.DevicePostureStatusCritical {
-			return true
-		}
-	}
-	return false
 }
 
 func (service *Service) devicePosture(ctx context.Context) (ipc.DevicePostureReport, string, error) {

@@ -520,7 +520,6 @@ function isPipeUnavailable(dashboard, error) {
     dashboard?.connection?.message,
     dashboard?.connection?.service_state,
     dashboard?.status?.device_posture_last_error,
-    dashboard?.status?.device_posture_report_error,
     ...checks.map((check) => `${check?.name || ''} ${check?.description || ''} ${Object.values(check?.details || {}).join(' ')}`),
   ]
     .join(' ')

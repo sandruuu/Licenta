@@ -7,20 +7,19 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"strings"
 	"testing"
 	"time"
-
-	"agent/internal/platform/process"
 )
 
 func TestServeConnAttachesNamedPipePeerIdentity(t *testing.T) {
-	current := process.Current()
-	if strings.TrimSpace(current.UserSID) == "" {
+	currentSID := currentUserSID(t)
+	if strings.TrimSpace(currentSID) == "" {
 		t.Skip("current Windows user SID is unavailable")
 	}
-	pipePath := fmt.Sprintf(`\\.\pipe\ztna-agent-test-%d-%d`, os.Getpid(), time.Now().UTC().UnixNano())
-	listener, err := ListenAt(pipePath, current.UserSID)
+	pipePath := fmt.Sprintf(`\\.\pipe\trust-agent-test-%d-%d`, os.Getpid(), time.Now().UTC().UnixNano())
+	listener, err := ListenAt(pipePath)
 	if err != nil {
 		t.Fatalf("ListenAt returned error: %v", err)
 	}
@@ -51,10 +50,19 @@ func TestServeConnAttachesNamedPipePeerIdentity(t *testing.T) {
 	}
 	select {
 	case identity := <-identityCh:
-		if !identity.Verified || !strings.EqualFold(identity.UserSID, current.UserSID) || identity.VerificationError != "" {
-			t.Fatalf("peer identity = %+v, want verified SID %q", identity, current.UserSID)
+		if !identity.Verified || !strings.EqualFold(identity.UserSID, currentSID) || identity.VerificationError != "" {
+			t.Fatalf("peer identity = %+v, want verified SID %q", identity, currentSID)
 		}
 	case <-callCtx.Done():
 		t.Fatal("timed out waiting for peer identity")
 	}
+}
+
+func currentUserSID(t *testing.T) string {
+	t.Helper()
+	current, err := user.Current()
+	if err != nil || current == nil {
+		return ""
+	}
+	return strings.TrimSpace(current.Uid)
 }

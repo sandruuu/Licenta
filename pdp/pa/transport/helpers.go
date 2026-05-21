@@ -115,6 +115,15 @@ func (s *Server) signGatewayCSR(csrPEM []byte, validDays int, vaultRole string, 
 	return nil, fmt.Errorf("PKI signer not initialized")
 }
 
+func (s *Server) signDeviceEnrollmentCSR(csrPEM []byte, validDays int, vaultRole, deviceID string) ([]byte, error) {
+	if s.externalPKI != nil {
+		return s.externalPKI.SignCSRWithOptions(csrPEM, vaultRole, fmt.Sprintf("%dh", validDays*24), pki.SignCSROptions{
+			CommonName: deviceID,
+		})
+	}
+	return nil, fmt.Errorf("PKI signer not initialized")
+}
+
 func (s *Server) revokeCertificate(serial, certPEM, subjectID string, expiresOn time.Time) {
 	if strings.TrimSpace(serial) == "" && strings.TrimSpace(certPEM) == "" {
 		return

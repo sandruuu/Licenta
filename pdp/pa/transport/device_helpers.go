@@ -29,11 +29,11 @@ func statusCodeForDeviceTelemetryError(err error) int {
 }
 
 // We deliberately do NOT accept any payload body — heartbeats must be
-func (s *Server) validateDeviceCatalogToken(token, deviceID string) (*auth.CustomClaims, int, error) {
+func (s *Server) validateDeviceCatalogToken(token, deviceID, certificateThumbprint string) (*auth.CustomClaims, int, error) {
 	if s == nil || s.pa == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("identity services are not available")
 	}
-	claims, err := s.pa.ValidateDeviceUserToken(token, deviceID)
+	claims, err := s.pa.ValidateDeviceUserTokenBoundForScope(token, deviceID, certificateThumbprint, "catalog:read")
 	if err != nil {
 		return nil, httpStatusForAccessError(err), err
 	}

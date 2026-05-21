@@ -27,7 +27,6 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/auth/login" element={<Login />} />
         <Route path="/dashboard/login" element={<Login />} />
         <Route path="/dashboard" element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route index element={<Dashboard />} />
