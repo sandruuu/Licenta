@@ -126,7 +126,7 @@ func (client *GRPCClient) StartSession(ctx context.Context, request StartSession
 		"device_id":              request.DeviceID,
 		"agent_version":          request.AgentVersion,
 		"device_cert_thumbprint": request.DeviceCertThumbprint,
-		"posture_revision":       request.PostureRevision,
+		"device_data_revision":   request.DeviceDataRevision,
 		"local_user": map[string]any{
 			"sid_hash":                 request.LocalUserSIDHash,
 			"windows_logon_session_id": request.WindowsLogonSessionID,
@@ -169,9 +169,9 @@ func (client *GRPCClient) SessionStatus(ctx context.Context, request SessionStat
 
 func (client *GRPCClient) ClaimSession(ctx context.Context, request ClaimSessionRequest) (ClaimSessionResponse, error) {
 	payload, err := structpb.NewStruct(map[string]any{
-		"session_request_id": request.SessionRequestID,
-		"claim_secret":       request.ClaimSecret,
-		"posture_revision":   request.PostureRevision,
+		"session_request_id":   request.SessionRequestID,
+		"claim_secret":         request.ClaimSecret,
+		"device_data_revision": request.DeviceDataRevision,
 		"local_user": map[string]any{
 			"sid_hash":                 request.LocalUserSIDHash,
 			"windows_logon_session_id": request.WindowsLogonSessionID,
@@ -212,6 +212,7 @@ func (client *GRPCClient) GetCatalog(ctx context.Context, request GetCatalogRequ
 	fields := response.AsMap()
 	return CatalogResponse{
 		Version:     stringField(fields, "version"),
+		DNSSuffixes: stringListField(fields["dns_suffixes"]),
 		Resources:   catalogResources(fields["resources"]),
 		TTLSeconds:  int(numberField(fields, "ttl_seconds")),
 		PolicyEpoch: stringField(fields, "policy_epoch"),
@@ -326,4 +327,19 @@ func catalogResources(value any) []ipc.CatalogResource {
 		}
 	}
 	return resources
+}
+
+func stringListField(value any) []string {
+	raw, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	values := make([]string, 0, len(raw))
+	for _, item := range raw {
+		text := strings.TrimSpace(fmt.Sprint(item))
+		if text != "" {
+			values = append(values, text)
+		}
+	}
+	return values
 }

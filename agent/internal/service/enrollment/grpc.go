@@ -110,7 +110,7 @@ func (client *GRPCEnrollmentClient) CompleteSession(ctx context.Context, request
 		"poll_secret":           request.PollSecret,
 		"csr_pem":               request.CSRPEM,
 		"proof": map[string]any{
-			"alg":          "RS256",
+			"alg":          "ES256",
 			"payload_type": ProofType,
 			"payload":      string(request.ProofPayload),
 			"signature":    base64.RawURLEncoding.EncodeToString(request.ProofSignature),
@@ -204,3 +204,4 @@ func stringSliceField(fields map[string]any, name string) []string {
 	}
 	return result
 }
+

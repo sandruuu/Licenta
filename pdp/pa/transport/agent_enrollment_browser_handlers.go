@@ -44,6 +44,14 @@ func (s *Server) renderBrowserEnrollState(w http.ResponseWriter, session *paenro
 	case paenrollment.InteractiveStatusWaitingForIDPDiscovery:
 		renderEnrollmentPage(w, "Enroll device", "Enter your organization email address.", "", true)
 	case paenrollment.InteractiveStatusWaitingForUserLogin:
+		idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID)
+		if ok && idpCfg != nil && idpCfg.Enabled {
+			tenant, found := s.pa.Store.GetTenant(session.AuthRealmID)
+			if found && tenant != nil && tenant.Enabled {
+				s.redirectBrowserEnrollToIDP(w, nil, session, tenant, idpCfg)
+				return
+			}
+		}
 		renderEnrollmentPage(w, "Continue in browser", "Authentication is in progress. Complete login with your identity provider.", "", false)
 	case paenrollment.InteractiveStatusReadyForDeviceProof:
 		renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)
@@ -71,7 +79,14 @@ func (s *Server) handleBrowserEnrollDiscovery(w http.ResponseWriter, r *http.Req
 		renderEnrollmentPage(w, "Enroll device", "We could not determine the organization for this email. Check the address or contact your administrator.", email, true)
 		return
 	}
+	s.redirectBrowserEnrollToIDP(w, r, session, tenant, idpCfg)
+}
 
+func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Request, session *paenrollment.InteractiveSession, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig) {
+	if session == nil || tenant == nil || idpCfg == nil {
+		http.Error(w, "Identity provider configuration error", http.StatusInternalServerError)
+		return
+	}
 	pkceVerifier, pkceChallenge, err := auth.GeneratePKCE()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -108,7 +123,12 @@ func (s *Server) handleBrowserEnrollDiscovery(w http.ResponseWriter, r *http.Req
 		return
 	}
 	log.Printf("[ENROLL] Redirecting enrollment session to IdP: session=%s tenant=%s idp=%s", session.ID, tenant.ID, idpCfg.ID)
-	http.Redirect(w, r, authURL, http.StatusFound)
+	if r != nil {
+		http.Redirect(w, r, authURL, http.StatusFound)
+		return
+	}
+	w.Header().Set("Location", authURL)
+	w.WriteHeader(http.StatusFound)
 }
 
 func (s *Server) resolveEnrollmentIdentityProvider(email string) (*models.IdentityProviderConfig, *models.Tenant, bool) {

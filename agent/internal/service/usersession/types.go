@@ -33,12 +33,14 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Logger          *slog.Logger
-	Client          Client
-	Enrollment      EnrollmentProvider
-	DeviceIdentity  enrollment.DeviceIdentity
-	PostureSnapshot func() ipc.DevicePostureReport
-	Clock           func() time.Time
+	Logger             *slog.Logger
+	Client             Client
+	Enrollment         EnrollmentProvider
+	DeviceIdentity     enrollment.DeviceIdentity
+	DeviceDataSnapshot func() ipc.DeviceDataReport
+	OnCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
+	OnLogout           func(context.Context, ipc.PeerIdentity) error
+	Clock              func() time.Time
 }
 
 type EnrollmentProvider interface {
@@ -58,7 +60,7 @@ type StartSessionRequest struct {
 	DeviceID              string
 	AgentVersion          string
 	DeviceCertThumbprint  string
-	PostureRevision       string
+	DeviceDataRevision    string
 	LocalUserSIDHash      string
 	WindowsLogonSessionID string
 	WindowsSessionID      string
@@ -86,7 +88,7 @@ type SessionStatusResponse struct {
 type ClaimSessionRequest struct {
 	SessionRequestID      string
 	ClaimSecret           string
-	PostureRevision       string
+	DeviceDataRevision    string
 	LocalUserSIDHash      string
 	WindowsLogonSessionID string
 	WindowsSessionID      string
@@ -108,6 +110,7 @@ type GetCatalogRequest struct {
 
 type CatalogResponse struct {
 	Version     string
+	DNSSuffixes []string
 	Resources   []ipc.CatalogResource
 	TTLSeconds  int
 	PolicyEpoch string
@@ -143,15 +146,17 @@ type sessionState struct {
 }
 
 type Manager struct {
-	mu              sync.RWMutex
-	logger          *slog.Logger
-	config          Config
-	client          Client
-	enrollment      EnrollmentProvider
-	deviceIdentity  enrollment.DeviceIdentity
-	postureSnapshot func() ipc.DevicePostureReport
-	clock           func() time.Time
-	sessions        map[string]*sessionState
+	mu                 sync.RWMutex
+	logger             *slog.Logger
+	config             Config
+	client             Client
+	enrollment         EnrollmentProvider
+	deviceIdentity     enrollment.DeviceIdentity
+	deviceDataSnapshot func() ipc.DeviceDataReport
+	onCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
+	onLogout           func(context.Context, ipc.PeerIdentity) error
+	clock              func() time.Time
+	sessions           map[string]*sessionState
 }
 
 func localUserKey(peer ipc.PeerIdentity) (string, error) {

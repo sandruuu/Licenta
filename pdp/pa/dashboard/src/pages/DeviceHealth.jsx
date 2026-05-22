@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, MonitorSmartphone, ShieldAlert, ShieldCheck } from 'lucide-react';
-import { getDevicePostureReport, getDevicePostureReports } from '../api';
+import { Clock3, RefreshCw, MonitorSmartphone, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { getDeviceDataReport, getDeviceDataReports, getEnrollments } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
@@ -17,7 +17,8 @@ function formatTime(ts) {
   });
 }
 
-function postureInfo(checks = []) {
+function postureInfo(checks = [], row = {}) {
+  if (!row.has_report || checks.length === 0) return { text: 'No telemetry', variant: 'neutral', rank: 'unknown' };
   if (checks.some((c) => c.status === 'critical')) return { text: 'Critical', variant: 'danger', rank: 'critical' };
   if (checks.some((c) => c.status === 'warning' || c.status === 'unavailable')) return { text: 'Warning', variant: 'warning', rank: 'warning' };
   return { text: 'Good', variant: 'success', rank: 'good' };
@@ -27,6 +28,72 @@ function checkVariant(status) {
   if (status === 'good') return 'success';
   if (status === 'critical') return 'danger';
   return 'warning';
+}
+
+function asList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.value)) return data.value;
+  return [];
+}
+
+function timeValue(ts) {
+  if (!ts) return 0;
+  const value = new Date(ts).getTime();
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function isEndpointEnrollment(enrollment) {
+  return enrollment?.device_id && enrollment.component === 'endpoint' && enrollment.status === 'approved';
+}
+
+function enrollmentToDeviceRow(enrollment) {
+  return {
+    id: enrollment.id,
+    enrollment_id: enrollment.id,
+    device_id: enrollment.device_id,
+    hostname: enrollment.hostname || '',
+    os: '',
+    checks: [],
+    reported_at: '',
+    enrolled_at: enrollment.enrolled_at || '',
+    expires_at: enrollment.expires_at || '',
+    username: enrollment.username || '',
+    enrollment_status: enrollment.status || '',
+    has_report: false,
+  };
+}
+
+function mergeDeviceRows(postureReports, enrollments) {
+  const byDeviceID = new Map();
+
+  for (const report of postureReports) {
+    if (!report?.device_id) continue;
+    byDeviceID.set(report.device_id, { ...report, has_report: true });
+  }
+
+  for (const enrollment of enrollments) {
+    if (!isEndpointEnrollment(enrollment)) continue;
+
+    const existing = byDeviceID.get(enrollment.device_id);
+    if (existing) {
+      byDeviceID.set(enrollment.device_id, {
+        ...existing,
+        enrollment_id: enrollment.id || existing.enrollment_id,
+        hostname: existing.hostname || enrollment.hostname || '',
+        username: existing.username || enrollment.username || '',
+        enrolled_at: existing.enrolled_at || enrollment.enrolled_at || '',
+        expires_at: existing.expires_at || enrollment.expires_at || '',
+        enrollment_status: existing.enrollment_status || enrollment.status || '',
+      });
+      continue;
+    }
+
+    byDeviceID.set(enrollment.device_id, enrollmentToDeviceRow(enrollment));
+  }
+
+  return Array.from(byDeviceID.values()).sort((a, b) => (
+    timeValue(b.reported_at || b.enrolled_at) - timeValue(a.reported_at || a.enrolled_at)
+  ));
 }
 
 export default function DeviceHealth() {
@@ -41,8 +108,11 @@ export default function DeviceHealth() {
     setLoadingList(true);
     setError('');
     try {
-      const data = await getDevicePostureReports();
-      const list = Array.isArray(data) ? data : [];
+      const [deviceData, enrollmentData] = await Promise.all([
+        getDeviceDataReports(),
+        getEnrollments(),
+      ]);
+      const list = mergeDeviceRows(asList(deviceData), asList(enrollmentData));
       setReports(list);
 
       if (list.length === 0) {
@@ -55,7 +125,7 @@ export default function DeviceHealth() {
       const next = keep?.device_id || list[0].device_id;
       setSelectedDevice(next);
     } catch (e) {
-      setError(e?.message || 'Failed to load device posture reports');
+      setError(e?.message || 'Failed to load device data');
     } finally {
       setLoadingList(false);
     }
@@ -66,13 +136,18 @@ export default function DeviceHealth() {
       setSelectedReport(null);
       return;
     }
+    const localReport = reports.find((report) => report.device_id === deviceId);
+    if (localReport && !localReport.has_report) {
+      setSelectedReport(localReport);
+      return;
+    }
     setLoadingDetail(true);
     setError('');
     try {
-      const detail = await getDevicePostureReport(deviceId);
+      const detail = await getDeviceDataReport(deviceId);
       setSelectedReport(detail || null);
     } catch (e) {
-      setError(e?.message || 'Failed to load selected device posture');
+      setError(e?.message || 'Failed to load selected device data');
       setSelectedReport(null);
     } finally {
       setLoadingDetail(false);
@@ -87,22 +162,24 @@ export default function DeviceHealth() {
     if (selectedDevice) {
       loadDetail(selectedDevice);
     }
-  }, [selectedDevice]);
+  }, [selectedDevice, reports]);
 
   const summary = useMemo(() => {
     const total = reports.length;
     let good = 0;
     let warning = 0;
     let critical = 0;
+    let unknown = 0;
 
     for (const report of reports) {
-      const label = postureInfo(report.checks || []);
+      const label = postureInfo(report.checks || [], report);
       if (label.rank === 'good') good++;
       else if (label.rank === 'warning') warning++;
-      else critical++;
+      else if (label.rank === 'critical') critical++;
+      else unknown++;
     }
 
-    return { total, good, warning, critical };
+    return { total, good, warning, critical, unknown };
   }, [reports]);
 
   const deviceColumns = [
@@ -116,23 +193,29 @@ export default function DeviceHealth() {
       ),
     },
     { key: 'hostname', label: 'Hostname', render: (v) => v || '-' },
+    { key: 'username', label: 'User', render: (v) => v || '-' },
     { key: 'os', label: 'OS', render: (v) => v || '-' },
     {
       key: 'checks',
       label: 'Checks',
-      render: (v, row) => <span className="text-mono">{(row.checks || []).length}</span>,
+      render: (v, row) => <span className="text-mono">{row.has_report ? (row.checks || []).length : '-'}</span>,
     },
     {
       key: 'status',
       label: 'Status',
       render: (v, row) => {
-        const info = postureInfo(row.checks || []);
+        const info = postureInfo(row.checks || [], row);
         return <Badge variant={info.variant}>{info.text}</Badge>;
       },
     },
     {
       key: 'reported_at',
       label: 'Last Report',
+      render: (v, row) => <span className="text-mono">{row.has_report ? formatTime(v) : 'No telemetry'}</span>,
+    },
+    {
+      key: 'enrolled_at',
+      label: 'Enrolled',
       render: (v) => <span className="text-mono">{formatTime(v)}</span>,
     },
   ];
@@ -162,20 +245,21 @@ export default function DeviceHealth() {
 
   return (
     <>
-      <PageHeader title="Device Health" />
+      <PageHeader title="Devices" />
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <StatCard label="Total Devices" value={summary.total} icon={MonitorSmartphone} color="blue" />
         <StatCard label="Good Posture" value={summary.good} icon={ShieldCheck} color="green" />
         <StatCard label="Warning" value={summary.warning} icon={ShieldAlert} color="orange" />
         <StatCard label="Critical" value={summary.critical} icon={ShieldAlert} color="red" />
+        <StatCard label="No Telemetry" value={summary.unknown} icon={Clock3} color="blue" />
       </div>
 
       {/* Device List */}
       <div className="bg-surface-card border border-border rounded-md shadow-surface mb-5">
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <h3 className="text-sm font-semibold text-text-primary">Reported Devices</h3>
+          <h3 className="text-sm font-semibold text-text-primary">Endpoint Devices</h3>
           <Button variant="secondary" onClick={loadList} disabled={loadingList || loadingDetail}>
             <RefreshCw size={14} /> Refresh
           </Button>
@@ -191,7 +275,10 @@ export default function DeviceHealth() {
             data={reports}
             loading={loadingList}
             emptyIcon={MonitorSmartphone}
-            emptyTitle="No device reports yet."
+            emptyTitle="No endpoint devices yet."
+            emptyMessage="Enroll a TrustAgent device to see it here."
+            getRowKey={(row) => row.device_id || row.enrollment_id}
+            onRowClick={(row) => setSelectedDevice(row.device_id)}
           />
         </div>
       </div>
@@ -207,8 +294,8 @@ export default function DeviceHealth() {
             columns={detailColumns}
             data={selectedReport ? selectedReport.checks || [] : []}
             loading={loadingDetail}
-            emptyTitle="Select a device to view checks."
-            emptyMessage={!selectedDevice ? 'Click on a device above to view its posture checks.' : 'No checks found for this report.'}
+            emptyTitle={!selectedDevice ? 'Select a device to view checks.' : selectedReport && !selectedReport.has_report ? 'No telemetry reported yet.' : 'No checks found for this report.'}
+            emptyMessage={!selectedDevice ? 'Click on a device above to view its posture checks.' : selectedReport && !selectedReport.has_report ? 'The device is enrolled, but it has not sent posture checks yet.' : 'No checks found for this report.'}
           />
         </div>
       </div>

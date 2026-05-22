@@ -54,46 +54,94 @@ func EmptySnapshot() Snapshot {
 	return newSnapshot(nil, nil, PosturePolicy{}, defaultTTLSeconds)
 }
 
-func (service *Service) BuildForRole(role string) Snapshot {
-	if service == nil || service.store == nil {
-		return EmptySnapshot()
-	}
-	resources := service.store.ListResources()
-	suffixes := buildSuffixes(resources, role)
-	entries := buildResources(resources, role)
-	posturePolicy := buildPosturePolicy(service.store, "", role, resources)
-	return newSnapshot(suffixes, entries, posturePolicy, service.ttlSeconds)
-}
-
-func (service *Service) BuildForTenantRole(tenantID, role string) Snapshot {
-	if service == nil || service.store == nil {
+func (service *Service) BuildForTenantUser(tenantID string, user *models.User, groupIDs, groupNames []string) Snapshot {
+	if service == nil || service.store == nil || user == nil {
 		return EmptySnapshot()
 	}
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
-		return service.BuildForRole(role)
+		tenantID = strings.TrimSpace(user.TenantID)
 	}
+	if tenantID == "" {
+		return EmptySnapshot()
+	}
+
 	resources := service.store.ListResourcesByTenant(tenantID)
-	suffixes := buildSuffixes(resources, role)
-	entries := buildResources(resources, role)
-	posturePolicy := buildPosturePolicy(service.store, tenantID, role, resources)
+	accessible := service.accessibleResources(tenantID, user, groupIDs, groupNames, resources)
+	suffixes := buildSuffixes(accessible)
+	entries := buildResources(accessible)
+	posturePolicy := buildPosturePolicyForUser(service.store, tenantID, user, groupIDs, groupNames, accessible)
 	return newSnapshot(suffixes, entries, posturePolicy, service.ttlSeconds)
 }
 
-func ResourceVisibleForRole(resource *models.Resource, role string) bool {
-	if resource == nil {
+func (service *Service) accessibleResources(tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) []*models.Resource {
+	accessible := make([]*models.Resource, 0, len(resources))
+	for _, resource := range resources {
+		if resource == nil || !resource.Enabled || strings.TrimSpace(resource.ID) == "" {
+			continue
+		}
+		if service.resourceAllowedByPolicy(tenantID, user, groupIDs, groupNames, resource) {
+			accessible = append(accessible, resource)
+		}
+	}
+	return accessible
+}
+
+func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) bool {
+	if service == nil || service.store == nil || user == nil || resource == nil {
 		return false
 	}
-	if len(resource.AllowedRoles) == 0 {
-		return true
-	}
-	role = strings.TrimSpace(role)
-	for _, allowedRole := range resource.AllowedRoles {
-		if strings.EqualFold(strings.TrimSpace(allowedRole), role) {
+	rules := service.store.ListPolicyRulesForAccessGroups(tenantID, resource.ID, groupIDs, groupNames)
+	for _, rule := range rules {
+		if rule == nil || !rule.Enabled {
+			continue
+		}
+		if !catalogRuleMatchesIdentity(rule, user, groupIDs, groupNames, resource) {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
+		case "allow", "mfa_required":
 			return true
+		case "deny":
+			return false
 		}
 	}
 	return false
+}
+
+func catalogRuleMatchesIdentity(rule *models.PolicyRule, user *models.User, groupIDs, groupNames []string, resource *models.Resource) bool {
+	if rule == nil || user == nil {
+		return false
+	}
+	conditions := rule.Conditions
+	if len(conditions.AllowedRoles) > 0 && !containsFold(conditions.AllowedRoles, user.Role) {
+		return false
+	}
+	if len(conditions.AllowedUsers) > 0 {
+		if !containsAnyFold(conditions.AllowedUsers, user.ID, user.Username, user.Email) {
+			return false
+		}
+	}
+	if len(conditions.AllowedGroups) > 0 {
+		if !intersectsFold(conditions.AllowedGroups, append(append([]string{}, groupIDs...), groupNames...)) {
+			return false
+		}
+	}
+	if len(conditions.TargetResources) > 0 {
+		if resource == nil || !containsAnyFold(conditions.TargetResources, resource.ID, resource.Name) {
+			return false
+		}
+	}
+	if len(conditions.TargetPorts) > 0 {
+		if resource == nil {
+			return false
+		}
+		port := ResourcePort(resource, ResourceProtocol(resource))
+		if !containsInt(conditions.TargetPorts, port) {
+			return false
+		}
+	}
+	return true
 }
 
 func ResourceProtocol(resource *models.Resource) string {
@@ -152,13 +200,10 @@ func newSnapshot(suffixes []string, resources []ResourceEntry, posturePolicy Pos
 	}
 }
 
-func buildSuffixes(resources []*models.Resource, role string) []string {
+func buildSuffixes(resources []*models.Resource) []string {
 	suffixSet := make(map[string]struct{})
 	for _, resource := range resources {
 		if resource == nil || !resource.Enabled {
-			continue
-		}
-		if !ResourceVisibleForRole(resource, role) {
 			continue
 		}
 		for _, suffix := range suffixesForResource(resource) {
@@ -173,13 +218,10 @@ func buildSuffixes(resources []*models.Resource, role string) []string {
 	return suffixes
 }
 
-func buildResources(resources []*models.Resource, role string) []ResourceEntry {
+func buildResources(resources []*models.Resource) []ResourceEntry {
 	entries := make([]ResourceEntry, 0, len(resources))
 	for _, resource := range resources {
 		if resource == nil || !resource.Enabled {
-			continue
-		}
-		if !ResourceVisibleForRole(resource, role) {
 			continue
 		}
 		fqdn := resourceFQDN(resource)
@@ -213,60 +255,37 @@ func version(suffixes []string, resources []ResourceEntry, posturePolicy Posture
 	return hex.EncodeToString(fingerprint[:16])
 }
 
-func buildPosturePolicy(dataStore *store.Store, tenantID, role string, resources []*models.Resource) PosturePolicy {
-	if dataStore == nil {
+func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) PosturePolicy {
+	if dataStore == nil || user == nil {
 		return PosturePolicy{}
 	}
-	tenantID = strings.TrimSpace(tenantID)
-	role = strings.TrimSpace(role)
-	visibleResources := make(map[string]struct{}, len(resources))
-	for _, resource := range resources {
-		if resource == nil || !resource.Enabled || strings.TrimSpace(resource.ID) == "" {
-			continue
-		}
-		if !ResourceVisibleForRole(resource, role) {
-			continue
-		}
-		visibleResources[strings.TrimSpace(resource.ID)] = struct{}{}
-	}
-
 	required := map[string]struct{}{}
 	requiredStatus := ""
-	for _, assignment := range dataStore.ListPolicyAssignments() {
-		if assignment == nil || !assignment.Enabled {
+	for _, resource := range resources {
+		if resource == nil || strings.TrimSpace(resource.ID) == "" {
 			continue
 		}
-		assignmentTenantID := strings.TrimSpace(assignment.TenantID)
-		if tenantID == "" {
-			if assignmentTenantID != "" {
+		for _, rule := range dataStore.ListPolicyRulesForAccessGroups(tenantID, resource.ID, groupIDs, groupNames) {
+			if rule == nil || !rule.Enabled || !posturePolicyRuleAction(rule.Action) {
 				continue
 			}
-		} else if !strings.EqualFold(assignmentTenantID, tenantID) {
-			continue
-		}
-		if !posturePolicyAssignmentApplies(assignment, visibleResources) {
-			continue
-		}
-		rule, ok := dataStore.GetPolicyRule(assignment.PolicyID)
-		if !ok || rule == nil || !rule.Enabled || !posturePolicyRuleAction(rule.Action) {
-			continue
-		}
-		if !posturePolicyRoleApplies(rule.Conditions, role) {
-			continue
-		}
-		checks := normalizeCheckNames(rule.Conditions.RequiredChecks)
-		if len(checks) == 0 {
-			continue
-		}
-		for _, check := range checks {
-			required[check] = struct{}{}
-		}
-		status := normalizePostureStatus(rule.Conditions.RequiredCheckStatus)
-		if status == "" {
-			status = "good"
-		}
-		if requiredStatus == "" || status == "good" {
-			requiredStatus = status
+			if !catalogRuleMatchesIdentity(rule, user, groupIDs, groupNames, resource) {
+				continue
+			}
+			checks := normalizeCheckNames(rule.Conditions.RequiredChecks)
+			if len(checks) == 0 {
+				continue
+			}
+			for _, check := range checks {
+				required[check] = struct{}{}
+			}
+			status := normalizePostureStatus(rule.Conditions.RequiredCheckStatus)
+			if status == "" {
+				status = "good"
+			}
+			if requiredStatus == "" || status == "good" {
+				requiredStatus = status
+			}
 		}
 	}
 	if len(required) == 0 {
@@ -283,31 +302,9 @@ func buildPosturePolicy(dataStore *store.Store, tenantID, role string, resources
 	return PosturePolicy{RequiredChecks: checks, RequiredCheckStatus: requiredStatus}
 }
 
-func posturePolicyAssignmentApplies(assignment *models.PolicyAssignment, visibleResources map[string]struct{}) bool {
-	if assignment == nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(assignment.Level)) {
-	case "", "organization", "group":
-		return true
-	case "resource", "resource_group":
-		_, ok := visibleResources[strings.TrimSpace(assignment.ResourceID)]
-		return ok
-	default:
-		return false
-	}
-}
-
 func posturePolicyRuleAction(action string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
 	return action == "allow" || action == "mfa_required"
-}
-
-func posturePolicyRoleApplies(conditions models.RuleConditions, role string) bool {
-	if len(conditions.AllowedRoles) == 0 {
-		return true
-	}
-	return containsFold(conditions.AllowedRoles, role)
 }
 
 func normalizePosturePolicy(policy PosturePolicy) PosturePolicy {
@@ -355,6 +352,33 @@ func containsFold(values []string, candidate string) bool {
 	}
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyFold(values []string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if containsFold(values, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectsFold(left, right []string) bool {
+	for _, candidate := range right {
+		if containsFold(left, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsInt(values []int, candidate int) bool {
+	for _, value := range values {
+		if value == candidate {
 			return true
 		}
 	}
@@ -425,13 +449,6 @@ func normalizeSuffix(raw string) string {
 }
 
 func resourceFQDN(resource *models.Resource) string {
-	if resource.Metadata != nil {
-		for _, key := range []string{"catalog_fqdn", "fqdn", "dns_name"} {
-			if value := normalizeHost(resource.Metadata[key]); value != "" {
-				return value
-			}
-		}
-	}
 	if value := normalizeHost(resource.ExternalURL); value != "" {
 		return value
 	}

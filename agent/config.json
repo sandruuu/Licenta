@@ -3,6 +3,13 @@
   "dashboard_refresh_interval": "30s",
   "pdp_grpc_endpoint": "localhost:8443",
   "pdp_tls_server_name": "localhost",
+  "pdp_ca_file": "C:\\Users\\laura\\Desktop\\Licenta\\pdp\\data\\vault-pki-ca-cert.pem",
   "enrollment_timeout": "10m",
-  "enrollment_poll_interval": "3s"
+  "enrollment_poll_interval": "3s",
+  "device_data_sync_interval": "30m",
+  "device_data_sync_change_scan_interval": "30s",
+  "local_dns_listen_address": "127.0.0.1:53",
+  "local_dns_server": "127.0.0.1",
+  "synthetic_ip_cidr": "100.64.0.0/10",
+  "harden_browser_doh": false
 }

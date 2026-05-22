@@ -6,7 +6,7 @@ import {
   deletePolicy,
   deletePolicyAssignment,
   getDirectoryGroups,
-  getDevicePostureReports,
+  getDeviceDataReports,
   getIdPs,
   getOrganizations,
   getPolicies,
@@ -68,13 +68,13 @@ export default function Policies() {
     setLoading(true);
     setError('');
     try {
-      const [policyData, assignmentData, organizationData, resourceData, groupData, devicePostureData] = await Promise.all([
+      const [policyData, assignmentData, organizationData, resourceData, groupData, deviceData] = await Promise.all([
         getPolicies(),
         getPolicyAssignments(),
         getOrganizations(),
         getResources(),
         getDirectoryGroups(),
-        getDevicePostureReports().catch(() => []),
+        getDeviceDataReports().catch(() => []),
       ]);
       const organizationList = Array.isArray(organizationData) ? organizationData : [];
       const idpLists = await Promise.all(
@@ -88,7 +88,7 @@ export default function Policies() {
       setIdPs(idpLists.flat().filter(Boolean));
       setResources(Array.isArray(resourceData) ? resourceData : []);
       setGroups(Array.isArray(groupData) ? groupData : []);
-      setDeviceCheckOptions(deviceCheckOptionsFromReports(Array.isArray(devicePostureData) ? devicePostureData : []));
+      setDeviceCheckOptions(deviceCheckOptionsFromReports(Array.isArray(deviceData) ? deviceData : []));
     } catch (e) {
       setError(e.message || 'Failed to load policies');
     } finally {

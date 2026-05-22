@@ -14,14 +14,22 @@ const configFilename = "config.json"
 var executablePath = os.Executable
 
 type configFile struct {
-	TrayTimeout              string `json:"tray_timeout,omitempty"`
-	DashboardRefreshInterval string `json:"dashboard_refresh_interval,omitempty"`
-	PDPGRPCEndpoint          string `json:"pdp_grpc_endpoint,omitempty"`
-	PDPTLSServerName         string `json:"pdp_tls_server_name,omitempty"`
-	PDPCAFile                string `json:"pdp_ca_file,omitempty"`
-	EnrollmentTimeout        string `json:"enrollment_timeout,omitempty"`
-	EnrollmentPollInterval   string `json:"enrollment_poll_interval,omitempty"`
-	EnrollmentStatePath      string `json:"enrollment_state_path,omitempty"`
+	TrayTimeout                            string `json:"tray_timeout,omitempty"`
+	DashboardRefreshInterval               string `json:"dashboard_refresh_interval,omitempty"`
+	PDPGRPCEndpoint                        string `json:"pdp_grpc_endpoint,omitempty"`
+	PDPTLSServerName                       string `json:"pdp_tls_server_name,omitempty"`
+	PDPCAFile                              string `json:"pdp_ca_file,omitempty"`
+	EnrollmentTimeout                      string `json:"enrollment_timeout,omitempty"`
+	EnrollmentPollInterval                 string `json:"enrollment_poll_interval,omitempty"`
+	DeviceDataSyncInterval                 string `json:"device_data_sync_interval,omitempty"`
+	DeviceDataSyncChangeScanInterval       string `json:"device_data_sync_change_scan_interval,omitempty"`
+	LegacyDeviceDataSyncInterval           string `json:"device_telemetry_interval,omitempty"`
+	LegacyDeviceDataSyncChangeScanInterval string `json:"device_telemetry_change_scan_interval,omitempty"`
+	EnrollmentStatePath                    string `json:"enrollment_state_path,omitempty"`
+	LocalDNSListenAddress                  string `json:"local_dns_listen_address,omitempty"`
+	LocalDNSServer                         string `json:"local_dns_server,omitempty"`
+	SyntheticIPCIDR                        string `json:"synthetic_ip_cidr,omitempty"`
+	HardenBrowserDoH                       bool   `json:"harden_browser_doh,omitempty"`
 }
 
 func loadServiceConfig(serviceConfig ServiceConfig) (ServiceConfig, error) {
@@ -46,13 +54,34 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 	options.PDPTLSServerName = strings.TrimSpace(config.PDPTLSServerName)
 	options.PDPCAFile = strings.TrimSpace(config.PDPCAFile)
 	options.EnrollmentStatePath = strings.TrimSpace(config.EnrollmentStatePath)
+	options.LocalDNSListenAddress = strings.TrimSpace(config.LocalDNSListenAddress)
+	options.LocalDNSServer = strings.TrimSpace(config.LocalDNSServer)
+	options.SyntheticIPCIDR = strings.TrimSpace(config.SyntheticIPCIDR)
+	options.HardenBrowserDoH = config.HardenBrowserDoH
 	if options.EnrollmentTimeout, err = optionalConfigDuration("enrollment_timeout", config.EnrollmentTimeout); err != nil {
 		return options, err
 	}
 	if options.EnrollmentPollInterval, err = optionalConfigDuration("enrollment_poll_interval", config.EnrollmentPollInterval); err != nil {
 		return options, err
 	}
+	deviceDataSyncInterval := firstNonEmptyConfig(config.DeviceDataSyncInterval, config.LegacyDeviceDataSyncInterval)
+	if options.DeviceDataSyncInterval, err = optionalConfigDuration("device_data_sync_interval", deviceDataSyncInterval); err != nil {
+		return options, err
+	}
+	deviceDataSyncChangeScanInterval := firstNonEmptyConfig(config.DeviceDataSyncChangeScanInterval, config.LegacyDeviceDataSyncChangeScanInterval)
+	if options.DeviceDataSyncChangeScanInterval, err = optionalConfigDuration("device_data_sync_change_scan_interval", deviceDataSyncChangeScanInterval); err != nil {
+		return options, err
+	}
 	return options, nil
+}
+
+func firstNonEmptyConfig(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func applyTrayConfig(options TrayConfig, config configFile) (TrayConfig, error) {

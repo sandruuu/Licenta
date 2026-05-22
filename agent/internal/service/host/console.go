@@ -1,4 +1,4 @@
-package service
+package host
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-func RunConsole(parent context.Context, service *Service) error {
+func RunConsole(parent context.Context, run func(context.Context) error) error {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -26,5 +26,5 @@ func RunConsole(parent context.Context, service *Service) error {
 		}
 	}()
 
-	return service.Run(ctx)
+	return run(ctx)
 }

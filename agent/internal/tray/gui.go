@@ -194,13 +194,13 @@ func (app *GUIApp) unavailableDashboard(err error) ipc.AgentDashboard {
 			ReportedAt:      now,
 		},
 		Enrollment: ipc.EnrollmentInfo{State: enrollmentState},
-		Posture: ipc.DevicePostureReport{
+		DeviceData: ipc.DeviceDataReport{
 			Hostname:    app.identity.Username,
 			OS:          "Unknown",
 			CollectedAt: now,
-			Checks: []ipc.DevicePostureCheck{{
-				Name:        "Connectivity",
-				Status:      ipc.DevicePostureStatusUnavailable,
+			Checks: []ipc.DeviceDataCheck{{
+				Name:        "Device Data",
+				Status:      ipc.DeviceDataStatusUnavailable,
 				Description: "Agent service pipe is not reachable",
 				Details:     map[string]string{"Reason": reason},
 			}},

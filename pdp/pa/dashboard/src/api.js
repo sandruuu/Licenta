@@ -136,20 +136,16 @@ export async function getDashboardStats() {
   return apiFetch('/admin/dashboard');
 }
 
-export async function getDeviceHealthReports() {
-  return apiFetch('/admin/device-health');
+export async function getDeviceDataReports() {
+  return apiFetch('/admin/device-data');
 }
 
-export async function getDeviceHealthReport(deviceId) {
-  return apiFetch(`/admin/device-health/${encodeURIComponent(deviceId)}`);
+export async function getDeviceDataReport(deviceId) {
+  return apiFetch(`/admin/device-data/${encodeURIComponent(deviceId)}`);
 }
 
-export async function getDevicePostureReports() {
-  return apiFetch('/admin/device-posture');
-}
-
-export async function getDevicePostureReport(deviceId) {
-  return apiFetch(`/admin/device-posture/${encodeURIComponent(deviceId)}`);
+export async function getEnrollments() {
+  return apiFetch('/admin/enrollments');
 }
 
 // ─── Resources ──────────────────────────────

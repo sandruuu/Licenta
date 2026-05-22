@@ -101,12 +101,14 @@ Este componenta responsabilă pentru funcțiile privilegiate ale aplicației:
 * utilizarea **Trusted Platform Module (TPM) 2.0** pentru gestionarea identității hardware a dispozitivului și pentru protejarea materialului criptografic utilizat în stabilirea canalelor de comunicație securizate de tip mTLS;   
 * interceptarea și redirecționarea traficului prin utilizarea **TUN/Windows Filtering Platform (WFP)**, care permite intercepția conexiunilor și redirecționarea a acestora către proxy-ul local al agentului; (varianta TUN este suficientă pentru implementare?)  
 * manipularea politicilor de rezoluție DNS prin configurarea **Name Resolution Policy Table (NRPT)** pentru a forța rezoluția domeniilor prin agent, ocolind setările DNS ale rețelei locale;  
-* utilizează **Windows Management Instrumentation (WMI)** pentru colectarea informațiilor de telemetrie ale dispozitivului (starea antivirusului, configurația firewall-ului, patch-urile instalate etc.) și le transmite către Policy Administrator (PA) la intervale prestabilite, precum și în cazul producerii unor evenimente critice (de exemplu, dezactivarea firewall-ului).
+* utilizează **Windows Management Instrumentation (WMI)** pentru colectarea informațiilor de telemetrie ale dispozitivului (starea antivirusului, configurația firewall-ului, patch-urile instalate etc.) și le transmite către Policy Administrator (PA) imediat după înrolare, la intervale de 30 de minute și în cazul producerii unor evenimente critice sau al remedierii unei probleme (de exemplu, dezactivarea sau reactivarea firewall-ului).
 
 **Aplicație în contextul utilizatorului (Tray)**
 
-* declanșează procedura de validare a identității utilizatorului prin protocolul **OIDC**, implementând mecanismul **Authorization Code Flow cu PKCE;**  
-* implementează **interfață grafică** care afișează starea Agentului (conectat, deconectat, neînrolat), starea de înrolare a dispozitivului și informații despre certificat, identitatea utilizatorului autentificat, date de securitate despre dispozitiv (firewall, antivirus, criptare disc, actualizări, conectivitate), lista de resurse disponibile, sesiunile active, mesajele privind refuzul accesului și motivele aferente.
+* declanșează procedura interactivă de înrolare pentru dispozitivele neînrolate, solicitând Service-ului inițierea sesiunii cu PDP și deschizând browserul către URL-ul primit;
+* după înrolarea dispozitivului, declanșează procesul de autentificare prin solicitarea unei sesiuni către Service și deschiderea browserului către URL-ul returnat de PDP. Fluxul **OIDC Authorization Code Flow cu PKCE** este orchestrat de PDP, nu de Tray;
+* permite deconectarea utilizatorului autentificat, prin revocarea sesiunii de utilizator și eliminarea din interfață a catalogului de resurse asociat acelei sesiuni;
+* implementează **interfață grafică** care afișează starea Agentului (neînrolat, înrolat, autentificat sau deconectat), starea de înrolare a dispozitivului și informații despre certificat, identitatea utilizatorului autentificat, date de securitate despre dispozitiv (firewall, antivirus, criptare disc, actualizări, conectivitate), lista de resurse disponibile, sesiunile active, mesajele privind refuzul accesului și motivele aferente. Datele despre dispozitiv și lista de resurse sunt afișate utilizatorului numai după finalizarea autentificării.
 
 Limbaje folosite: Go \+ Wails \+ React
 
@@ -122,34 +124,31 @@ Dacă este confirmată înrolarea agentului, dublată de un certificat valid leg
 
 ## Identificarea dispozitivelor neînrolate
 
-În cazul în care lipsesc elemente precum: cheie, certificat sau corelație între acestea, dispozitivul este considerat neînrolat. În acest scenariu, componenta Service expune către componenta Tray metadatele necesare inițierii procesului de înrolare, respectiv:
-
-* **identificatorul dispozitivului** derivat din SHA-256(Endorsement Key);  
-* **nonce** utilizat pentru corelarea sesiunii de înrolare cu instanța locală a agentului.
-
-Aceste elemente realizează corelarea dintre dispozitiv și sesiunea de înrolare, prevenind reutilizarea sau substituirea datelor între sesiuni diferite.
-
-## Autentificarea utilizatorului
-
-Procesul de autentificare este realizat prin OIDC Authorization Code Flow cu PKCE. Tray-ul generează elementele: code\_verifier, code\_challenge, state și nonce, și inițiază autentificarea prin browser către furnizorul de identitate desemnat de configurația aleasă, determinată prin mecanismul de Home Realm Discovery.
-
-După autentificare, utilizatorul este redirecționat către un endpoint local, unde codul de autorizare este preluat și schimbat pentru un set de token-uri (access\_token, id\_token, refresh\_token).
-
-## Emiterea tokenului de înrolare
-
-Pe baza access\_token-ului emis de IdP și a metadatelor necesare inițierii procesului de înrolare, Tray-ul solicită de la PDP emiterea unui token intern dedicat procesului de înrolare. Acest token este un JWT cu scop strict definit și durată redusă, care conține identitatea utilizatorului validată de IdP, împreună cu identificatori de dispozitiv.
-
-## Validarea locală
-
-Tokenul de înrolare este transmis către componenta Service prin IPC, unde este supus unui mecanism de validare locală. Acesta verifică integritatea tokenului, semnătura digitală prin JWKS, expirarea, precum și corespondența dintre identificatorii de dispozitiv.
-
-Dacă validarea eșuează, procesul de înregistrare este respins.
+În cazul în care lipsesc elemente precum: cheie, certificat sau corelație între acestea, dispozitivul este considerat neînrolat. În acest scenariu, componenta Tray afișează opțiunea de înrolare, iar inițierea propriu-zisă este realizată de componenta Service.
 
 ## Generarea identității criptografice
 
-Agentul creează sau deschide cheia criptografică prin API-ul Windows NCrypt, utilizând Microsoft Platform Crypto Provider. Acest provider poate ancora cheia în TPM 2.0, astfel încât cheia privată să rămână protejată de platformă și să nu fie exportată către aplicație. 
+Agentul creează sau deschide cheia criptografică prin API-ul Windows NCrypt, utilizând Microsoft Platform Crypto Provider. Acest provider poate ancora cheia în TPM 2.0, astfel încât cheia privată să rămână protejată de platformă și să nu fie exportată către aplicație.
 
-Pe baza acestei chei este generată o cerere de semnare a certificatului (CSR), care include identificatorul dispozitivului și informații suplimentare de identificare. CSR-ul este semnat local cu cheia privată, demonstrând posesia acesteia fără a o expune. Ulterior, CSR-ul este transmis împreună cu token-ul de înrolare către PDP pentru continuarea procesului de emitere a certificatului.
+Pe baza acestei chei este generată o cerere de semnare a certificatului (CSR), care include informații de identificare ale dispozitivului. CSR-ul este semnat local cu cheia privată, demonstrând posesia acesteia fără a o expune.
+
+## Inițierea sesiunii interactive de înrolare
+
+Componenta Service solicită către PDP, prin gRPC, crearea unei sesiuni interactive de înrolare. Cererea conține metadate de corelare precum hash-ul CSR-ului, hash-ul cheii publice (SPKI), platforma Agentului și un nonce de dispozitiv. PDP returnează un identificator de sesiune, un secret de polling, un challenge și un URL de browser de forma `/browser/enroll/{session_id}`.
+
+Tray-ul deschide URL-ul primit, iar Service-ul urmărește în fundal starea sesiunii. Aceste elemente realizează corelarea dintre dispozitiv și sesiunea de înrolare, prevenind reutilizarea sau substituirea datelor între sesiuni diferite.
+
+## Autentificarea utilizatorului în browser
+
+Autentificarea utilizatorului necesară înrolării este orchestrată de PDP în browser. Pagina de înrolare realizează descoperirea organizației, redirecționează utilizatorul către furnizorul de identitate al tenantului și folosește OIDC Authorization Code Flow cu PKCE.
+
+După autentificare, utilizatorul este redirecționat înapoi către PDP, unde codul de autorizare este schimbat pentru token-urile emise de IdP. PDP validează identitatea, mapează utilizatorul în tenant și marchează sesiunea de înrolare ca fiind pregătită pentru dovada dispozitivului.
+
+## Dovada posesiei cheii și validarea cererii
+
+Service-ul interoghează periodic starea sesiunii de înrolare. Atunci când PDP indică faptul că autentificarea utilizatorului este completă, Agentul construiește o dovadă criptografică ce include identificatorul sesiunii, nonce-ul dispozitivului, challenge-ul primit, hash-ul CSR-ului, hash-ul SPKI și originea PDP. Dovada este semnată local cu cheia privată a dispozitivului.
+
+CSR-ul și dovada semnată sunt transmise către PDP prin gRPC. PDP validează sesiunea, identitatea utilizatorului autentificat, secretul de polling, nonce-ul, semnătura și corespondența dintre CSR și cheia publică. Dacă una dintre verificări eșuează, procesul de înregistrare este respins.
 
 ## Emiterea și instalarea certificatului
 
@@ -159,11 +158,23 @@ Certificatul este asociat cu cheia locală corespunzătoare, asigurând utilizar
 
 # Flux de acces la resurse
 
-Ulterior procesului de înrolare, agentul dispune de o identitate digitală unică, bazată pe certificat. Agentul preia rolul de PEP local, fiind responsabil pentru filtrarea traficului relevant și transmiterea solicitărilor de autorizare către Policy Administrator.
+Ulterior procesului de înrolare, agentul dispune de o identitate digitală unică, bazată pe certificat. Înrolarea dispozitivului nu oferă însă automat acces la resurse. Utilizatorul trebuie să se autentifice separat, iar catalogul de resurse este disponibil numai după finalizarea acestei autentificări. Agentul preia rolul de PEP local, fiind responsabil pentru filtrarea traficului relevant și transmiterea solicitărilor de autorizare către Policy Administrator.
+
+## Autentificarea utilizatorului după înrolare
+
+După ce dispozitivul este înrolat, Tray-ul afișează starea de dispozitiv înrolat și permite inițierea autentificării utilizatorului. La acționarea butonului de autentificare, Service-ul creează o cerere de sesiune către PDP prin canalul gRPC protejat cu mTLS, legând cererea de certificatul dispozitivului și de sesiunea locală Windows a utilizatorului.
+
+PDP returnează un URL de browser de forma `/browser/session/{session_id}`. Utilizatorul se autentifică prin furnizorul de identitate al tenantului, folosind OIDC Authorization Code Flow cu PKCE. După autentificare, PDP marchează cererea ca fiind pregătită pentru revendicare, iar Service-ul revendică sesiunea prin gRPC, folosind secretul primit la inițiere și metadatele sesiunii locale.
+
+În urma revendicării, Agentul primește un token de sesiune cu valabilitate limitată și catalogul de resurse permis pentru utilizatorul autentificat. Până la acest moment, interfața locală nu afișează catalogul de resurse și nici datele de securitate ale dispozitivului.
+
+## Deconectarea utilizatorului
+
+Utilizatorul se poate deconecta din interfața Agentului. În acest caz, Service-ul revocă sesiunea la PDP prin canalul mTLS, oprește sesiunea locală asociată utilizatorului și elimină din interfață identitatea utilizatorului, catalogul de resurse și datele afișate pentru acea sesiune. Dispozitivul rămâne înrolat, iar transmiterea telemetriei către PDP continuă independent de sesiunea utilizatorului.
 
 ## Sincronizarea listei de resurse
 
-Sincronizarea listei de resurse permise se realizează prin stabilirea unei sesiuni mTLS între Agent și Policy Administrator, garantând autentificarea reciprocă și securitatea fluxului informațional. Lista conține informații despre identificatorii resurselor interne, precum și sufixele DNS asociate domeniilor private.
+Sincronizarea listei de resurse permise se realizează după autentificarea utilizatorului, prin sesiunea mTLS dintre Agent și Policy Administrator. Cererea este autorizată cu tokenul de sesiune emis pentru utilizatorul autentificat, iar PDP returnează catalogul filtrat pe baza politicilor aplicabile utilizatorului, grupurilor sale, dispozitivului și resurselor definite. Lista conține FQDN-urile externe ale resurselor disponibile, identificatorii resurselor interne, precum și sufixele DNS asociate domeniilor private.
 
 Pe baza listei sincronizate sunt generate automat regulile locale NRPT (Name Resolution Policy Table), utilizate pentru controlul rezoluției DNS aferente resurselor protejate.
 

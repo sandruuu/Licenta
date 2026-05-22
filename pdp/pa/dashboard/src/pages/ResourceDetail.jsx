@@ -4,8 +4,18 @@ import {
   ArrowLeft,
   Edit2,
   Server,
+  ShieldCheck,
 } from 'lucide-react';
-import { getGateways, getOrganizations, getResources, updateResource } from '../api';
+import {
+  getDirectoryGroups,
+  getDirectoryUsers,
+  getGateways,
+  getOrganizations,
+  getPolicies,
+  getPolicyAssignments,
+  getResources,
+  updateResource,
+} from '../api';
 import Badge from '../components/ui/Badge';
 import {
   BackIconButton,
@@ -20,6 +30,7 @@ import Modal from '../components/ui/Modal';
 import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '../components/ui/FormField';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { formatDateTime } from '../utils/format';
+import { actionMeta } from '../components/policies/policyModel';
 
 function DetailValue({ label, value, mono = false }) {
   return (
@@ -32,6 +43,46 @@ function DetailValue({ label, value, mono = false }) {
   );
 }
 
+function arrayFrom(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function sameID(left, right) {
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
+}
+
+function groupMatchesAssignment(group, assignment) {
+  if (!group || !assignment) return false;
+  return [group.id, group.external_id, group.display_name].some((value) => (
+    sameID(value, assignment.group_id) || sameID(value, assignment.group_name)
+  ));
+}
+
+function usersForGroup(group, usersByID) {
+  return arrayFrom(group?.member_ids)
+    .map((userID) => usersByID.get(userID))
+    .filter(Boolean)
+    .sort((left, right) => String(left.display_name || left.user_name || '').localeCompare(String(right.display_name || right.user_name || '')));
+}
+
+function policyVariant(action) {
+  if (action === 'deny') return 'danger';
+  if (action === 'mfa_required') return 'warning';
+  return 'success';
+}
+
+function externalHost(resource) {
+  const externalURL = resource?.external_url || '';
+  if (externalURL.includes('://')) {
+    try {
+      return new URL(externalURL).hostname || externalURL;
+    } catch {
+      return externalURL;
+    }
+  }
+  return externalURL || resource?.host || '';
+}
+
 export default function ResourceDetail() {
   const { resourceId = '' } = useParams();
   const resourceID = decodeURIComponent(resourceId);
@@ -40,6 +91,10 @@ export default function ResourceDetail() {
   const [resource, setResource] = useState(null);
   const [gateway, setGateway] = useState(null);
   const [organization, setOrganization] = useState(null);
+  const [policies, setPolicies] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [directoryGroups, setDirectoryGroups] = useState([]);
+  const [directoryUsers, setDirectoryUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
@@ -61,10 +116,20 @@ export default function ResourceDetail() {
       const selectedResource = resourceList.find((item) => item.id === resourceID) || null;
       const selectedGateway = gatewayList.find((item) => item.id === selectedResource?.gateway_id) || null;
       const organizationID = selectedResource?.tenant_id || selectedGateway?.tenant_id || selectedGateway?.tenant_ids?.[0] || '';
+      const [policyData, assignmentData, groupData, userData] = organizationID ? await Promise.all([
+        getPolicies().catch(() => []),
+        getPolicyAssignments().catch(() => []),
+        getDirectoryGroups(organizationID).catch(() => []),
+        getDirectoryUsers(organizationID).catch(() => []),
+      ]) : [[], [], [], []];
 
       setResource(selectedResource);
       setGateway(selectedGateway);
       setOrganization(organizations.find((item) => item.id === organizationID) || null);
+      setPolicies(arrayFrom(policyData));
+      setAssignments(arrayFrom(assignmentData));
+      setDirectoryGroups(arrayFrom(groupData));
+      setDirectoryUsers(arrayFrom(userData));
     } catch (e) {
       setError(e.message || 'Failed to load resource data');
     } finally {
@@ -83,10 +148,7 @@ export default function ResourceDetail() {
       : '/dashboard/resources';
 
   const openEdit = () => {
-    setEditForm({
-      ...resource,
-      external_fqdn: resource.metadata?.catalog_fqdn || resource.external_url || '',
-    });
+    setEditForm({ ...resource });
     setEditOpen(true);
   };
 
@@ -94,11 +156,7 @@ export default function ResourceDetail() {
     setEditSaving(true);
     setError('');
     const metadata = { ...(editForm.metadata || {}) };
-    if (editForm.external_fqdn?.trim()) {
-      metadata.catalog_fqdn = editForm.external_fqdn.trim();
-    } else {
-      delete metadata.catalog_fqdn;
-    }
+    delete metadata.catalog_fqdn;
 
     try {
       await updateResource(resource.id, {
@@ -109,7 +167,7 @@ export default function ResourceDetail() {
         gateway_id: editForm.gateway_id,
         host: editForm.host?.trim(),
         port: parseInt(editForm.port, 10) || 0,
-        external_url: editForm.external_fqdn?.trim(),
+        external_url: editForm.external_url?.trim(),
         enabled: editForm.enabled !== false,
         metadata,
       });
@@ -144,7 +202,33 @@ export default function ResourceDetail() {
   }
 
   const target = `${resource.host || '-'}${resource.port ? `:${resource.port}` : ''}`;
-  const catalogFQDN = resource.metadata?.catalog_fqdn || resource.external_url || '';
+  const catalogFQDN = externalHost(resource);
+  const policiesByID = new Map(policies.map((policy) => [policy.id, policy]));
+  const usersByID = new Map(directoryUsers.map((user) => [user.id, user]));
+  const resourceAssignments = assignments
+    .filter((assignment) => assignment?.enabled !== false)
+    .filter((assignment) => sameID(assignment.tenant_id, resource.tenant_id))
+    .filter((assignment) => ['resource', 'resource_group'].includes(assignment.level))
+    .filter((assignment) => sameID(assignment.resource_id, resource.id));
+  const groupAccess = resourceAssignments
+    .filter((assignment) => assignment.level === 'resource_group')
+    .map((assignment) => {
+      const group = directoryGroups.find((item) => groupMatchesAssignment(item, assignment)) || null;
+      const policy = policiesByID.get(assignment.policy_id);
+      return {
+        assignment,
+        group,
+        policy,
+        users: usersForGroup(group, usersByID),
+      };
+    });
+  const resourceWideAccess = resourceAssignments
+    .filter((assignment) => assignment.level === 'resource')
+    .map((assignment) => ({
+      assignment,
+      policy: policiesByID.get(assignment.policy_id),
+    }));
+  const hasExplicitAccessPolicy = resourceAssignments.length > 0;
 
   return (
     <div className="space-y-7">
@@ -188,6 +272,62 @@ export default function ResourceDetail() {
               <DetailValue label="Certificate Domain" value={resource.cert_domain} mono />
               <DetailValue label="Certificate Expiry" value={formatDateTime(resource.cert_expiry)} />
             </div>
+          </div>
+          <DetailDivider />
+
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className={detailSectionTitleClass}>Access Policies</p>
+              <Badge variant={hasExplicitAccessPolicy ? 'success' : 'danger'}>
+                {hasExplicitAccessPolicy ? 'Explicit' : 'Deny Default'}
+              </Badge>
+            </div>
+
+            {!hasExplicitAccessPolicy ? (
+              <div className="mt-4">
+                <EmptyState
+                  icon={ShieldCheck}
+                  title="No access policy assigned"
+                  message="Access is denied by default for this resource."
+                />
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {groupAccess.map(({ assignment, group, policy, users }) => (
+                  <div key={assignment.id} className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-text-primary">{group?.display_name || assignment.group_name || assignment.group_id || 'Group'}</p>
+                        <p className="mt-1 text-xs font-semibold text-text-muted">{policy?.name || assignment.policy_id}</p>
+                      </div>
+                      <Badge variant={policyVariant(policy?.action)}>{actionMeta(policy?.action).short}</Badge>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {users.length ? users.slice(0, 10).map((user) => (
+                        <Badge key={user.id} variant={user.active === false ? 'danger' : 'neutral'} className="normal-case tracking-normal">
+                          {user.display_name || user.user_name || user.email || user.id}
+                        </Badge>
+                      )) : (
+                        <span className="text-xs font-semibold text-text-muted">No directory users in this group</span>
+                      )}
+                      {users.length > 10 && <Badge variant="neutral">+{users.length - 10}</Badge>}
+                    </div>
+                  </div>
+                ))}
+
+                {resourceWideAccess.map(({ assignment, policy }) => (
+                  <div key={assignment.id} className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-text-primary">All eligible organization users</p>
+                        <p className="mt-1 text-xs font-semibold text-text-muted">{policy?.name || assignment.policy_id}</p>
+                      </div>
+                      <Badge variant={policyVariant(policy?.action)}>{actionMeta(policy?.action).short}</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <DetailDivider />
 
@@ -238,8 +378,8 @@ export default function ResourceDetail() {
           <FormField label="Port" className="mb-0">
             <FormInput type="number" value={editForm.port || ''} onChange={(event) => setEditForm({ ...editForm, port: event.target.value })} />
           </FormField>
-          <FormField label="External FQDN" className="mb-0 md:col-span-2">
-            <FormInput value={editForm.external_fqdn || ''} onChange={(event) => setEditForm({ ...editForm, external_fqdn: event.target.value })} />
+          <FormField label="External URL" className="mb-0 md:col-span-2">
+            <FormInput value={editForm.external_url || ''} onChange={(event) => setEditForm({ ...editForm, external_url: event.target.value })} />
           </FormField>
           <div className="md:col-span-2">
             <FormCheckbox id="resource-detail-enabled" checked={editForm.enabled !== false} onChange={(event) => setEditForm({ ...editForm, enabled: event.target.checked })} label="Enabled" />

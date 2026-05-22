@@ -19,14 +19,16 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 		dependencies.Clock = time.Now
 	}
 	return &Manager{
-		logger:          dependencies.Logger,
-		config:          config,
-		client:          dependencies.Client,
-		enrollment:      dependencies.Enrollment,
-		deviceIdentity:  dependencies.DeviceIdentity,
-		postureSnapshot: dependencies.PostureSnapshot,
-		clock:           dependencies.Clock,
-		sessions:        make(map[string]*sessionState),
+		logger:             dependencies.Logger,
+		config:             config,
+		client:             dependencies.Client,
+		enrollment:         dependencies.Enrollment,
+		deviceIdentity:     dependencies.DeviceIdentity,
+		deviceDataSnapshot: dependencies.DeviceDataSnapshot,
+		onCatalog:          dependencies.OnCatalog,
+		onLogout:           dependencies.OnLogout,
+		clock:              dependencies.Clock,
+		sessions:           make(map[string]*sessionState),
 	}
 }
 
@@ -78,12 +80,12 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 		return ipc.StartUserLoginInteractiveResponse{}, ipc.ErrorCodeServiceUnavailable, err
 	}
 	localSIDHash := sidHash(peer.UserSID)
-	postureRevision := manager.postureRevision(record.DeviceID)
+	deviceDataRevision := manager.deviceDataRevision(record.DeviceID)
 	start, err := client.StartSession(ctx, StartSessionRequest{
 		DeviceID:              record.DeviceID,
 		AgentVersion:          "TrustAgent",
 		DeviceCertThumbprint:  record.DeviceCertThumbprint,
-		PostureRevision:       postureRevision,
+		DeviceDataRevision:    deviceDataRevision,
 		LocalUserSIDHash:      localSIDHash,
 		WindowsLogonSessionID: peer.WindowsLogonSessionID,
 		WindowsSessionID:      peer.WindowsSessionID,
@@ -117,7 +119,7 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 	}
 	manager.sessions[key] = state
 	manager.mu.Unlock()
-	go manager.runSession(sessionCtx, client, state, localSIDHash, postureRevision)
+	go manager.runSession(sessionCtx, client, state, localSIDHash, deviceDataRevision)
 
 	return ipc.StartUserLoginInteractiveResponse{
 		Started:             true,
@@ -176,10 +178,15 @@ func (manager *Manager) Logout(ctx context.Context, peer ipc.PeerIdentity) (ipc.
 			})
 		}
 	}
+	if manager.onLogout != nil {
+		if err := manager.onLogout(ctx, peer); err != nil {
+			return ipc.LogoutUserSessionResponse{}, ipc.ErrorCodeServiceUnavailable, err
+		}
+	}
 	return ipc.LogoutUserSessionResponse{LoggedOut: true, State: ipc.UserSessionStateSignedOut, ReportedAt: manager.clock().UTC()}, "", nil
 }
 
-func (manager *Manager) runSession(ctx context.Context, client Client, session *sessionState, localSIDHash, postureRevision string) {
+func (manager *Manager) runSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) {
 	ticker := time.NewTicker(session.pollInterval)
 	defer ticker.Stop()
 	deadline := session.expiresAt
@@ -195,14 +202,14 @@ func (manager *Manager) runSession(ctx context.Context, client Client, session *
 				manager.setFailure(session.key, "Authentication request expired")
 				return
 			}
-			if done := manager.pollSession(ctx, client, session, localSIDHash, postureRevision); done {
+			if done := manager.pollSession(ctx, client, session, localSIDHash, deviceDataRevision); done {
 				return
 			}
 		}
 	}
 }
 
-func (manager *Manager) pollSession(ctx context.Context, client Client, session *sessionState, localSIDHash, postureRevision string) bool {
+func (manager *Manager) pollSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) bool {
 	status, err := client.SessionStatus(ctx, SessionStatusRequest{SessionRequestID: session.sessionRequestID, ClaimSecret: session.claimSecret})
 	if err != nil {
 		manager.setMessage(session.key, "Waiting for browser authentication status")
@@ -213,7 +220,7 @@ func (manager *Manager) pollSession(ctx context.Context, client Client, session 
 		manager.setMessage(session.key, "Waiting for browser login")
 		return false
 	case StatusReadyToClaim:
-		if err := manager.claimSession(ctx, client, session, localSIDHash, postureRevision); err != nil {
+		if err := manager.claimSession(ctx, client, session, localSIDHash, deviceDataRevision); err != nil {
 			manager.setFailure(session.key, err.Error())
 		}
 		return true
@@ -230,11 +237,11 @@ func (manager *Manager) pollSession(ctx context.Context, client Client, session 
 	}
 }
 
-func (manager *Manager) claimSession(ctx context.Context, client Client, session *sessionState, localSIDHash, postureRevision string) error {
+func (manager *Manager) claimSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) error {
 	claimed, err := client.ClaimSession(ctx, ClaimSessionRequest{
 		SessionRequestID:      session.sessionRequestID,
 		ClaimSecret:           session.claimSecret,
-		PostureRevision:       postureRevision,
+		DeviceDataRevision:    deviceDataRevision,
 		LocalUserSIDHash:      localSIDHash,
 		WindowsLogonSessionID: session.peer.WindowsLogonSessionID,
 		WindowsSessionID:      session.peer.WindowsSessionID,
@@ -245,6 +252,23 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 	catalog, err := client.GetCatalog(ctx, GetCatalogRequest{AgentSessionToken: claimed.AgentSessionToken})
 	if err != nil {
 		return err
+	}
+	catalogInfo := ipc.CatalogInfo{
+		Version:     catalog.Version,
+		DNSSuffixes: catalog.DNSSuffixes,
+		Resources:   catalog.Resources,
+		TTLSeconds:  catalog.TTLSeconds,
+		PolicyEpoch: catalog.PolicyEpoch,
+		UpdatedAt:   manager.clock().UTC(),
+	}
+	if manager.onCatalog != nil {
+		if err := manager.onCatalog(ctx, session.peer, catalogInfo); err != nil {
+			_ = client.RevokeSession(ctx, RevokeSessionRequest{
+				AgentSessionToken: claimed.AgentSessionToken,
+				SessionID:         claimed.AgentSessionID,
+			})
+			return fmt.Errorf("apply protected resource catalog: %w", err)
+		}
 	}
 	manager.mu.Lock()
 	current := manager.sessions[session.key]
@@ -257,13 +281,7 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 		current.expiresAt = claimed.ExpiresAt
 		current.message = "Authenticated"
 		current.lastError = ""
-		current.catalog = ipc.CatalogInfo{
-			Version:     catalog.Version,
-			Resources:   catalog.Resources,
-			TTLSeconds:  catalog.TTLSeconds,
-			PolicyEpoch: catalog.PolicyEpoch,
-			UpdatedAt:   manager.clock().UTC(),
-		}
+		current.catalog = catalogInfo
 	}
 	manager.mu.Unlock()
 	return nil
@@ -291,11 +309,11 @@ func (manager *Manager) setFailure(key, message string) {
 	manager.mu.Unlock()
 }
 
-func (manager *Manager) postureRevision(deviceID string) string {
-	if manager.postureSnapshot == nil {
+func (manager *Manager) deviceDataRevision(deviceID string) string {
+	if manager.deviceDataSnapshot == nil {
 		return ""
 	}
-	report := manager.postureSnapshot()
+	report := manager.deviceDataSnapshot()
 	if report.CollectedAt.IsZero() {
 		return ""
 	}

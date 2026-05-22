@@ -2,30 +2,42 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"agent/internal/shared/ipc"
 )
 
 const (
-	dashboardPostureMaxAge = 2 * time.Minute
-	connectionConnected    = "connected"
-	connectionUnenrolled   = "unenrolled"
-	connectionPending      = "enrolling"
+	dashboardDeviceDataMaxAge = 2 * time.Minute
+	connectionConnected       = "connected"
+	connectionUnenrolled      = "unenrolled"
+	connectionPending         = "enrolling"
 )
 
 func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 	status := service.status()
-	posture := service.dashboardPosture(ctx, status)
 	peer, _ := ipc.PeerIdentityFromContext(ctx)
 	userSession := service.userSessions.Snapshot(peer)
+	authenticated := strings.EqualFold(userSession.UserSession.State, ipc.UserSessionStateAuthenticated)
+	catalog := ipc.CatalogInfo{}
+	deviceData := ipc.DeviceDataReport{}
+	if authenticated {
+		catalog = userSession.Catalog
+		deviceData = service.dashboardDeviceData(ctx, status)
+	} else {
+		status.DeviceDataStatus = ""
+		status.DeviceDataCheckCount = 0
+		status.DeviceDataCollectedAt = time.Time{}
+		status.DeviceDataLastError = ""
+	}
 	return ipc.AgentDashboard{
 		Connection:  dashboardConnection(status),
 		Status:      status,
 		Enrollment:  dashboardEnrollment(status),
 		UserSession: userSession.UserSession,
-		Catalog:     userSession.Catalog,
-		Posture:     posture,
+		Catalog:     catalog,
+		DeviceData:  deviceData,
 		ReportedAt:  service.clock().UTC(),
 	}
 }
@@ -53,35 +65,35 @@ func dashboardEnrollment(status ipc.AgentStatus) ipc.EnrollmentInfo {
 	return ipc.EnrollmentInfo{State: status.EnrollmentState, DeviceID: status.EnrollmentDeviceID, LastError: status.EnrollmentLastError}
 }
 
-func (service *Service) dashboardPosture(ctx context.Context, status ipc.AgentStatus) ipc.DevicePostureReport {
-	posture := service.cachedPostureReport()
-	stale := status.DevicePostureCollectedAt.IsZero() || service.clock().UTC().Sub(status.DevicePostureCollectedAt) > dashboardPostureMaxAge
-	if service.postureCollector != nil && (len(posture.Checks) == 0 || stale) {
-		if report, _, err := service.devicePosture(ctx); err == nil {
+func (service *Service) dashboardDeviceData(ctx context.Context, status ipc.AgentStatus) ipc.DeviceDataReport {
+	deviceData := service.cachedDeviceDataReport()
+	stale := status.DeviceDataCollectedAt.IsZero() || service.clock().UTC().Sub(status.DeviceDataCollectedAt) > dashboardDeviceDataMaxAge
+	if service.deviceDataCollector != nil && (len(deviceData.Checks) == 0 || stale) {
+		if report, _, err := service.deviceDataReport(ctx); err == nil {
 			return report
-		} else if len(posture.Checks) == 0 {
-			return unavailablePostureReport(status, err)
+		} else if len(deviceData.Checks) == 0 {
+			return unavailableDeviceDataReport(status, err)
 		}
 	}
-	if len(posture.Checks) == 0 {
-		return unavailablePostureReport(status, nil)
+	if len(deviceData.Checks) == 0 {
+		return unavailableDeviceDataReport(status, nil)
 	}
-	return posture
+	return deviceData
 }
 
-func unavailablePostureReport(status ipc.AgentStatus, err error) ipc.DevicePostureReport {
-	description := "Device posture is not available from the service"
+func unavailableDeviceDataReport(status ipc.AgentStatus, err error) ipc.DeviceDataReport {
+	description := "Device data is not available from the service"
 	details := map[string]string{}
 	if err != nil {
 		details["Reason"] = err.Error()
 	}
-	return ipc.DevicePostureReport{
+	return ipc.DeviceDataReport{
 		Hostname:    "Unknown",
 		OS:          "Unknown",
 		CollectedAt: status.ReportedAt,
-		Checks: []ipc.DevicePostureCheck{{
-			Name:        "Device Posture",
-			Status:      ipc.DevicePostureStatusUnavailable,
+		Checks: []ipc.DeviceDataCheck{{
+			Name:        "Device Data",
+			Status:      ipc.DeviceDataStatusUnavailable,
 			Description: description,
 			Details:     details,
 		}},

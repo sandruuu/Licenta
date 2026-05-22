@@ -62,10 +62,10 @@ The production `pe/` packages must not import `store`, `pa`, `pa/transport`, `id
 
 The rename does not change the external protocol surface:
 
-- `ztna.agent.v1.AgentAuthorizationService/AuthorizeResource`
-- `ztna.catalog.v1.DeviceCatalogService/GetCatalog`
-- `ztna.device.v1.DeviceTelemetryService/ReportPosture`
-- `ztna.device.v1.DeviceTelemetryService/Heartbeat`
+- `ztna.agent.AgentAuthorizationService/AuthorizeResource`
+- `ztna.catalog.DeviceCatalogService/GetCatalog`
+- `trustagent.device.DeviceDataService/ReportDeviceData`
+- `trustagent.device.DeviceDataService/Heartbeat`
 - `gateway.GatewayEnrollmentService/Enroll`
 - `gateway.GatewayEnrollmentService/RenewCertificate`
 - `gateway.GatewayTrustService/GetCACertificate`

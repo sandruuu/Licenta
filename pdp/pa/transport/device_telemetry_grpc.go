@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	deviceTelemetryGRPCServiceName       = "ztna.device.v1.DeviceTelemetryService"
-	deviceTelemetryGRPCReportPosturePath = "/ztna.device.v1.DeviceTelemetryService/ReportPosture"
-	deviceTelemetryGRPCHeartbeatPath     = "/ztna.device.v1.DeviceTelemetryService/Heartbeat"
+	deviceTelemetryGRPCServiceName          = "trustagent.device.DeviceDataService"
+	deviceTelemetryGRPCReportDeviceDataPath = "/" + deviceTelemetryGRPCServiceName + "/ReportDeviceData"
+	deviceTelemetryGRPCHeartbeatPath        = "/" + deviceTelemetryGRPCServiceName + "/Heartbeat"
 )
 
 type deviceTelemetryGRPCServer interface {
-	ReportPosture(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	ReportDeviceData(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	Heartbeat(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
@@ -31,7 +31,7 @@ type deviceTelemetryGRPCService struct {
 	server *Server
 }
 
-func (service *deviceTelemetryGRPCService) ReportPosture(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (service *deviceTelemetryGRPCService) ReportDeviceData(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	if service == nil || service.server == nil {
 		return nil, status.Error(codes.Internal, "telemetry service is not initialized")
 	}
@@ -40,7 +40,7 @@ func (service *deviceTelemetryGRPCService) ReportPosture(ctx context.Context, re
 		return nil, status.Error(codes.PermissionDenied, "missing client certificate identity")
 	}
 	if request == nil {
-		return nil, status.Error(codes.InvalidArgument, "posture report is required")
+		return nil, status.Error(codes.InvalidArgument, "device data report is required")
 	}
 	if service.server.pa == nil || service.server.pa.Devices == nil {
 		return nil, status.Error(codes.Unavailable, devices.ErrServiceUnavailable.Error())
@@ -48,7 +48,7 @@ func (service *deviceTelemetryGRPCService) ReportPosture(ctx context.Context, re
 	if _, hasScore := request.GetFields()["overall_score"]; hasScore {
 		return nil, status.Error(codes.InvalidArgument, "overall_score is not accepted on raw posture reports")
 	}
-	report, err := postureReportFromStruct(request)
+	report, err := deviceDataReportFromStruct(request)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -58,7 +58,7 @@ func (service *deviceTelemetryGRPCService) ReportPosture(ctx context.Context, re
 	}
 	return structpb.NewStruct(map[string]interface{}{
 		"success":     true,
-		"message":     "Device posture report received",
+		"message":     "Device data report received",
 		"reported_at": report.ReportedAt.UTC().Format(time.RFC3339Nano),
 	})
 }
@@ -87,7 +87,7 @@ func (service *deviceTelemetryGRPCService) Heartbeat(ctx context.Context, _ *str
 	})
 }
 
-func postureReportFromStruct(value *structpb.Struct) (models.DevicePostureReport, error) {
+func deviceDataReportFromStruct(value *structpb.Struct) (models.DevicePostureReport, error) {
 	report := models.DevicePostureReport{
 		DeviceID: strings.TrimSpace(structFieldString(value, "device_id")),
 		Hostname: strings.TrimSpace(structFieldString(value, "hostname")),
@@ -132,17 +132,17 @@ func valueString(value *structpb.Value) string {
 	return value.GetStringValue()
 }
 
-func deviceTelemetryGRPCReportPostureHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func deviceTelemetryGRPCReportDeviceDataHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	request := &structpb.Struct{}
 	if err := decoder(request); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(deviceTelemetryGRPCServer).ReportPosture(ctx, request)
+		return srv.(deviceTelemetryGRPCServer).ReportDeviceData(ctx, request)
 	}
-	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: deviceTelemetryGRPCReportPosturePath}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: deviceTelemetryGRPCReportDeviceDataPath}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(deviceTelemetryGRPCServer).ReportPosture(ctx, req.(*structpb.Struct))
+		return srv.(deviceTelemetryGRPCServer).ReportDeviceData(ctx, req.(*structpb.Struct))
 	}
 	return interceptor(ctx, request, info, handler)
 }
@@ -166,7 +166,7 @@ var deviceTelemetryGRPCServiceDesc = grpc.ServiceDesc{
 	ServiceName: deviceTelemetryGRPCServiceName,
 	HandlerType: (*deviceTelemetryGRPCServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{MethodName: "ReportPosture", Handler: deviceTelemetryGRPCReportPostureHandler},
+		{MethodName: "ReportDeviceData", Handler: deviceTelemetryGRPCReportDeviceDataHandler},
 		{MethodName: "Heartbeat", Handler: deviceTelemetryGRPCHeartbeatHandler},
 	},
 	Streams:  []grpc.StreamDesc{},

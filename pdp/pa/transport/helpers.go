@@ -119,6 +119,7 @@ func (s *Server) signDeviceEnrollmentCSR(csrPEM []byte, validDays int, vaultRole
 	if s.externalPKI != nil {
 		return s.externalPKI.SignCSRWithOptions(csrPEM, vaultRole, fmt.Sprintf("%dh", validDays*24), pki.SignCSROptions{
 			CommonName: deviceID,
+			URISANs:    []string{paenrollment.DeviceIdentityURI(deviceID)},
 		})
 	}
 	return nil, fmt.Errorf("PKI signer not initialized")

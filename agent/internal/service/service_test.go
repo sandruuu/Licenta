@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,18 +16,22 @@ import (
 )
 
 type serviceTestOptions struct {
-	Logger           *slog.Logger
-	ListenerFactory  func() (net.Listener, error)
-	PostureCollector DevicePostureCollector
-	Clock            func() time.Time
+	Logger                      *slog.Logger
+	ListenerFactory             func() (net.Listener, error)
+	DeviceDataCollector         DeviceDataCollector
+	DeviceDataSyncClientFactory DeviceDataSyncClientFactory
+	ProtectedResources          ProtectedResourcesManager
+	Clock                       func() time.Time
 }
 
 func newTestService(options serviceTestOptions) *Service {
 	return New(Config{}, Dependencies{
-		Logger:           options.Logger,
-		ListenerFactory:  options.ListenerFactory,
-		PostureCollector: options.PostureCollector,
-		Clock:            options.Clock,
+		Logger:                      options.Logger,
+		ListenerFactory:             options.ListenerFactory,
+		DeviceDataCollector:         options.DeviceDataCollector,
+		DeviceDataSyncClientFactory: options.DeviceDataSyncClientFactory,
+		ProtectedResources:          options.ProtectedResources,
+		Clock:                       options.Clock,
 	})
 }
 
@@ -68,29 +73,29 @@ func TestServiceReportsUnenrolledStatus(t *testing.T) {
 	if err := ipc.DecodeBody(response.Body, &status); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if status.EnrollmentState != ipc.EnrollmentStateUnenrolled || status.DevicePostureStatus != statusDisabled {
+	if status.EnrollmentState != ipc.EnrollmentStateUnenrolled || status.DeviceDataStatus != statusDisabled {
 		t.Fatalf("status = %+v", status)
 	}
 }
 
-func TestServiceReturnsDevicePostureReport(t *testing.T) {
+func TestServiceReturnsDeviceDataReport(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	service := newTestService(serviceTestOptions{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:  func() time.Time { return now },
-		PostureCollector: fakePostureCollector{report: ipc.DevicePostureReport{
+		DeviceDataCollector: fakeDeviceDataCollector{report: ipc.DeviceDataReport{
 			DeviceID:    "device-1",
 			Hostname:    "host-1",
 			OS:          "Windows",
 			CollectedAt: now,
-			Checks: []ipc.DevicePostureCheck{{
+			Checks: []ipc.DeviceDataCheck{{
 				Name:        "Firewall",
-				Status:      ipc.DevicePostureStatusCritical,
+				Status:      ipc.DeviceDataStatusCritical,
 				Description: "Firewall is disabled",
 			}},
 		}},
 	})
-	request, err := ipc.NewRequest("req-1", ipc.OperationGetDevicePosture, ipc.DevicePostureRequest{})
+	request, err := ipc.NewRequest("req-1", ipc.OperationGetDeviceData, ipc.DeviceDataRequest{})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
 	}
@@ -101,15 +106,15 @@ func TestServiceReturnsDevicePostureReport(t *testing.T) {
 	if !response.OK {
 		t.Fatalf("response error = %+v", response.Error)
 	}
-	var report ipc.DevicePostureReport
+	var report ipc.DeviceDataReport
 	if err := ipc.DecodeBody(response.Body, &report); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if report.DeviceID != "device-1" || len(report.Checks) != 1 || report.Checks[0].Status != ipc.DevicePostureStatusCritical {
+	if report.DeviceID != "device-1" || len(report.Checks) != 1 || report.Checks[0].Status != ipc.DeviceDataStatusCritical {
 		t.Fatalf("report = %+v", report)
 	}
 	status := service.status()
-	if status.DevicePostureStatus != postureStatusCollected || status.DevicePostureCheckCount != 1 || !status.DevicePostureCollectedAt.Equal(now) {
+	if status.DeviceDataStatus != deviceDataStatusCollected || status.DeviceDataCheckCount != 1 || !status.DeviceDataCollectedAt.Equal(now) {
 		t.Fatalf("status = %+v", status)
 	}
 }
@@ -117,9 +122,9 @@ func TestServiceReturnsDevicePostureReport(t *testing.T) {
 func TestServiceReturnsAgentDashboard(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	service := newTestService(serviceTestOptions{
-		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:            func() time.Time { return now },
-		PostureCollector: fakePostureCollector{report: testPostureReport(now, ipc.DevicePostureStatusGood)},
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		DeviceDataCollector: fakeDeviceDataCollector{report: testDeviceDataReport(now, ipc.DeviceDataStatusGood)},
 	})
 	service.transition(StateRunning)
 
@@ -138,7 +143,7 @@ func TestServiceReturnsAgentDashboard(t *testing.T) {
 	if err := ipc.DecodeBody(response.Body, &dashboard); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if dashboard.Connection.State != "unenrolled" || dashboard.Enrollment.State != ipc.EnrollmentStateUnenrolled || len(dashboard.Posture.Checks) == 0 {
+	if dashboard.Connection.State != "unenrolled" || dashboard.Enrollment.State != ipc.EnrollmentStateUnenrolled || len(dashboard.DeviceData.Checks) != 0 || len(dashboard.Catalog.Resources) != 0 {
 		t.Fatalf("dashboard = %+v", dashboard)
 	}
 }
@@ -207,6 +212,202 @@ func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T
 	}
 }
 
+func TestServiceDoesNotStartInteractiveEnrollmentWhenAlreadyEnrolled(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_existing",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "thumbprint",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	client := &fakeEnrollmentClient{
+		start: enrollment.EnrollmentStartSessionResponse{
+			EnrollmentSessionID: "erq_new",
+			AuthURL:             "https://pdp.example.com/browser/enroll/erq_new",
+			DeviceChallenge:     "device-challenge",
+			PollSecret:          "poll-secret",
+			ExpiresAt:           now.Add(time.Minute),
+		},
+	}
+	service := New(Config{EnrollmentPollInterval: 10 * time.Millisecond, EnrollmentTimeout: time.Minute}, Dependencies{
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:            func() time.Time { return now },
+		EnrollmentClient: client,
+		DeviceIdentity:   fakeDeviceIdentity{},
+		EnrollmentStore:  store,
+	})
+
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollmentInteractive, ipc.StartEnrollmentInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	response, err := service.HandleIPC(context.Background(), request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("response error = %+v", response.Error)
+	}
+	var start ipc.StartEnrollmentInteractiveResponse
+	if err := ipc.DecodeBody(response.Body, &start); err != nil {
+		t.Fatalf("DecodeBody returned error: %v", err)
+	}
+	if start.Started || start.AuthURL != "" || start.State != ipc.EnrollmentStateEnrolled {
+		t.Fatalf("start = %+v", start)
+	}
+	if client.startCalls != 0 {
+		t.Fatalf("StartSession calls = %d, want 0", client.startCalls)
+	}
+	snapshot := service.enrollment.Snapshot()
+	if snapshot.State != ipc.EnrollmentStateEnrolled || snapshot.DeviceID != "dev_existing" {
+		t.Fatalf("enrollment snapshot = %+v", snapshot)
+	}
+}
+
+func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	client := &fakeEnrollmentClient{
+		start: enrollment.EnrollmentStartSessionResponse{
+			EnrollmentSessionID: "erq_123",
+			AuthURL:             "https://pdp.example.com/browser/enroll/erq_123",
+			DeviceChallenge:     "device-challenge",
+			PollSecret:          "poll-secret",
+			ExpiresAt:           now.Add(time.Minute),
+			PollInterval:        10 * time.Millisecond,
+		},
+		statuses: []enrollment.EnrollmentSessionStatusResponse{{Status: enrollment.StatusReadyForDeviceProof}},
+		complete: enrollment.EnrollmentCompleteSessionResponse{
+			DeviceID:              "dev_123",
+			CertificatePEM:        testCertificatePEM,
+			CertificateThumbprint: "thumbprint",
+			ExpiresAt:             now.Add(time.Hour),
+		},
+	}
+	service := New(Config{
+		EnrollmentPollInterval:           10 * time.Millisecond,
+		EnrollmentTimeout:                time.Minute,
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: time.Hour,
+	}, Dependencies{
+		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:            func() time.Time { return now },
+		EnrollmentClient: client,
+		DeviceIdentity: fakeDeviceIdentity{
+			csr: enrollment.EnrollmentCSR{
+				KeyName:     "TrustAgentDeviceKey",
+				Provider:    "test-provider",
+				CSRPEM:      "-----BEGIN CERTIFICATE REQUEST-----\nMIIB\n-----END CERTIFICATE REQUEST-----",
+				CSRHash:     "csr-hash",
+				SPKIHash:    "spki-hash",
+				DeviceNonce: "device-nonce",
+			},
+		},
+		EnrollmentStore:     store,
+		DeviceDataCollector: fakeDeviceDataCollector{report: testDeviceDataReport(now, ipc.DeviceDataStatusGood)},
+		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollmentInteractive, ipc.StartEnrollmentInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if response, err := service.HandleIPC(context.Background(), request); err != nil || !response.OK {
+		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
+	}
+	waitForEnrollmentState(t, service, ipc.EnrollmentStateEnrolled)
+	report := deviceDataSyncClient.waitForReports(t, 1)[0]
+	if report.DeviceID != "dev_123" || len(report.Checks) != 1 {
+		t.Fatalf("device data sync report = %+v", report)
+	}
+}
+
+func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
+	}}
+	service := New(Config{
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: 10 * time.Millisecond,
+	}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+
+	reports := deviceDataSyncClient.waitForReports(t, 2)
+	if reports[0].Checks[0].Status != ipc.DeviceDataStatusGood || reports[1].Checks[0].Status != ipc.DeviceDataStatusCritical {
+		t.Fatalf("device data sync reports = %+v", reports)
+	}
+}
+
+func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
+	}}
+	service := New(Config{
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: time.Hour,
+	}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+
+	first := deviceDataSyncClient.waitForReports(t, 1)
+	if first[0].Checks[0].Status != ipc.DeviceDataStatusGood {
+		t.Fatalf("first device data sync report = %+v", first[0])
+	}
+	service.deviceDataSync.Trigger("firewall_policy")
+	reports := deviceDataSyncClient.waitForReports(t, 2)
+	if reports[1].Checks[0].Status != ipc.DeviceDataStatusCritical {
+		t.Fatalf("device data sync reports = %+v", reports)
+	}
+}
+
 func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
@@ -234,11 +435,12 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 			Email:             "user@example.com",
 		},
 		catalog: usersession.CatalogResponse{
-			Version: "cat_1",
+			Version:     "cat_1",
+			DNSSuffixes: []string{"internal.example"},
 			Resources: []ipc.CatalogResource{{
 				ResourceID:  "res_crm",
 				DisplayName: "CRM",
-				FQDN:        "crm.internal",
+				FQDN:        "crm.internal.example",
 				Protocol:    "https",
 				Port:        443,
 			}},
@@ -246,12 +448,14 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 			PolicyEpoch: "1",
 		},
 	}
+	protectedResources := &fakeProtectedResources{}
 	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
-		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:             func() time.Time { return now },
-		EnrollmentStore:   store,
-		UserSessionClient: sessionClient,
-		DeviceIdentity:    fakeDeviceIdentity{},
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:              func() time.Time { return now },
+		EnrollmentStore:    store,
+		UserSessionClient:  sessionClient,
+		ProtectedResources: protectedResources,
+		DeviceIdentity:     fakeDeviceIdentity{},
 	})
 	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
 		UserSID:               "S-1-5-21-1000",
@@ -281,6 +485,10 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	dashboard := service.dashboard(peerCtx)
 	if dashboard.UserSession.Email != "user@example.com" || len(dashboard.Catalog.Resources) != 1 {
 		t.Fatalf("dashboard user session = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
+	}
+	applied := protectedResources.lastApplied()
+	if applied.Version != "cat_1" || len(applied.Resources) != 1 || len(applied.DNSSuffixes) != 1 {
+		t.Fatalf("protected resources catalog = %+v", applied)
 	}
 }
 
@@ -333,25 +541,52 @@ func TestServiceRunsWithInjectedListener(t *testing.T) {
 	}
 }
 
-type fakePostureCollector struct {
-	report ipc.DevicePostureReport
+type fakeDeviceDataCollector struct {
+	report ipc.DeviceDataReport
 	err    error
 }
 
-func (collector fakePostureCollector) Collect(context.Context, string) (ipc.DevicePostureReport, error) {
+func (collector fakeDeviceDataCollector) Collect(_ context.Context, deviceID string) (ipc.DeviceDataReport, error) {
 	if collector.err != nil {
-		return ipc.DevicePostureReport{}, collector.err
+		return ipc.DeviceDataReport{}, collector.err
 	}
-	return collector.report, nil
+	report := collector.report
+	if report.DeviceID == "" {
+		report.DeviceID = deviceID
+	}
+	return report, nil
 }
 
-func testPostureReport(collectedAt time.Time, firewallStatus string) ipc.DevicePostureReport {
-	return ipc.DevicePostureReport{
+type sequenceDeviceDataCollector struct {
+	mu      sync.Mutex
+	reports []ipc.DeviceDataReport
+	index   int
+}
+
+func (collector *sequenceDeviceDataCollector) Collect(_ context.Context, deviceID string) (ipc.DeviceDataReport, error) {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	index := collector.index
+	if index >= len(collector.reports) {
+		index = len(collector.reports) - 1
+	}
+	report := collector.reports[index]
+	if collector.index < len(collector.reports)-1 {
+		collector.index++
+	}
+	if report.DeviceID == "" {
+		report.DeviceID = deviceID
+	}
+	return report, nil
+}
+
+func testDeviceDataReport(collectedAt time.Time, firewallStatus string) ipc.DeviceDataReport {
+	return ipc.DeviceDataReport{
 		DeviceID:    "device-1",
 		Hostname:    "host-1",
 		OS:          "Windows",
 		CollectedAt: collectedAt,
-		Checks: []ipc.DevicePostureCheck{{
+		Checks: []ipc.DeviceDataCheck{{
 			Name:        "Firewall",
 			Status:      firewallStatus,
 			Description: "Firewall state",
@@ -394,12 +629,14 @@ func waitForEnrollmentState(t *testing.T, service *Service, expected ipc.Enrollm
 }
 
 type fakeEnrollmentClient struct {
-	start    enrollment.EnrollmentStartSessionResponse
-	statuses []enrollment.EnrollmentSessionStatusResponse
-	complete enrollment.EnrollmentCompleteSessionResponse
+	start      enrollment.EnrollmentStartSessionResponse
+	startCalls int
+	statuses   []enrollment.EnrollmentSessionStatusResponse
+	complete   enrollment.EnrollmentCompleteSessionResponse
 }
 
 func (client *fakeEnrollmentClient) StartSession(context.Context, enrollment.EnrollmentStartSessionRequest) (enrollment.EnrollmentStartSessionResponse, error) {
+	client.startCalls++
 	return client.start, nil
 }
 
@@ -451,6 +688,92 @@ func (client *fakeUserSessionClient) RevokeSession(context.Context, usersession.
 }
 
 func (client *fakeUserSessionClient) Close() error { return nil }
+
+type fakeProtectedResources struct {
+	mu      sync.Mutex
+	applied []ipc.CatalogInfo
+	cleared int
+	err     error
+}
+
+func (manager *fakeProtectedResources) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
+
+func (manager *fakeProtectedResources) ApplyCatalog(_ context.Context, catalog ipc.CatalogInfo) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.err != nil {
+		return manager.err
+	}
+	manager.applied = append(manager.applied, catalog)
+	return nil
+}
+
+func (manager *fakeProtectedResources) Clear(_ context.Context) error {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.err != nil {
+		return manager.err
+	}
+	manager.cleared++
+	return nil
+}
+
+func (manager *fakeProtectedResources) lastApplied() ipc.CatalogInfo {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.applied) == 0 {
+		return ipc.CatalogInfo{}
+	}
+	return manager.applied[len(manager.applied)-1]
+}
+
+type fakeDeviceDataSyncClient struct {
+	mu      sync.Mutex
+	reports []ipc.DeviceDataReport
+	closed  bool
+}
+
+func (client *fakeDeviceDataSyncClient) ReportDeviceData(_ context.Context, report ipc.DeviceDataReport) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.reports = append(client.reports, cloneDeviceDataReport(report))
+	return nil
+}
+
+func (client *fakeDeviceDataSyncClient) Close() error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.closed = true
+	return nil
+}
+
+func (client *fakeDeviceDataSyncClient) waitForReports(t *testing.T, count int) []ipc.DeviceDataReport {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			client.mu.Lock()
+			reports := append([]ipc.DeviceDataReport(nil), client.reports...)
+			client.mu.Unlock()
+			t.Fatalf("device data sync reports = %d, want %d: %+v", len(reports), count, reports)
+		case <-ticker.C:
+			client.mu.Lock()
+			if len(client.reports) >= count {
+				reports := make([]ipc.DeviceDataReport, len(client.reports))
+				copy(reports, client.reports)
+				client.mu.Unlock()
+				return reports
+			}
+			client.mu.Unlock()
+		}
+	}
+}
 
 type fakeDeviceIdentity struct {
 	csr enrollment.EnrollmentCSR

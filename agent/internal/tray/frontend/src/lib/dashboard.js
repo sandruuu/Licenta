@@ -15,7 +15,7 @@ export const fallbackDashboard = {
   catalog: {
     resources: [],
   },
-  posture: {
+  device_data: {
     checks: [],
   },
   reported_at: new Date().toISOString(),
@@ -63,3 +63,4 @@ export function formatStatusLabel(value) {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
 }
+

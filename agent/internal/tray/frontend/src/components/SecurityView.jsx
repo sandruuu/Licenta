@@ -64,14 +64,14 @@ const HIDDEN_CHECK_NAMES = new Set(['connectivity', 'network']);
 
 const REMEDIATIONS = {
   os: {
-    title: 'Review operating system posture',
+    title: 'Review operating system data',
     action: 'Open Windows Update',
     uri: 'ms-settings:windowsupdate',
     steps: [
       'Install the latest Windows security updates.',
       'Restart the device if Windows asks for it.',
     ],
-    why: 'Operating system posture confirms the device is supported and ready for access.',
+    why: 'Operating system device data confirms the device is supported and ready for access.',
   },
   updates: {
     title: 'Install Windows security update',
@@ -130,7 +130,7 @@ const REMEDIATIONS = {
       'Connect to a network with internet access.',
       'Restart the TRUSTAGENT service if the device stays offline.',
     ],
-    why: 'Connectivity is required so the endpoint can report posture and receive policy.',
+    why: 'Connectivity is required so the endpoint can report device data and receive policy.',
   },
 };
 
@@ -168,8 +168,8 @@ function SecurityView({ dashboard, error = '', loading = false }) {
 }
 
 function HealthHeader({ dashboard, checking }) {
-  const hostname = dashboard?.posture?.hostname || dashboard?.posture?.device_id || 'Checking device';
-  const osName = dashboard?.posture?.os || findCheck(dashboard, 'os')?.description || 'Your System';
+  const hostname = dashboard?.device_data?.hostname || dashboard?.device_data?.device_id || 'Checking device';
+  const osName = dashboard?.device_data?.os || findCheck(dashboard, 'os')?.description || 'Your System';
 
   return (
     <header className="px-5 py-4">
@@ -183,7 +183,7 @@ function HealthHeader({ dashboard, checking }) {
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-medium leading-none text-[#111820]">Your System</h1>
           <p className="mt-1 truncate text-xs font-semibold text-[#6b737a]">{hostname}</p>
-          <p className="mt-0.5 truncate text-xs text-[#6b737a]">{checking ? 'Collecting posture data' : osName}</p>
+          <p className="mt-0.5 truncate text-xs text-[#6b737a]">{checking ? 'Collecting device data' : osName}</p>
         </div>
       </div>
     </header>
@@ -284,7 +284,7 @@ function StatusIcon({ status, loading }) {
 }
 
 function HealthFooter({ dashboard, checking }) {
-  const collectedAt = dashboard?.posture?.collected_at;
+  const collectedAt = dashboard?.device_data?.collected_at;
   const footerText = checking ? 'Collecting device health data' : `Last checked ${formatDateTime(collectedAt)}`;
 
   return (
@@ -378,7 +378,7 @@ function buildHealthRows(dashboard, checking) {
     }));
   }
 
-  const checks = Array.isArray(dashboard?.posture?.checks) ? dashboard.posture.checks : [];
+  const checks = Array.isArray(dashboard?.device_data?.checks) ? dashboard.device_data.checks : [];
   if (checks.length === 0) {
     return CHECKS.map((config) => ({
       ...config,
@@ -420,7 +420,7 @@ function buildHealthRows(dashboard, checking) {
     rows.push(rowFromCheck({
       id: `extra_${index}`,
       names: [String(check?.name || '').toLowerCase()],
-      name: check?.name || 'Posture Check',
+      name: check?.name || 'Device Data Check',
       icon: HelpCircle,
     }, check));
   });
@@ -465,7 +465,7 @@ function healthTitle(id, status, check) {
   if (id === 'antivirus') {
     return status === 'good' ? 'Antivirus is enabled' : 'Antivirus needs attention';
   }
-  return description || check?.name || 'Posture check';
+  return description || check?.name || 'Device data check';
 }
 
 function healthSubtitle(id, status, check) {
@@ -491,7 +491,7 @@ function isActionable(row) {
 
 function findCheck(dashboard, id) {
   const config = CHECKS.find((item) => item.id === id);
-  const checks = Array.isArray(dashboard?.posture?.checks) ? dashboard.posture.checks : [];
+  const checks = Array.isArray(dashboard?.device_data?.checks) ? dashboard.device_data.checks : [];
   return checks.find((check) => matchesCheck(config, check?.name));
 }
 
@@ -514,12 +514,12 @@ function isHiddenCheck(name) {
 }
 
 function isPipeUnavailable(dashboard, error) {
-  const checks = Array.isArray(dashboard?.posture?.checks) ? dashboard.posture.checks : [];
+  const checks = Array.isArray(dashboard?.device_data?.checks) ? dashboard.device_data.checks : [];
   const signals = [
     error,
     dashboard?.connection?.message,
     dashboard?.connection?.service_state,
-    dashboard?.status?.device_posture_last_error,
+    dashboard?.status?.device_data_last_error,
     ...checks.map((check) => `${check?.name || ''} ${check?.description || ''} ${Object.values(check?.details || {}).join(' ')}`),
   ]
     .join(' ')
@@ -536,7 +536,7 @@ function getRemediation(row) {
     title: `Resolve ${row.name}`,
     action: 'Review settings',
     steps: ['Review the reported status and apply the required organization policy.'],
-    why: 'This posture check must be healthy before the device can be considered compliant.',
+    why: 'This device data check must be healthy before the device can be considered compliant.',
   };
 }
 
@@ -557,3 +557,4 @@ function openRemediationUri(uri) {
 }
 
 export default SecurityView;
+

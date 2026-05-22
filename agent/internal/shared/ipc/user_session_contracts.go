@@ -42,6 +42,7 @@ type UserSessionInfo struct {
 
 type CatalogInfo struct {
 	Version     string            `json:"version,omitempty"`
+	DNSSuffixes []string          `json:"dns_suffixes,omitempty"`
 	Resources   []CatalogResource `json:"resources,omitempty"`
 	TTLSeconds  int               `json:"ttl_seconds,omitempty"`
 	PolicyEpoch string            `json:"policy_epoch,omitempty"`

@@ -3,16 +3,15 @@ package dnscontrol
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"sort"
 	"strings"
 )
 
 type Config struct {
-	DNSSuffixes []string
-	DNSServer   string
-	HardenDoH   bool
+	DNSNames  []string
+	DNSServer string
+	HardenDoH bool
 }
 
 type Manager struct{}
@@ -33,38 +32,38 @@ func (manager *Manager) Apply(ctx context.Context, config Config) error {
 		return ctx.Err()
 	default:
 	}
-	config.DNSSuffixes = NormalizeSuffixes(config.DNSSuffixes)
+	config.DNSNames = NormalizeDNSNames(config.DNSNames)
 	config.DNSServer = normalizeDNSServer(config.DNSServer)
-	if len(config.DNSSuffixes) > 0 && config.DNSServer == "" {
-		return errors.New("dns server is required when NRPT suffixes are configured")
+	if len(config.DNSNames) > 0 && config.DNSServer == "" {
+		return errors.New("dns server is required when NRPT names are configured")
 	}
 	return applyPlatform(ctx, config)
 }
 
-func NormalizeSuffixes(values []string) []string {
+func NormalizeDNSNames(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		suffix := normalizeSuffix(value)
-		if suffix != "" {
-			seen[suffix] = struct{}{}
+		name := normalizeDNSName(value)
+		if name != "" {
+			seen[name] = struct{}{}
 		}
 	}
-	suffixes := make([]string, 0, len(seen))
-	for suffix := range seen {
-		suffixes = append(suffixes, suffix)
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
 	}
-	sort.Strings(suffixes)
-	return suffixes
+	sort.Strings(names)
+	return names
 }
 
-func RuleKey(suffix string) string {
-	suffix = normalizeSuffix(suffix)
-	if suffix == "" {
+func RuleKey(name string) string {
+	name = normalizeDNSName(name)
+	if name == "" {
 		return ""
 	}
 	var builder strings.Builder
-	builder.WriteString("ZTNA-")
-	for _, r := range suffix {
+	builder.WriteString("TRUSTAGENT-")
+	for _, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z':
 			builder.WriteRune(r)
@@ -79,13 +78,19 @@ func RuleKey(suffix string) string {
 	return builder.String()
 }
 
-func normalizeSuffix(value string) string {
+func normalizeDNSName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.TrimPrefix(value, "*.")
-	value = strings.TrimPrefix(value, ".")
 	value = strings.TrimSuffix(value, ".")
-	if value == "" || !strings.Contains(value, ".") || strings.ContainsAny(value, " /\\:\x00") {
+	if strings.HasPrefix(value, ".") || strings.HasPrefix(value, "*.") {
 		return ""
+	}
+	if value == "" || !strings.Contains(value, ".") || strings.ContainsAny(value, " /\\:\x00") || net.ParseIP(value) != nil {
+		return ""
+	}
+	for _, label := range strings.Split(value, ".") {
+		if label == "" || strings.Contains(label, "*") {
+			return ""
+		}
 	}
 	return value
 }
@@ -104,10 +109,10 @@ func normalizeDNSServer(value string) string {
 	return ""
 }
 
-func nrptNameValue(suffix string) string {
-	suffix = normalizeSuffix(suffix)
-	if suffix == "" {
+func nrptNameValue(name string) string {
+	name = normalizeDNSName(name)
+	if name == "" {
 		return ""
 	}
-	return fmt.Sprintf(".%s", suffix)
+	return name
 }

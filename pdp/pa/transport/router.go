@@ -234,10 +234,8 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/policies/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyByID)))
 	s.mux.Handle("/api/admin/policy-assignments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignments)))
 	s.mux.Handle("/api/admin/policy-assignments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicyAssignmentByID)))
-	s.mux.Handle("/api/admin/device-health", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceHealth)))
-	s.mux.Handle("/api/admin/device-health/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceHealthByID)))
-	s.mux.Handle("/api/admin/device-posture", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDevicePosture)))
-	s.mux.Handle("/api/admin/device-posture/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDevicePostureByID)))
+	s.mux.Handle("/api/admin/device-data", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceData)))
+	s.mux.Handle("/api/admin/device-data/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceDataByID)))
 	s.mux.Handle("/api/admin/dashboard", s.adminAuthMiddleware(http.HandlerFunc(s.handleDashboardStats)))
 
 	// ─────────────────────────────────────────────

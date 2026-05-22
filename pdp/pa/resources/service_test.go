@@ -27,6 +27,10 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 		Type:      "ssh",
 		Host:      "ssh.internal.test",
 		Port:      22,
+		AllowedRoles: []string{
+			"admin",
+		},
+		RequireMFA: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
@@ -40,12 +44,24 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 	if !resource.Enabled {
 		t.Fatalf("resource should be enabled by default: %+v", resource)
 	}
+	if len(resource.AllowedRoles) != 0 {
+		t.Fatalf("resource creation should not persist allowed_roles: %+v", resource.AllowedRoles)
+	}
+	if resource.RequireMFA {
+		t.Fatalf("resource creation should not persist require_mfa")
+	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "created" || publisher.events[0].fields["resource_id"] != resource.ID {
 		t.Fatalf("resource created event mismatch: %+v", publisher.events)
 	}
 	saved, found := dataStore.GetResource(resource.ID)
 	if !found || saved.Name != resource.Name || saved.ClientID != "" || saved.ClientSecret != "" {
 		t.Fatalf("resource was not persisted correctly: found=%v saved=%+v", found, saved)
+	}
+	if len(saved.AllowedRoles) != 0 {
+		t.Fatalf("saved resource should not contain allowed_roles: %+v", saved.AllowedRoles)
+	}
+	if saved.RequireMFA {
+		t.Fatalf("saved resource should not contain require_mfa")
 	}
 }
 
@@ -117,8 +133,11 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateResource returned error: %v", err)
 	}
-	if updated.Name != "New" || updated.Port != 2222 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" || !updated.RequireMFA {
+	if updated.Name != "New" || updated.Port != 2222 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" {
 		t.Fatalf("resource fields not patched correctly: %+v", updated)
+	}
+	if len(updated.AllowedRoles) != 0 || updated.RequireMFA {
+		t.Fatalf("legacy access fields should be ignored: %+v", updated)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "updated" {
 		t.Fatalf("resource updated event mismatch: %+v", publisher.events)

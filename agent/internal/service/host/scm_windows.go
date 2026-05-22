@@ -1,6 +1,6 @@
 //go:build windows
 
-package service
+package host
 
 import (
 	"context"
@@ -8,12 +8,6 @@ import (
 
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
-)
-
-const (
-	ServiceName        = "TrustAgent"
-	ServiceDisplayName = "TrustAgent"
-	ServiceDescription = "Privileged TrustAgent endpoint service."
 )
 
 const (

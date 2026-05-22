@@ -19,23 +19,23 @@ func TestPingRequestRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDevicePostureReportRoundTrip(t *testing.T) {
+func TestDeviceDataReportRoundTrip(t *testing.T) {
 	collectedAt := time.Now().UTC()
-	request, err := NewRequest("req-1", OperationGetDevicePosture, DevicePostureRequest{})
+	request, err := NewRequest("req-1", OperationGetDeviceData, DeviceDataRequest{})
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
 	}
-	if request.Operation != OperationGetDevicePosture {
+	if request.Operation != OperationGetDeviceData {
 		t.Fatalf("operation = %q", request.Operation)
 	}
-	response, err := NewResponse("req-1", DevicePostureReport{
+	response, err := NewResponse("req-1", DeviceDataReport{
 		DeviceID:    "device-1",
 		Hostname:    "host-1",
 		OS:          "Windows",
 		CollectedAt: collectedAt,
-		Checks: []DevicePostureCheck{{
+		Checks: []DeviceDataCheck{{
 			Name:        "Firewall",
-			Status:      DevicePostureStatusCritical,
+			Status:      DeviceDataStatusCritical,
 			Description: "Firewall is disabled",
 			Details:     map[string]string{"Public Profile": "OFF"},
 		}},
@@ -43,11 +43,11 @@ func TestDevicePostureReportRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewResponse returned error: %v", err)
 	}
-	var report DevicePostureReport
+	var report DeviceDataReport
 	if err := DecodeBody(response.Body, &report); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if report.DeviceID != "device-1" || len(report.Checks) != 1 || report.Checks[0].Status != DevicePostureStatusCritical {
+	if report.DeviceID != "device-1" || len(report.Checks) != 1 || report.Checks[0].Status != DeviceDataStatusCritical {
 		t.Fatalf("report = %+v", report)
 	}
 }
@@ -58,9 +58,9 @@ func TestAgentDashboardRoundTrip(t *testing.T) {
 		Connection: DashboardConnection{State: "connected", ServiceState: "running"},
 		Status:     AgentStatus{ServiceState: "running", EnrollmentState: EnrollmentStateUnenrolled, ReportedAt: reportedAt},
 		Enrollment: EnrollmentInfo{State: EnrollmentStateUnenrolled},
-		Posture: DevicePostureReport{DeviceID: "device-1", Checks: []DevicePostureCheck{{
+		DeviceData: DeviceDataReport{DeviceID: "device-1", Checks: []DeviceDataCheck{{
 			Name:        "Firewall",
-			Status:      DevicePostureStatusGood,
+			Status:      DeviceDataStatusGood,
 			Description: "All firewall profiles are active",
 		}}},
 		ReportedAt: reportedAt,
@@ -72,7 +72,7 @@ func TestAgentDashboardRoundTrip(t *testing.T) {
 	if err := DecodeBody(response.Body, &dashboard); err != nil {
 		t.Fatalf("DecodeBody returned error: %v", err)
 	}
-	if dashboard.Connection.State != "connected" || dashboard.Enrollment.State != EnrollmentStateUnenrolled || len(dashboard.Posture.Checks) != 1 {
+	if dashboard.Connection.State != "connected" || dashboard.Enrollment.State != EnrollmentStateUnenrolled || len(dashboard.DeviceData.Checks) != 1 {
 		t.Fatalf("dashboard = %+v", dashboard)
 	}
 }

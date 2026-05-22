@@ -54,9 +54,12 @@ func (s *Server) deviceCatalogSnapshot(claims *auth.CustomClaims) catalog.Snapsh
 	if tenant, found := s.pa.Store.GetTenant(user.TenantID); !found || tenant == nil || !tenant.Enabled {
 		return catalog.EmptySnapshot()
 	}
-	role := claims.Role
-	if strings.TrimSpace(user.Role) != "" {
-		role = user.Role
+	if strings.TrimSpace(user.Role) == "" {
+		user.Role = claims.Role
 	}
-	return s.pa.Catalog.BuildForTenantRole(user.TenantID, role)
+	directory := s.pa.DirectoryContextForUser(user)
+	if directory.Found && !directory.Active {
+		return catalog.EmptySnapshot()
+	}
+	return s.pa.Catalog.BuildForTenantUser(user.TenantID, user, directory.GroupIDs, directory.GroupNames)
 }

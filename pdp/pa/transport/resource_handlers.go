@@ -117,46 +117,7 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 	}
 }
 
-func (s *Server) handleAdminDeviceHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	reports := s.pa.Store.ListDeviceHealth()
-	if reports == nil {
-		reports = []*models.DeviceHealthReport{}
-	}
-	// Show newest reports first to make recent device activity visible in dashboard.
-	sort.SliceStable(reports, func(i, j int) bool {
-		return reports[i].ReportedAt.After(reports[j].ReportedAt)
-	})
-
-	writeJSON(w, http.StatusOK, reports)
-}
-
-func (s *Server) handleAdminDeviceHealthByID(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	deviceID := strings.TrimPrefix(r.URL.Path, "/api/admin/device-health/")
-	if deviceID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device ID required"})
-		return
-	}
-
-	report, ok := s.pa.Store.GetDeviceHealth(deviceID)
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, report)
-}
-
-func (s *Server) handleAdminDevicePosture(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminDeviceData(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
@@ -173,13 +134,13 @@ func (s *Server) handleAdminDevicePosture(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, reports)
 }
 
-func (s *Server) handleAdminDevicePostureByID(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
-	deviceID := strings.TrimPrefix(r.URL.Path, "/api/admin/device-posture/")
+	deviceID := strings.TrimPrefix(r.URL.Path, "/api/admin/device-data/")
 	if deviceID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "device ID required"})
 		return
@@ -223,12 +184,12 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	healthCount := 0
+	postureCount := 0
 	healthyDevices := 0
-	allDeviceHealth := s.pa.Store.ListDeviceHealth()
-	for _, dh := range allDeviceHealth {
-		healthCount++
-		if dh.OverallScore >= 70 {
+	allDevicePosture := s.pa.Store.ListDevicePosture()
+	for _, posture := range allDevicePosture {
+		postureCount++
+		if postureIsHealthy(posture) {
 			healthyDevices++
 		}
 	}
@@ -239,10 +200,25 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		TotalResources: len(resources),
 		RecentDenials:  recentDenials,
 		HealthyDevices: healthyDevices,
-		TotalDevices:   healthCount,
+		TotalDevices:   postureCount,
 	}
 
 	writeJSON(w, http.StatusOK, stats)
+}
+
+func postureIsHealthy(report *models.DevicePostureReport) bool {
+	if report == nil || len(report.Checks) == 0 {
+		return false
+	}
+	for _, check := range report.Checks {
+		switch strings.ToLower(strings.TrimSpace(check.Status)) {
+		case "good":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ─────────────────────────────────────────────

@@ -26,6 +26,8 @@ func (service *Service) Run(ctx context.Context) error {
 	go func() {
 		serverDone <- ipc.Serve(ctx, listener, service)
 	}()
+	go service.runProtectedResources(ctx)
+	go service.runDeviceDataSync(ctx)
 	service.logger.Info("TrustAgent service running", "pipe", ipc.PipePath(), "protocol", ipc.ProtocolVersion)
 	service.transition(StateRunning)
 
@@ -42,4 +44,20 @@ func (service *Service) Run(ctx context.Context) error {
 	}
 	service.transition(StateStopped)
 	return nil
+}
+
+func (service *Service) runProtectedResources(ctx context.Context) {
+	if service == nil || service.protectedResources == nil {
+		return
+	}
+	if err := service.protectedResources.Run(ctx); err != nil && ctx.Err() == nil {
+		service.logger.Warn("protected resources manager stopped", "error", err)
+	}
+}
+
+func (service *Service) runDeviceDataSync(ctx context.Context) {
+	if service == nil || service.deviceDataSync == nil {
+		return
+	}
+	service.deviceDataSync.Run(ctx)
 }

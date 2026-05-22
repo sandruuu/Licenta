@@ -83,7 +83,7 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		LocalUserSIDHash:      localUserSIDHash,
 		WindowsLogonSessionID: windowsLogonSessionID,
 		WindowsSessionID:      windowsSessionID,
-		PostureRevision:       strings.TrimSpace(structFieldString(request, "posture_revision")),
+		PostureRevision:       firstNonEmptyAgentSession(structFieldString(request, "device_data_revision"), structFieldString(request, "posture_revision")),
 		ClaimSecretHash:       hashSessionSecret(claimSecret),
 		AuthURL:               service.server.publicOrigin() + "/browser/session/" + sessionID,
 		Status:                agentSessionStatusWaitingForUserLogin,

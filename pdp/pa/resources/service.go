@@ -77,6 +77,8 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	resource.Enabled = true
 	resource.ClientID = ""
 	resource.ClientSecret = ""
+	resource.AllowedRoles = nil
+	resource.RequireMFA = false
 
 	service.store.SaveResource(&resource)
 	service.publishResourceEvent(resource.ID, "created", "resource_created")
@@ -105,8 +107,6 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyBoolField(fields, "enabled", &updated.Enabled)
 	applyStringSliceField(fields, "tags", &updated.Tags)
 	applyStringMapField(fields, "metadata", &updated.Metadata)
-	applyStringSliceField(fields, "allowed_roles", &updated.AllowedRoles)
-	applyBoolField(fields, "require_mfa", &updated.RequireMFA)
 	applyStringField(fields, "tenant_id", &updated.TenantID)
 	applyStringField(fields, "gateway_id", &updated.GatewayID)
 

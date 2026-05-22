@@ -18,17 +18,16 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	server, gatewayCert := newGatewayControlTestServer(t, "gw-1", "gateway.example.test")
 	store := server.pa.Store
 	store.SaveResource(&models.Resource{
-		ID:           "res-ssh",
-		TenantID:     transportTestTenantID,
-		GatewayID:    "gw-1",
-		Name:         "SSH Server",
-		Type:         "ssh",
-		Host:         "10.10.0.10",
-		Port:         22,
-		Enabled:      true,
-		AllowedRoles: []string{"admin"},
-		CreatedAt:    time.Now().Add(-time.Hour),
-		UpdatedAt:    time.Now().Add(-time.Hour),
+		ID:        "res-ssh",
+		TenantID:  transportTestTenantID,
+		GatewayID: "gw-1",
+		Name:      "SSH Server",
+		Type:      "ssh",
+		Host:      "10.10.0.10",
+		Port:      22,
+		Enabled:   true,
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now().Add(-time.Hour),
 	})
 	deviceCertPEM, deviceCert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	enrollment := &models.DeviceEnrollment{

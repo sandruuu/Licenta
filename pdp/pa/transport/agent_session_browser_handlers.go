@@ -48,6 +48,10 @@ func (s *Server) renderBrowserAgentSessionState(w http.ResponseWriter, r *http.R
 			renderEnrollmentPage(w, "Sign in", "Enter your organization email address.", "", true)
 			return
 		}
+		if idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID); ok && idpCfg != nil && idpCfg.Enabled {
+			s.redirectAgentSessionToIDP(w, r, session, idpCfg)
+			return
+		}
 		renderEnrollmentPage(w, "Continue in browser", "Authentication is in progress. Complete login with your identity provider.", "", false)
 	case agentSessionStatusReadyToClaim, agentSessionStatusClaimed:
 		renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)

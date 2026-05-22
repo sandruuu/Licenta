@@ -17,7 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestDeviceTelemetryGRPCReportPostureStoresRawData(t *testing.T) {
+func TestDeviceTelemetryGRPCReportDeviceDataStoresRawData(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
@@ -51,11 +51,11 @@ func TestDeviceTelemetryGRPCReportPostureStoresRawData(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceTelemetryGRPCService{server: server}
-	response, err := server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportPosturePath}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return service.ReportPosture(ctx, req.(*structpb.Struct))
+	response, err := server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if err != nil {
-		t.Fatalf("ReportPosture returned error: %v", err)
+		t.Fatalf("ReportDeviceData returned error: %v", err)
 	}
 	responseStruct, ok := response.(*structpb.Struct)
 	if !ok {
@@ -78,7 +78,7 @@ func TestDeviceTelemetryGRPCReportPostureStoresRawData(t *testing.T) {
 	}
 }
 
-func TestDeviceTelemetryGRPCReportPostureRejectsLocalScore(t *testing.T) {
+func TestDeviceTelemetryGRPCReportDeviceDataRejectsLocalScore(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
@@ -105,8 +105,8 @@ func TestDeviceTelemetryGRPCReportPostureRejectsLocalScore(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceTelemetryGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportPosturePath}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return service.ReportPosture(ctx, req.(*structpb.Struct))
+	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("status code = %s, want %s (err=%v)", status.Code(err), codes.InvalidArgument, err)
@@ -116,7 +116,7 @@ func TestDeviceTelemetryGRPCReportPostureRejectsLocalScore(t *testing.T) {
 	}
 }
 
-func TestDeviceTelemetryGRPCReportPostureRejectsDeviceMismatch(t *testing.T) {
+func TestDeviceTelemetryGRPCReportDeviceDataRejectsDeviceMismatch(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
@@ -142,8 +142,8 @@ func TestDeviceTelemetryGRPCReportPostureRejectsDeviceMismatch(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceTelemetryGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportPosturePath}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return service.ReportPosture(ctx, req.(*structpb.Struct))
+	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceTelemetryGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("status code = %s, want %s (err=%v)", status.Code(err), codes.PermissionDenied, err)

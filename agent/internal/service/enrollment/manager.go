@@ -22,6 +22,7 @@ type Manager struct {
 	deviceIdentity   DeviceIdentity
 	store            Store
 	clock            func() time.Time
+	onEnrolled       func()
 	enrollment       RuntimeState
 	enrollmentCancel context.CancelFunc
 }
@@ -36,6 +37,7 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 		deviceIdentity: dependencies.DeviceIdentity,
 		store:          dependencies.Store,
 		clock:          dependencies.Clock,
+		onEnrolled:     dependencies.OnEnrolled,
 		enrollment:     RuntimeState{State: ipc.EnrollmentStateUnenrolled},
 	}
 }
@@ -87,21 +89,35 @@ func (manager *Manager) Record(ctx context.Context) (EnrollmentRecord, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	record, err := manager.store.Load(ctx)
+	record, usable, reason, err := manager.usableEnrollmentRecord(ctx)
 	if err != nil {
 		return EnrollmentRecord{}, err
 	}
-	if record.EnrollmentState != ipc.EnrollmentStateEnrolled {
+	if !usable {
+		if strings.TrimSpace(reason) != "" {
+			return EnrollmentRecord{}, fmt.Errorf("device enrollment is not usable: %s", strings.TrimSpace(reason))
+		}
 		return EnrollmentRecord{}, fmt.Errorf("device is not enrolled")
+	}
+	return record, nil
+}
+
+func (manager *Manager) usableEnrollmentRecord(ctx context.Context) (EnrollmentRecord, bool, string, error) {
+	record, err := manager.store.Load(ctx)
+	if err != nil {
+		return EnrollmentRecord{}, false, "", err
+	}
+	if record.EnrollmentState != ipc.EnrollmentStateEnrolled {
+		return record, false, "", nil
 	}
 	check, err := manager.deviceIdentity.CheckLocalEnrollment(ctx, record)
 	if err != nil {
-		return EnrollmentRecord{}, err
+		return record, false, err.Error(), nil
 	}
 	if !check.Enrolled {
-		return EnrollmentRecord{}, fmt.Errorf("device enrollment is not usable: %s", strings.TrimSpace(check.Reason))
+		return record, false, strings.TrimSpace(check.Reason), nil
 	}
-	return record, nil
+	return record, true, "", nil
 }
 
 func (manager *Manager) ensureEnrollmentClient(ctx context.Context) (Client, error) {
@@ -147,6 +163,19 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 		return response, "", nil
 	}
 	manager.mu.Unlock()
+
+	if record, usable, _, err := manager.usableEnrollmentRecord(ctx); err != nil {
+		manager.setEnrollmentFailure(err)
+		return ipc.StartEnrollmentInteractiveResponse{}, ipc.ErrorCodeInternal, err
+	} else if usable {
+		manager.setEnrollmentEnrolled(record)
+		return ipc.StartEnrollmentInteractiveResponse{
+			Started:    false,
+			State:      ipc.EnrollmentStateEnrolled,
+			Message:    "Device is already enrolled",
+			ReportedAt: now,
+		}, "", nil
+	}
 
 	client, err := manager.ensureEnrollmentClient(ctx)
 	if err != nil {
@@ -426,6 +455,7 @@ func (manager *Manager) setEnrollmentEnrolled(record EnrollmentRecord) {
 		manager.enrollmentCancel = nil
 	}
 	manager.mu.Unlock()
+	manager.notifyEnrolled()
 }
 
 func (manager *Manager) Refresh(ctx context.Context) {
@@ -449,12 +479,19 @@ func (manager *Manager) Refresh(ctx context.Context) {
 		return
 	}
 	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled", "")
+	manager.notifyEnrolled()
 }
 
 func (manager *Manager) setEnrollmentRuntime(state ipc.EnrollmentState, deviceID, message, lastError string) {
 	manager.mu.Lock()
 	manager.enrollment = RuntimeState{State: state, DeviceID: strings.TrimSpace(deviceID), Message: strings.TrimSpace(message), LastError: strings.TrimSpace(lastError)}
 	manager.mu.Unlock()
+}
+
+func (manager *Manager) notifyEnrolled() {
+	if manager != nil && manager.onEnrolled != nil {
+		manager.onEnrolled()
+	}
 }
 
 func randomURLToken(length int) (string, error) {
@@ -473,3 +510,4 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+

@@ -7,18 +7,58 @@ import (
 	"pdp/pe/evaluation"
 )
 
+type DirectoryUserContext struct {
+	Found      bool
+	Active     bool
+	UserID     string
+	UserName   string
+	Email      string
+	GroupIDs   []string
+	GroupNames []string
+}
+
+func (pa *PolicyAdministrator) DirectoryContextForUser(user *models.User) DirectoryUserContext {
+	result := DirectoryUserContext{Active: true}
+	if pa == nil || pa.Store == nil || user == nil {
+		return result
+	}
+
+	result.Email = strings.TrimSpace(user.Email)
+	dirUser, ok := pa.resolveDirectoryUser(user)
+	if !ok || dirUser == nil {
+		return result
+	}
+
+	result.Found = true
+	result.Active = dirUser.Active
+	result.UserID = dirUser.ID
+	result.UserName = dirUser.UserName
+	result.Email = firstNonEmptyString(result.Email, dirUser.Email)
+	if !dirUser.Active {
+		return result
+	}
+
+	for _, group := range pa.Store.ListDirectoryGroupsForUser(dirUser.TenantID, dirUser.IdPID, dirUser.ID) {
+		if group == nil {
+			continue
+		}
+		result.GroupIDs = appendUnique(result.GroupIDs, group.ID, group.ExternalID)
+		result.GroupNames = appendUnique(result.GroupNames, group.DisplayName)
+	}
+	return result
+}
+
 func (pa *PolicyAdministrator) populateDirectoryContext(ctx *evaluation.AccessContext, user *models.User) *models.AccessDecision {
 	if pa == nil || pa.Store == nil || ctx == nil || user == nil {
 		return nil
 	}
 
-	ctx.UserEmail = strings.TrimSpace(user.Email)
-
-	dirUser, ok := pa.resolveDirectoryUser(user)
-	if !ok || dirUser == nil {
+	directory := pa.DirectoryContextForUser(user)
+	ctx.UserEmail = directory.Email
+	if !directory.Found {
 		return nil
 	}
-	if !dirUser.Active {
+	if !directory.Active {
 		return &models.AccessDecision{
 			Decision:  "deny",
 			Reason:    "directory user is disabled",
@@ -26,17 +66,10 @@ func (pa *PolicyAdministrator) populateDirectoryContext(ctx *evaluation.AccessCo
 		}
 	}
 
-	ctx.DirectoryUserID = dirUser.ID
-	ctx.DirectoryUserName = dirUser.UserName
-	ctx.UserEmail = firstNonEmptyString(ctx.UserEmail, dirUser.Email)
-
-	for _, group := range pa.Store.ListDirectoryGroupsForUser(dirUser.TenantID, dirUser.IdPID, dirUser.ID) {
-		if group == nil {
-			continue
-		}
-		ctx.DirectoryGroupIDs = appendUnique(ctx.DirectoryGroupIDs, group.ID, group.ExternalID)
-		ctx.DirectoryGroupNames = appendUnique(ctx.DirectoryGroupNames, group.DisplayName)
-	}
+	ctx.DirectoryUserID = directory.UserID
+	ctx.DirectoryUserName = directory.UserName
+	ctx.DirectoryGroupIDs = appendUnique(ctx.DirectoryGroupIDs, directory.GroupIDs...)
+	ctx.DirectoryGroupNames = appendUnique(ctx.DirectoryGroupNames, directory.GroupNames...)
 	return nil
 }
 

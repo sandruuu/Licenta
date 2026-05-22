@@ -1,10 +1,9 @@
 package enrollment
 
 import (
-	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -460,11 +459,10 @@ func verifyEnrollmentProof(csr *x509.CertificateRequest, payload, signature []by
 	}
 	digest := sha256.Sum256(payload)
 	switch publicKey := csr.PublicKey.(type) {
-	case *rsa.PublicKey:
-		if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
-			return fmt.Errorf("%w: proof signature is invalid", ErrForbidden)
-		}
 	case *ecdsa.PublicKey:
+		if publicKey.Curve != elliptic.P256() {
+			return fmt.Errorf("%w: CSR public key must be ECDSA P-256", ErrInvalidCSR)
+		}
 		if !ecdsa.VerifyASN1(publicKey, digest[:], signature) {
 			return fmt.Errorf("%w: proof signature is invalid", ErrForbidden)
 		}

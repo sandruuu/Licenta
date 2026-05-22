@@ -21,10 +21,10 @@ import (
 )
 
 const (
-	deviceCatalogGetCatalogPath             = "/ztna.catalog.v1.DeviceCatalogService/GetCatalog"
-	deviceTelemetryReportPosturePath        = "/ztna.device.v1.DeviceTelemetryService/ReportPosture"
-	deviceTelemetryHeartbeatPath            = "/ztna.device.v1.DeviceTelemetryService/Heartbeat"
-	agentAuthorizationAuthorizeResourcePath = "/ztna.agent.v1.AgentAuthorizationService/AuthorizeResource"
+	deviceCatalogGetCatalogPath             = "/ztna.catalog.DeviceCatalogService/GetCatalog"
+	deviceTelemetryReportPosturePath        = "/trustagent.device.DeviceDataService/ReportDeviceData"
+	deviceTelemetryHeartbeatPath            = "/trustagent.device.DeviceDataService/Heartbeat"
+	agentAuthorizationAuthorizeResourcePath = "/ztna.agent.AgentAuthorizationService/AuthorizeResource"
 )
 
 type CertificateProvider func(context.Context) (tls.Certificate, error)

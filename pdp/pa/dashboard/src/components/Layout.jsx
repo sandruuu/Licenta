@@ -32,7 +32,7 @@ const navSections = [
   {
     items: [
       { to: '/dashboard/sessions', icon: Radio, label: 'Sessions' },
-      { to: '/dashboard/device-health', icon: Activity, label: 'Device Health' },
+      { to: '/dashboard/device-health', icon: Activity, label: 'Devices' },
       { to: '/dashboard/audit', icon: FileText, label: 'Audit Log' },
     ],
   },

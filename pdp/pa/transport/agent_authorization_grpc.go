@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	agentAuthorizationGRPCServiceName   = "ztna.agent.v1.AgentAuthorizationService"
-	agentAuthorizationGRPCAuthorizePath = "/ztna.agent.v1.AgentAuthorizationService/AuthorizeResource"
+	agentAuthorizationGRPCServiceName   = "ztna.agent.AgentAuthorizationService"
+	agentAuthorizationGRPCAuthorizePath = "/" + agentAuthorizationGRPCServiceName + "/AuthorizeResource"
 )
 
 type agentAuthorizationGRPCServer interface {

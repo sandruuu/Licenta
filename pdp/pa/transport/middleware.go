@@ -60,7 +60,6 @@ func securityHeadersMiddleware(deviceHealthAgentURL string) func(http.Handler) h
 	if trimmed := strings.TrimSpace(deviceHealthAgentURL); trimmed != "" {
 		connectSrc += " " + trimmed
 	}
-	csp := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,11 +67,19 @@ func securityHeadersMiddleware(deviceHealthAgentURL string) func(http.Handler) h
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-			w.Header().Set("Content-Security-Policy", csp)
+			w.Header().Set("Content-Security-Policy", contentSecurityPolicy(r, connectSrc))
 			w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func contentSecurityPolicy(r *http.Request, connectSrc string) string {
+	policy := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'"
+	if r == nil || (!strings.HasPrefix(r.URL.Path, "/browser/enroll/") && !strings.HasPrefix(r.URL.Path, "/browser/session/")) {
+		policy += "; form-action 'self'"
+	}
+	return policy
 }
 
 // corsMiddleware adds CORS headers for web-based admin UI

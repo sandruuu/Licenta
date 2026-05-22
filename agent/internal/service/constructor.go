@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 	"time"
 
+	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
@@ -37,6 +39,12 @@ func normalizeConfig(config Config) Config {
 	if config.LoginPollInterval <= 0 {
 		config.LoginPollInterval = defaultLoginPollInterval
 	}
+	if config.DeviceDataSyncInterval <= 0 {
+		config.DeviceDataSyncInterval = defaultDeviceDataSyncInterval
+	}
+	if config.DeviceDataSyncChangeScanInterval <= 0 {
+		config.DeviceDataSyncChangeScanInterval = defaultDeviceDataSyncChangeScanInterval
+	}
 	return config
 }
 
@@ -60,20 +68,26 @@ func dependenciesWithDefaults(dependencies Dependencies) Dependencies {
 }
 
 func newBaseService(config Config, dependencies Dependencies) *Service {
-	postureStatus := statusDisabled
-	if dependencies.PostureCollector != nil {
-		postureStatus = postureStatusUnknown
+	deviceDataStatus := statusDisabled
+	if dependencies.DeviceDataCollector != nil {
+		deviceDataStatus = deviceDataStatusUnknown
 	}
 	deviceIdentity := dependencies.DeviceIdentity
 	if deviceIdentity == nil {
 		deviceIdentity = enrollment.NewDefaultDeviceIdentity()
 	}
+	var deviceDataSync *devicedatasync.Runner
 	enrollmentManager := enrollment.NewManager(enrollmentConfig(config), enrollment.Dependencies{
 		Logger:         dependencies.Logger,
 		Client:         dependencies.EnrollmentClient,
 		DeviceIdentity: deviceIdentity,
 		Store:          dependencies.EnrollmentStore,
 		Clock:          dependencies.Clock,
+		OnEnrolled: func() {
+			if deviceDataSync != nil {
+				deviceDataSync.Trigger("enrollment")
+			}
+		},
 	})
 	var service *Service
 	userSessionManager := usersession.NewManager(userSessionConfig(config), usersession.Dependencies{
@@ -81,31 +95,68 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		Client:         dependencies.UserSessionClient,
 		Enrollment:     enrollmentManager,
 		DeviceIdentity: deviceIdentity,
-		PostureSnapshot: func() ipc.DevicePostureReport {
+		DeviceDataSnapshot: func() ipc.DeviceDataReport {
 			if service == nil {
-				return ipc.DevicePostureReport{}
+				return ipc.DeviceDataReport{}
 			}
-			return service.cachedPostureReport()
+			return service.cachedDeviceDataReport()
+		},
+		OnCatalog: func(ctx context.Context, _ ipc.PeerIdentity, catalog ipc.CatalogInfo) error {
+			if service == nil || service.protectedResources == nil {
+				return nil
+			}
+			return service.protectedResources.ApplyCatalog(ctx, catalog)
+		},
+		OnLogout: func(ctx context.Context, _ ipc.PeerIdentity) error {
+			if service == nil || service.protectedResources == nil {
+				return nil
+			}
+			return service.protectedResources.Clear(ctx)
 		},
 		Clock: dependencies.Clock,
 	})
+	var syncCollector devicedatasync.Collector
+	if dependencies.DeviceDataCollector != nil {
+		syncCollector = deviceDataSyncCollector(&service)
+	}
+	deviceDataSync = devicedatasync.NewRunner(deviceDataSyncConfig(config), devicedatasync.Dependencies{
+		Logger:         dependencies.Logger,
+		Collector:      syncCollector,
+		Watcher:        dependencies.DeviceDataWatcher,
+		Enrollment:     enrollmentManager,
+		DeviceIdentity: deviceIdentity,
+		ClientFactory:  dependencies.DeviceDataSyncClientFactory,
+		Clock:          dependencies.Clock,
+	})
 	service = &Service{
-		logger:           dependencies.Logger,
-		state:            StateStopped,
-		listenerFactory:  dependencies.ListenerFactory,
-		postureCollector: postureCollectorFromDependencies(dependencies),
-		enrollment:       enrollmentManager,
-		userSessions:     userSessionManager,
-		clock:            dependencies.Clock,
-		posture:          devicePostureState{Status: postureStatus},
-		config:           config,
+		logger:              dependencies.Logger,
+		state:               StateStopped,
+		listenerFactory:     dependencies.ListenerFactory,
+		deviceDataCollector: deviceDataCollectorFromDependencies(dependencies),
+		enrollment:          enrollmentManager,
+		userSessions:        userSessionManager,
+		protectedResources:  dependencies.ProtectedResources,
+		deviceIdentity:      deviceIdentity,
+		deviceDataSync:      deviceDataSync,
+		clock:               dependencies.Clock,
+		deviceData:          deviceDataState{Status: deviceDataStatus},
+		config:              config,
 	}
 	return service
 }
 
-func postureCollectorFromDependencies(dependencies Dependencies) DevicePostureCollector {
-	if dependencies.PostureCollector != nil {
-		return dependencies.PostureCollector
+func deviceDataSyncCollector(service **Service) devicedatasync.Collector {
+	return devicedatasync.CollectorFunc(func(ctx context.Context, deviceID string) (ipc.DeviceDataReport, error) {
+		if service == nil || *service == nil {
+			return ipc.DeviceDataReport{}, context.Canceled
+		}
+		return (*service).collectDeviceData(ctx, deviceID)
+	})
+}
+
+func deviceDataCollectorFromDependencies(dependencies Dependencies) DeviceDataCollector {
+	if dependencies.DeviceDataCollector != nil {
+		return dependencies.DeviceDataCollector
 	}
 	return nil
 }
@@ -129,5 +180,17 @@ func userSessionConfig(config Config) usersession.Config {
 		PDPCAFile:         config.PDPCAFile,
 		LoginTimeout:      config.LoginTimeout,
 		LoginPollInterval: config.LoginPollInterval,
+	}
+}
+
+func deviceDataSyncConfig(config Config) devicedatasync.Config {
+	return devicedatasync.Config{
+		Client: devicedatasync.ClientConfig{
+			PDPGRPCEndpoint:  config.PDPGRPCEndpoint,
+			PDPTLSServerName: config.PDPTLSServerName,
+			PDPCAFile:        config.PDPCAFile,
+		},
+		Interval:           config.DeviceDataSyncInterval,
+		ChangeScanInterval: config.DeviceDataSyncChangeScanInterval,
 	}
 }

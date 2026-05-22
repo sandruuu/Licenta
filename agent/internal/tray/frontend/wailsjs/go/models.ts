@@ -4,7 +4,7 @@ export namespace ipc {
 	    connection: DashboardConnection;
 	    status: AgentStatus;
 	    enrollment: EnrollmentInfo;
-	    posture: DevicePostureReport;
+	    device_data: DeviceDataReport;
 	    // Go type: time
 	    reported_at: any;
 
@@ -17,7 +17,7 @@ export namespace ipc {
 	        this.connection = this.convertValues(source["connection"], DashboardConnection);
 	        this.status = this.convertValues(source["status"], AgentStatus);
 	        this.enrollment = this.convertValues(source["enrollment"], EnrollmentInfo);
-	        this.posture = this.convertValues(source["posture"], DevicePostureReport);
+	        this.device_data = this.convertValues(source["device_data"], DeviceDataReport);
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
 
@@ -47,11 +47,11 @@ export namespace ipc {
 	    enrollment_state: string;
 	    enrollment_device_id?: string;
 	    enrollment_last_error?: string;
-	    device_posture_status?: string;
-	    device_posture_check_count?: number;
+	    device_data_status?: string;
+	    device_data_check_count?: number;
 	    // Go type: time
-	    device_posture_collected_at?: any;
-	    device_posture_last_error?: string;
+	    device_data_collected_at?: any;
+	    device_data_last_error?: string;
 	    // Go type: time
 	    reported_at: any;
 
@@ -68,10 +68,10 @@ export namespace ipc {
 	        this.enrollment_state = source["enrollment_state"];
 	        this.enrollment_device_id = source["enrollment_device_id"];
 	        this.enrollment_last_error = source["enrollment_last_error"];
-	        this.device_posture_status = source["device_posture_status"];
-	        this.device_posture_check_count = source["device_posture_check_count"];
-	        this.device_posture_collected_at = this.convertValues(source["device_posture_collected_at"], null);
-	        this.device_posture_last_error = source["device_posture_last_error"];
+	        this.device_data_status = source["device_data_status"];
+	        this.device_data_check_count = source["device_data_check_count"];
+	        this.device_data_collected_at = this.convertValues(source["device_data_collected_at"], null);
+	        this.device_data_last_error = source["device_data_last_error"];
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
 
@@ -109,14 +109,14 @@ export namespace ipc {
 	        this.service_state = source["service_state"];
 	    }
 	}
-	export class DevicePostureCheck {
+	export class DeviceDataCheck {
 	    name: string;
 	    status: string;
 	    description: string;
 	    details?: Record<string, string>;
 
 	    static createFrom(source: any = {}) {
-	        return new DevicePostureCheck(source);
+	        return new DeviceDataCheck(source);
 	    }
 
 	    constructor(source: any = {}) {
@@ -127,16 +127,16 @@ export namespace ipc {
 	        this.details = source["details"];
 	    }
 	}
-	export class DevicePostureReport {
+	export class DeviceDataReport {
 	    device_id?: string;
 	    hostname: string;
 	    os: string;
-	    checks: DevicePostureCheck[];
+	    checks: DeviceDataCheck[];
 	    // Go type: time
 	    collected_at: any;
 
 	    static createFrom(source: any = {}) {
-	        return new DevicePostureReport(source);
+	        return new DeviceDataReport(source);
 	    }
 
 	    constructor(source: any = {}) {
@@ -144,7 +144,7 @@ export namespace ipc {
 	        this.device_id = source["device_id"];
 	        this.hostname = source["hostname"];
 	        this.os = source["os"];
-	        this.checks = this.convertValues(source["checks"], DevicePostureCheck);
+	        this.checks = this.convertValues(source["checks"], DeviceDataCheck);
 	        this.collected_at = this.convertValues(source["collected_at"], null);
 	    }
 
@@ -232,3 +232,4 @@ export namespace ipc {
 	}
 
 }
+

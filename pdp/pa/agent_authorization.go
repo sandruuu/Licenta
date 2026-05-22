@@ -272,10 +272,6 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if strings.TrimSpace(user.TenantID) == "" || !strings.EqualFold(user.TenantID, resource.TenantID) {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is outside the user's tenant", nil)
 	}
-	if !ResourceVisibleForRole(resource, claims.Role) {
-		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is not available to this user", nil)
-	}
-
 	protocol := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if protocol == "" {
 		protocol = ResourceProtocol(resource)
@@ -353,10 +349,6 @@ func deviceHealthFromPosture(report *models.DevicePostureReport) *models.DeviceH
 		ReportedAt:   report.ReportedAt,
 		TenantID:     report.TenantID,
 	}
-}
-
-func ResourceVisibleForRole(resource *models.Resource, role string) bool {
-	return catalog.ResourceVisibleForRole(resource, role)
 }
 
 func ResourceProtocol(resource *models.Resource) string {

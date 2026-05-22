@@ -26,8 +26,16 @@ const typeMeta = [
   { value: 'rdp', label: 'RDP' },
 ];
 
-function splitList(value) {
-  return value ? value.split(',').map((item) => item.trim()).filter(Boolean) : [];
+function catalogHost(resource) {
+  const externalURL = resource?.external_url || '';
+  if (externalURL.includes('://')) {
+    try {
+      return new URL(externalURL).hostname || externalURL;
+    } catch {
+      return externalURL;
+    }
+  }
+  return externalURL || resource?.host || '-';
 }
 
 function typeVariant(type) {
@@ -99,11 +107,7 @@ export default function Resources() {
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
       external_url: '',
-      catalog_fqdn: '',
       enabled: true,
-      allowed_roles: '',
-      require_mfa: false,
-      tags: '',
     });
     setModal('create');
   };
@@ -131,11 +135,7 @@ export default function Resources() {
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
       external_url: '',
-      catalog_fqdn: '',
       enabled: true,
-      allowed_roles: '',
-      require_mfa: false,
-      tags: '',
     });
     setModal('create');
     setOpenedCreateFromURL(true);
@@ -151,12 +151,7 @@ export default function Resources() {
   ]);
 
   const openEdit = (resource) => {
-    setForm({
-      ...resource,
-      catalog_fqdn: resource.metadata?.catalog_fqdn || '',
-      allowed_roles: (resource.allowed_roles || []).join(', '),
-      tags: (resource.tags || []).join(', '),
-    });
+    setForm({ ...resource });
     setModal('edit');
   };
 
@@ -174,11 +169,7 @@ export default function Resources() {
     setSaving(true);
     setError('');
     const metadata = { ...(form.metadata || {}) };
-    if (form.catalog_fqdn?.trim()) {
-      metadata.catalog_fqdn = form.catalog_fqdn.trim();
-    } else {
-      delete metadata.catalog_fqdn;
-    }
+    delete metadata.catalog_fqdn;
 
     const data = {
       name: form.name?.trim(),
@@ -191,9 +182,6 @@ export default function Resources() {
       external_url: form.external_url?.trim(),
       enabled: form.enabled !== false,
       metadata,
-      allowed_roles: splitList(form.allowed_roles),
-      tags: splitList(form.tags),
-      require_mfa: !!form.require_mfa,
     };
 
     try {
@@ -239,7 +227,7 @@ export default function Resources() {
     {
       key: 'metadata',
       label: 'External FQDN',
-      render: (value, row) => <span className="text-mono text-xs">{value?.catalog_fqdn || row.external_url || '-'}</span>,
+      render: (_, row) => <span className="text-mono text-xs">{catalogHost(row)}</span>,
     },
     { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     { key: 'enabled', label: 'Status', render: (value) => <Badge variant={value ? 'success' : 'danger'}>{value ? 'Enabled' : 'Disabled'}</Badge> },
@@ -270,7 +258,6 @@ export default function Resources() {
         resource.description,
         resource.host,
         resource.external_url,
-        resource.metadata?.catalog_fqdn,
         resource.id,
         organization?.name,
         organization?.domain,
@@ -406,19 +393,8 @@ export default function Resources() {
             </FormField>
           )}
 
-          <FormField label="Catalog FQDN" hint="The DNS name published to endpoint agents for this resource." className="mb-0 md:col-span-2">
-            <FormInput value={form.catalog_fqdn || ''} onChange={(e) => setForm({ ...form, catalog_fqdn: e.target.value })} placeholder="app.ztna.example.com" />
-          </FormField>
-          <FormField label="Allowed Roles" className="mb-0">
-            <FormInput value={form.allowed_roles || ''} onChange={(e) => setForm({ ...form, allowed_roles: e.target.value })} placeholder="admin, user" />
-          </FormField>
-          <FormField label="Tags" className="mb-0">
-            <FormInput value={form.tags || ''} onChange={(e) => setForm({ ...form, tags: e.target.value })} placeholder="production, critical" />
-          </FormField>
-
           <div className="md:col-span-4 flex flex-wrap items-center gap-x-8 gap-y-3 pt-2">
             <FormCheckbox id="res-enabled" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} label="Enabled" />
-            <FormCheckbox id="res-mfa" checked={!!form.require_mfa} onChange={(e) => setForm({ ...form, require_mfa: e.target.checked })} label="Require MFA" />
           </div>
         </div>
       </Modal>

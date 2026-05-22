@@ -48,6 +48,7 @@ type Dependencies struct {
 	DeviceIdentity DeviceIdentity
 	Store          Store
 	Clock          func() time.Time
+	OnEnrolled     func()
 }
 
 type Client interface {
@@ -277,3 +278,4 @@ func firstPEMCertificate(rawPEM string) ([]byte, error) {
 func canonicalEnrollmentProof(payload enrollmentProofPayload) ([]byte, error) {
 	return json.Marshal(payload)
 }
+

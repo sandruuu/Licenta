@@ -8,7 +8,7 @@ type AgentDashboard struct {
 	Enrollment  EnrollmentInfo      `json:"enrollment"`
 	UserSession UserSessionInfo     `json:"user_session"`
 	Catalog     CatalogInfo         `json:"catalog,omitempty"`
-	Posture     DevicePostureReport `json:"posture"`
+	DeviceData  DeviceDataReport    `json:"device_data"`
 	ReportedAt  time.Time           `json:"reported_at"`
 }
 

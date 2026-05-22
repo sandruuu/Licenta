@@ -28,12 +28,12 @@ func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*i
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
 		return ipc.NewResponse(request.ID, service.dashboard(ctx))
-	case ipc.OperationGetDevicePosture:
-		var payload ipc.DevicePostureRequest
+	case ipc.OperationGetDeviceData:
+		var payload ipc.DeviceDataRequest
 		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
-		report, code, err := service.devicePosture(ctx)
+		report, code, err := service.deviceDataReport(ctx)
 		if err != nil {
 			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil
 		}
@@ -103,22 +103,22 @@ func (service *Service) ping(payload ipc.PingRequest) ipc.PingResponse {
 func (service *Service) status() ipc.AgentStatus {
 	identity := currentProcessIdentity()
 	service.mu.RLock()
-	posture := service.posture
+	deviceData := service.deviceData
 	serviceState := service.state
 	service.mu.RUnlock()
 	enrollment := service.enrollment.Snapshot()
 	return ipc.AgentStatus{
-		ServiceState:             string(serviceState),
-		ServicePID:               identity.PID,
-		ServiceUser:              identity.Username,
-		ServiceUserSID:           identity.UserSID,
-		EnrollmentState:          enrollment.State,
-		EnrollmentDeviceID:       enrollment.DeviceID,
-		EnrollmentLastError:      enrollment.LastError,
-		DevicePostureStatus:      posture.Status,
-		DevicePostureCheckCount:  len(posture.Report.Checks),
-		DevicePostureCollectedAt: posture.LastCollectedAt,
-		DevicePostureLastError:   posture.LastError,
-		ReportedAt:               service.clock().UTC(),
+		ServiceState:          string(serviceState),
+		ServicePID:            identity.PID,
+		ServiceUser:           identity.Username,
+		ServiceUserSID:        identity.UserSID,
+		EnrollmentState:       enrollment.State,
+		EnrollmentDeviceID:    enrollment.DeviceID,
+		EnrollmentLastError:   enrollment.LastError,
+		DeviceDataStatus:      deviceData.Status,
+		DeviceDataCheckCount:  len(deviceData.Report.Checks),
+		DeviceDataCollectedAt: deviceData.LastCollectedAt,
+		DeviceDataLastError:   deviceData.LastError,
+		ReportedAt:            service.clock().UTC(),
 	}
 }

@@ -5,12 +5,14 @@ package enrollment
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
@@ -29,11 +31,10 @@ import (
 const (
 	msPlatformCryptoProvider = "Microsoft Platform Crypto Provider"
 	msSoftwareKSPProvider    = "Microsoft Software Key Storage Provider"
-	ncryptRSAAlgorithm       = "RSA"
-	ncryptLengthProperty     = "Length"
+	ncryptECDSAP256Algorithm = "ECDSA_P256"
 	ncryptExportPolicy       = "Export Policy"
-	bcryptRSAPublicBlob      = "RSAPUBLICBLOB"
-	bcryptPadPKCS1           = 0x2
+	bcryptECCPublicBlob      = "ECCPUBLICBLOB"
+	bcryptECDSAPublicP256    = 0x31534345
 	ncryptMachineKeyFlag     = 0x20
 	ncryptSilentFlag         = 0x40
 	certKeyProvInfoPropID    = 2
@@ -49,6 +50,7 @@ var (
 	procNCryptFinalizeKey         = ncryptDLL.NewProc("NCryptFinalizeKey")
 	procNCryptExportKey           = ncryptDLL.NewProc("NCryptExportKey")
 	procNCryptSignHash            = ncryptDLL.NewProc("NCryptSignHash")
+	procNCryptDeleteKey           = ncryptDLL.NewProc("NCryptDeleteKey")
 	procNCryptFreeObject          = ncryptDLL.NewProc("NCryptFreeObject")
 	crypt32DLL                    = windows.NewLazySystemDLL("crypt32.dll")
 	procCertSetContextProperty    = crypt32DLL.NewProc("CertSetCertificateContextProperty")
@@ -226,58 +228,76 @@ type ncryptSigner struct {
 	handle       windows.Handle
 	keyName      string
 	providerName string
-	publicKey    *rsa.PublicKey
+	publicKey    *ecdsa.PublicKey
 }
 
 func ensureNCryptSigner(keyName string) (*ncryptSigner, error) {
 	if signer, err := openNCryptSigner(keyName); err == nil {
 		return signer, nil
 	}
-	var lastErr error
-	for _, providerName := range []string{msPlatformCryptoProvider, msSoftwareKSPProvider} {
-		provider, err := ncryptOpenStorageProvider(providerName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		key, err := ncryptCreatePersistedRSAKey(provider, keyName)
-		ncryptFreeObject(provider)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		publicKey, err := ncryptRSAPublicKey(key)
-		if err != nil {
-			ncryptFreeObject(key)
-			return nil, err
-		}
-		return &ncryptSigner{handle: key, keyName: keyName, providerName: providerName, publicKey: publicKey}, nil
+	_ = deletePersistedDeviceKey(keyName)
+
+	platformProvider, platformErr := ncryptOpenStorageProvider(msPlatformCryptoProvider)
+	if platformErr == nil {
+		defer ncryptFreeObject(platformProvider)
+		return createNCryptSignerWithProvider(platformProvider, msPlatformCryptoProvider, keyName)
 	}
-	if lastErr != nil {
-		return nil, lastErr
+
+	softwareProvider, err := ncryptOpenStorageProvider(msSoftwareKSPProvider)
+	if err != nil {
+		return nil, fmt.Errorf("open platform crypto provider: %v; open software key provider: %w", platformErr, err)
 	}
-	return nil, fmt.Errorf("create persisted device key %q: no supported key storage provider", keyName)
+	defer ncryptFreeObject(softwareProvider)
+	signer, err := createNCryptSignerWithProvider(softwareProvider, msSoftwareKSPProvider, keyName)
+	if err != nil {
+		return nil, fmt.Errorf("platform crypto provider unavailable (%v); %w", platformErr, err)
+	}
+	return signer, nil
 }
 
 func openNCryptSigner(keyName string) (*ncryptSigner, error) {
-	for _, providerName := range []string{msPlatformCryptoProvider, msSoftwareKSPProvider} {
-		provider, err := ncryptOpenStorageProvider(providerName)
-		if err != nil {
-			continue
-		}
-		key, err := ncryptOpenKey(provider, keyName)
-		ncryptFreeObject(provider)
-		if err != nil {
-			continue
-		}
-		publicKey, err := ncryptRSAPublicKey(key)
-		if err != nil {
-			ncryptFreeObject(key)
-			return nil, err
-		}
-		return &ncryptSigner{handle: key, keyName: keyName, providerName: providerName, publicKey: publicKey}, nil
+	platformProvider, platformErr := ncryptOpenStorageProvider(msPlatformCryptoProvider)
+	if platformErr == nil {
+		defer ncryptFreeObject(platformProvider)
+		return openNCryptSignerWithProvider(platformProvider, msPlatformCryptoProvider, keyName)
 	}
-	return nil, fmt.Errorf("open persisted device key %q: key not found", keyName)
+
+	softwareProvider, err := ncryptOpenStorageProvider(msSoftwareKSPProvider)
+	if err != nil {
+		return nil, fmt.Errorf("open platform crypto provider: %v; open software key provider: %w", platformErr, err)
+	}
+	defer ncryptFreeObject(softwareProvider)
+	signer, err := openNCryptSignerWithProvider(softwareProvider, msSoftwareKSPProvider, keyName)
+	if err != nil {
+		return nil, fmt.Errorf("platform crypto provider unavailable (%v); %w", platformErr, err)
+	}
+	return signer, nil
+}
+
+func createNCryptSignerWithProvider(provider windows.Handle, providerName, keyName string) (*ncryptSigner, error) {
+	key, err := ncryptCreatePersistedECDSAP256Key(provider, keyName)
+	if err != nil {
+		return nil, fmt.Errorf("create persisted device key %q with %s: %w", keyName, providerName, err)
+	}
+	publicKey, err := ncryptECDSAPublicKey(key)
+	if err != nil {
+		ncryptFreeObject(key)
+		return nil, fmt.Errorf("create persisted device key %q with %s: expected ECDSA P-256 key: %w", keyName, providerName, err)
+	}
+	return &ncryptSigner{handle: key, keyName: keyName, providerName: providerName, publicKey: publicKey}, nil
+}
+
+func openNCryptSignerWithProvider(provider windows.Handle, providerName, keyName string) (*ncryptSigner, error) {
+	key, err := ncryptOpenKey(provider, keyName)
+	if err != nil {
+		return nil, fmt.Errorf("open persisted device key %q with %s: %w", keyName, providerName, err)
+	}
+	publicKey, err := ncryptECDSAPublicKey(key)
+	if err != nil {
+		ncryptFreeObject(key)
+		return nil, fmt.Errorf("open persisted device key %q with %s: expected ECDSA P-256 key: %w", keyName, providerName, err)
+	}
+	return &ncryptSigner{handle: key, keyName: keyName, providerName: providerName, publicKey: publicKey}, nil
 }
 
 func (signer *ncryptSigner) Public() crypto.PublicKey {
@@ -286,14 +306,13 @@ func (signer *ncryptSigner) Public() crypto.PublicKey {
 
 func (signer *ncryptSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if opts == nil || opts.HashFunc() != crypto.SHA256 {
-		return nil, fmt.Errorf("NCrypt signer only supports SHA-256")
+		return nil, fmt.Errorf("NCrypt ECDSA signer only supports SHA-256")
 	}
-	algID, err := windows.UTF16PtrFromString("SHA256")
+	rawSignature, err := ncryptSignHashECDSA(signer.handle, digest)
 	if err != nil {
 		return nil, err
 	}
-	paddingInfo := bcryptPKCS1PaddingInfo{AlgID: algID}
-	return ncryptSignHash(signer.handle, &paddingInfo, digest)
+	return encodeECDSASignature(rawSignature)
 }
 
 func (signer *ncryptSigner) Close() {
@@ -301,10 +320,6 @@ func (signer *ncryptSigner) Close() {
 		ncryptFreeObject(signer.handle)
 		signer.handle = 0
 	}
-}
-
-type bcryptPKCS1PaddingInfo struct {
-	AlgID *uint16
 }
 
 func ncryptOpenStorageProvider(providerName string) (windows.Handle, error) {
@@ -333,8 +348,8 @@ func ncryptOpenKey(provider windows.Handle, keyName string) (windows.Handle, err
 	return key, nil
 }
 
-func ncryptCreatePersistedRSAKey(provider windows.Handle, keyName string) (windows.Handle, error) {
-	algID, err := windows.UTF16PtrFromString(ncryptRSAAlgorithm)
+func ncryptCreatePersistedECDSAP256Key(provider windows.Handle, keyName string) (windows.Handle, error) {
+	algID, err := windows.UTF16PtrFromString(ncryptECDSAP256Algorithm)
 	if err != nil {
 		return 0, err
 	}
@@ -346,11 +361,6 @@ func ncryptCreatePersistedRSAKey(provider windows.Handle, keyName string) (windo
 	status, _, _ := procNCryptCreatePersistedKey.Call(uintptr(provider), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(algID)), uintptr(unsafe.Pointer(name)), 0, ncryptMachineKeyFlag|ncryptSilentFlag)
 	if status != 0 {
 		return 0, syscall.Errno(status)
-	}
-	length := uint32(2048)
-	if err := ncryptSetPropertyDWORD(key, ncryptLengthProperty, length); err != nil {
-		ncryptFreeObject(key)
-		return 0, err
 	}
 	exportPolicy := uint32(0)
 	if err := ncryptSetPropertyDWORD(key, ncryptExportPolicy, exportPolicy); err != nil {
@@ -377,8 +387,8 @@ func ncryptSetPropertyDWORD(key windows.Handle, property string, value uint32) e
 	return nil
 }
 
-func ncryptRSAPublicKey(key windows.Handle) (*rsa.PublicKey, error) {
-	blobType, err := windows.UTF16PtrFromString(bcryptRSAPublicBlob)
+func ncryptECDSAPublicKey(key windows.Handle) (*ecdsa.PublicKey, error) {
+	blobType, err := windows.UTF16PtrFromString(bcryptECCPublicBlob)
 	if err != nil {
 		return nil, err
 	}
@@ -392,48 +402,94 @@ func ncryptRSAPublicKey(key windows.Handle) (*rsa.PublicKey, error) {
 	if status != 0 {
 		return nil, syscall.Errno(status)
 	}
-	return parseRSAPublicBlob(blob)
+	return parseECDSAPublicBlob(blob)
 }
 
-func parseRSAPublicBlob(blob []byte) (*rsa.PublicKey, error) {
-	if len(blob) < 24 {
-		return nil, fmt.Errorf("RSA public blob is too small")
+func parseECDSAPublicBlob(blob []byte) (*ecdsa.PublicKey, error) {
+	if len(blob) < 8 {
+		return nil, fmt.Errorf("ECDSA public blob is too small")
 	}
-	expLen := int(binary.LittleEndian.Uint32(blob[8:12]))
-	modLen := int(binary.LittleEndian.Uint32(blob[12:16]))
-	offset := 24
-	if len(blob) < offset+expLen+modLen {
-		return nil, fmt.Errorf("RSA public blob is truncated")
+	if magic := binary.LittleEndian.Uint32(blob[0:4]); magic != bcryptECDSAPublicP256 {
+		return nil, fmt.Errorf("unsupported ECDSA public blob magic 0x%x", magic)
 	}
-	expBytes := blob[offset : offset+expLen]
-	offset += expLen
-	modBytes := blob[offset : offset+modLen]
-	exponent := 0
-	for _, b := range expBytes {
-		exponent = exponent<<8 + int(b)
+	keySize := int(binary.LittleEndian.Uint32(blob[4:8]))
+	if keySize != 32 {
+		return nil, fmt.Errorf("unsupported ECDSA public key size %d", keySize)
 	}
-	if exponent == 0 {
-		return nil, fmt.Errorf("RSA public exponent is empty")
+	if len(blob) < 8+(2*keySize) {
+		return nil, fmt.Errorf("ECDSA public blob is truncated")
 	}
-	modulus := new(big.Int).SetBytes(modBytes)
-	if modulus.Sign() == 0 {
-		return nil, fmt.Errorf("RSA public modulus is empty")
+	x := new(big.Int).SetBytes(blob[8 : 8+keySize])
+	y := new(big.Int).SetBytes(blob[8+keySize : 8+(2*keySize)])
+	curve := elliptic.P256()
+	if x.Sign() == 0 || y.Sign() == 0 || !curve.IsOnCurve(x, y) {
+		return nil, fmt.Errorf("ECDSA public key point is invalid")
 	}
-	return &rsa.PublicKey{N: modulus, E: exponent}, nil
+	return &ecdsa.PublicKey{Curve: curve, X: x, Y: y}, nil
 }
 
-func ncryptSignHash(key windows.Handle, paddingInfo *bcryptPKCS1PaddingInfo, digest []byte) ([]byte, error) {
+func ncryptSignHashECDSA(key windows.Handle, digest []byte) ([]byte, error) {
 	var size uint32
-	status, _, _ := procNCryptSignHash.Call(uintptr(key), uintptr(unsafe.Pointer(paddingInfo)), uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), 0, 0, uintptr(unsafe.Pointer(&size)), bcryptPadPKCS1)
+	status, _, _ := procNCryptSignHash.Call(uintptr(key), 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), 0, 0, uintptr(unsafe.Pointer(&size)), 0)
 	if status != 0 {
 		return nil, syscall.Errno(status)
 	}
 	signature := make([]byte, size)
-	status, _, _ = procNCryptSignHash.Call(uintptr(key), uintptr(unsafe.Pointer(paddingInfo)), uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), uintptr(unsafe.Pointer(&signature[0])), uintptr(size), uintptr(unsafe.Pointer(&size)), bcryptPadPKCS1)
+	status, _, _ = procNCryptSignHash.Call(uintptr(key), 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), uintptr(unsafe.Pointer(&signature[0])), uintptr(size), uintptr(unsafe.Pointer(&size)), 0)
 	if status != 0 {
 		return nil, syscall.Errno(status)
 	}
 	return signature[:size], nil
+}
+
+type ecdsaSignature struct {
+	R, S *big.Int
+}
+
+func encodeECDSASignature(signature []byte) ([]byte, error) {
+	if len(signature) == 0 || len(signature)%2 != 0 {
+		return nil, fmt.Errorf("ECDSA signature has invalid length")
+	}
+	partSize := len(signature) / 2
+	r := new(big.Int).SetBytes(signature[:partSize])
+	s := new(big.Int).SetBytes(signature[partSize:])
+	if r.Sign() == 0 || s.Sign() == 0 {
+		return nil, fmt.Errorf("ECDSA signature has empty component")
+	}
+	encoded, err := asn1.Marshal(ecdsaSignature{R: r, S: s})
+	if err != nil {
+		return nil, fmt.Errorf("encode ECDSA signature: %w", err)
+	}
+	return encoded, nil
+}
+
+func deletePersistedDeviceKey(keyName string) error {
+	var lastErr error
+	for _, providerName := range []string{msPlatformCryptoProvider, msSoftwareKSPProvider} {
+		provider, err := ncryptOpenStorageProvider(providerName)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		key, err := ncryptOpenKey(provider, keyName)
+		ncryptFreeObject(provider)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := ncryptDeleteKey(key); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+func ncryptDeleteKey(key windows.Handle) error {
+	status, _, _ := procNCryptDeleteKey.Call(uintptr(key), ncryptSilentFlag)
+	if status != 0 {
+		return syscall.Errno(status)
+	}
+	return nil
 }
 
 func ncryptFreeObject(handle windows.Handle) {
@@ -505,7 +561,7 @@ func findCertificateByThumbprint(thumbprint string) (*x509.Certificate, *windows
 			}
 			return nil, nil, err
 		}
-		certBytes := unsafe.Slice(current.EncodedCert, current.Length)
+		certBytes := append([]byte(nil), unsafe.Slice(current.EncodedCert, current.Length)...)
 		if strings.EqualFold(sha256Hex(certBytes), expected) {
 			cert, err := x509.ParseCertificate(certBytes)
 			if err != nil {
@@ -531,3 +587,4 @@ func acquireCertificatePrivateKey(certContext *windows.CertContext) error {
 	}
 	return nil
 }
+

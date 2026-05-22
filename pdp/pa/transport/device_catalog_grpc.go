@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	deviceCatalogGRPCServiceName    = "ztna.catalog.v1.DeviceCatalogService"
-	deviceCatalogGRPCGetCatalogPath = "/ztna.catalog.v1.DeviceCatalogService/GetCatalog"
+	deviceCatalogGRPCServiceName    = "ztna.catalog.DeviceCatalogService"
+	deviceCatalogGRPCGetCatalogPath = "/" + deviceCatalogGRPCServiceName + "/GetCatalog"
 )
 
 type deviceCatalogGRPCServer interface {
