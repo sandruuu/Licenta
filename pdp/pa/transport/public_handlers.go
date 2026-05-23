@@ -87,7 +87,7 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, httpStatus, map[string]interface{}{
 		"status":  status,
-		"service": "ztna-pdp",
+		"service": "trustcloud",
 		"checks":  checks,
 	})
 }

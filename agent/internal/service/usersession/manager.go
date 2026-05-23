@@ -22,8 +22,8 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 		logger:             dependencies.Logger,
 		config:             config,
 		client:             dependencies.Client,
+		clientFactory:      dependencies.ClientFactory,
 		enrollment:         dependencies.Enrollment,
-		deviceIdentity:     dependencies.DeviceIdentity,
 		deviceDataSnapshot: dependencies.DeviceDataSnapshot,
 		onCatalog:          dependencies.OnCatalog,
 		onLogout:           dependencies.OnLogout,
@@ -33,9 +33,6 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 }
 
 func normalizeConfig(config Config) Config {
-	config.PDPGRPCEndpoint = strings.TrimSpace(config.PDPGRPCEndpoint)
-	config.PDPTLSServerName = strings.TrimSpace(config.PDPTLSServerName)
-	config.PDPCAFile = strings.TrimSpace(config.PDPCAFile)
 	if config.LoginTimeout <= 0 {
 		config.LoginTimeout = DefaultTimeout
 	}
@@ -158,6 +155,39 @@ func (manager *Manager) Snapshot(peer ipc.PeerIdentity) RuntimeState {
 	}
 }
 
+func (manager *Manager) ActiveAuthenticatedSession() (AuthenticatedSession, bool, error) {
+	if manager == nil {
+		return AuthenticatedSession{}, false, nil
+	}
+	now := manager.clock().UTC()
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	var active *sessionState
+	for _, session := range manager.sessions {
+		if session == nil || session.state != ipc.UserSessionStateAuthenticated || strings.TrimSpace(session.agentSessionToken) == "" {
+			continue
+		}
+		if !session.expiresAt.IsZero() && now.After(session.expiresAt.UTC()) {
+			continue
+		}
+		if active != nil {
+			return AuthenticatedSession{}, false, fmt.Errorf("multiple authenticated Windows sessions are active")
+		}
+		active = session
+	}
+	if active == nil {
+		return AuthenticatedSession{}, false, nil
+	}
+	return AuthenticatedSession{
+		AgentSessionID:    active.agentSessionID,
+		AgentSessionToken: active.agentSessionToken,
+		DisplayName:       active.displayName,
+		Email:             active.email,
+		ExpiresAt:         active.expiresAt,
+		Catalog:           active.catalog,
+	}, true, nil
+}
+
 func (manager *Manager) Logout(ctx context.Context, peer ipc.PeerIdentity) (ipc.LogoutUserSessionResponse, string, error) {
 	key, err := localUserKey(peer)
 	if err != nil {
@@ -255,7 +285,6 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 	}
 	catalogInfo := ipc.CatalogInfo{
 		Version:     catalog.Version,
-		DNSSuffixes: catalog.DNSSuffixes,
 		Resources:   catalog.Resources,
 		TTLSeconds:  catalog.TTLSeconds,
 		PolicyEpoch: catalog.PolicyEpoch,

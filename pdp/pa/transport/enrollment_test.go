@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"testing"
+
+	paenrollment "pdp/pa/enrollment"
 )
 
 func TestNormalizeEnrollmentComponentUsesSingleEndpointIdentity(t *testing.T) {
@@ -21,7 +23,7 @@ func TestNormalizeEnrollmentComponentUsesSingleEndpointIdentity(t *testing.T) {
 		"custom":   "custom",
 	}
 	for input, want := range cases {
-		if got := normalizeEnrollmentComponent(input); got != want {
+		if got := paenrollment.NormalizeComponent(input); got != want {
 			t.Fatalf("normalizeEnrollmentComponent(%q) = %q, want %q", input, got, want)
 		}
 	}
@@ -31,11 +33,11 @@ func TestCanonicalCSRPEMAcceptsPEMAndBase64DER(t *testing.T) {
 	csrDER := testCSRDER(t)
 	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
 
-	fromPEM, err := canonicalCSRPEM(csrPEM)
+	fromPEM, err := paenrollment.CanonicalCSRPEM(csrPEM)
 	if err != nil {
 		t.Fatalf("canonicalCSRPEM(PEM) returned error: %v", err)
 	}
-	fromBase64, err := canonicalCSRPEM(base64.StdEncoding.EncodeToString(csrDER))
+	fromBase64, err := paenrollment.CanonicalCSRPEM(base64.StdEncoding.EncodeToString(csrDER))
 	if err != nil {
 		t.Fatalf("canonicalCSRPEM(base64 DER) returned error: %v", err)
 	}
@@ -46,13 +48,13 @@ func TestCanonicalCSRPEMAcceptsPEMAndBase64DER(t *testing.T) {
 
 func TestValidateCSREmailIdentityRequiresTokenUsername(t *testing.T) {
 	csr := testCSRWithEmail(t, "user@example.com")
-	if err := validateCSREmailIdentity(csr, "user@example.com"); err != nil {
+	if err := paenrollment.ValidateCSREmailIdentity(csr, "user@example.com"); err != nil {
 		t.Fatalf("validateCSREmailIdentity returned error: %v", err)
 	}
-	if err := validateCSREmailIdentity(csr, "other@example.com"); err == nil {
+	if err := paenrollment.ValidateCSREmailIdentity(csr, "other@example.com"); err == nil {
 		t.Fatalf("validateCSREmailIdentity accepted mismatched email")
 	}
-	if err := validateCSREmailIdentity(csr, "username"); err == nil {
+	if err := paenrollment.ValidateCSREmailIdentity(csr, "username"); err == nil {
 		t.Fatalf("validateCSREmailIdentity accepted non-email username")
 	}
 }

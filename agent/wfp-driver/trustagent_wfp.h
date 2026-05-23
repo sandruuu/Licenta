@@ -1,0 +1,75 @@
+#pragma once
+
+#include <ntddk.h>
+#include <ndis/types.h>
+#include <ndis/nbl.h>
+#include <fwpsk.h>
+#include <fwpmk.h>
+#include <wdf.h>
+
+#define TRUSTAGENT_WFP_DEVICE_NAME L"\\Device\\TrustAgentWfp"
+#define TRUSTAGENT_WFP_SYMBOLIC_LINK L"\\DosDevices\\TrustAgentWfp"
+
+#define FILE_DEVICE_TRUSTAGENT_WFP 0x8000
+
+#define IOCTL_TRUSTAGENT_WFP_APPLY_RULES \
+    CTL_CODE(FILE_DEVICE_TRUSTAGENT_WFP, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_TRUSTAGENT_WFP_CLEAR_RULES \
+    CTL_CODE(FILE_DEVICE_TRUSTAGENT_WFP, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_TRUSTAGENT_WFP_QUERY_ORIGINAL_TARGET \
+    CTL_CODE(FILE_DEVICE_TRUSTAGENT_WFP, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define TRUSTAGENT_WFP_MAGIC 0x46574154u
+#define TRUSTAGENT_WFP_VERSION 1
+
+#define TRUSTAGENT_WFP_FLAG_FAIL_CLOSED 0x0001
+
+#pragma pack(push, 1)
+
+typedef struct _TRUSTAGENT_WFP_RULE {
+    UINT32 SyntheticIpv4;
+    UINT16 Port;
+    UINT8 Protocol;
+    UINT8 Reserved;
+} TRUSTAGENT_WFP_RULE, *PTRUSTAGENT_WFP_RULE;
+
+typedef struct _TRUSTAGENT_WFP_APPLY_RULES {
+    UINT32 Magic;
+    UINT16 Version;
+    UINT16 Flags;
+    UINT32 ProxyIpv4;
+    UINT16 ProxyPort;
+    UINT16 Reserved;
+    UINT32 ProxyPid;
+    UINT32 RuleCount;
+    TRUSTAGENT_WFP_RULE Rules[1];
+} TRUSTAGENT_WFP_APPLY_RULES, *PTRUSTAGENT_WFP_APPLY_RULES;
+
+typedef struct _TRUSTAGENT_WFP_CONNECTION_QUERY {
+    UINT32 Magic;
+    UINT16 Version;
+    UINT16 Reserved;
+    UINT32 LocalIpv4;
+    UINT16 LocalPort;
+    UINT32 RemoteIpv4;
+    UINT16 RemotePort;
+    UINT8 Protocol;
+    UINT8 Reserved2;
+} TRUSTAGENT_WFP_CONNECTION_QUERY, *PTRUSTAGENT_WFP_CONNECTION_QUERY;
+
+typedef struct _TRUSTAGENT_WFP_ORIGINAL_TARGET {
+    UINT32 Magic;
+    UINT16 Version;
+    UINT16 Reserved;
+    UINT32 OriginalIpv4;
+    UINT16 OriginalPort;
+    UINT8 Protocol;
+    UINT8 Reserved2;
+} TRUSTAGENT_WFP_ORIGINAL_TARGET, *PTRUSTAGENT_WFP_ORIGINAL_TARGET;
+
+#pragma pack(pop)
+
+EVT_WDF_DRIVER_DEVICE_ADD TrustAgentEvtDeviceAdd;
+EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL TrustAgentEvtIoDeviceControl;

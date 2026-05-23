@@ -130,7 +130,7 @@ func ValidateKeyProof(csr *x509.CertificateRequest, deviceID, fingerprint, keyPr
 	if err != nil {
 		return fmt.Errorf("invalid key proof format")
 	}
-	challenge := fmt.Sprintf("ztna-est-enrollment:%s:%s", deviceID, fingerprint)
+	challenge := fmt.Sprintf("trustcloud-est-enrollment:%s:%s", deviceID, fingerprint)
 	hash := sha256.Sum256([]byte(challenge))
 	r, s, err := parseECDSAKeyProofSignature(signature)
 	if err != nil {

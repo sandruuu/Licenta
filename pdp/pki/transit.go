@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -184,8 +185,9 @@ func RestoreOrCreateNamedKey(ctx context.Context, cfg VaultConfig, encryptedKeyP
 		label = "ECDSA"
 	}
 
-	// Try to restore from Vault Transit
-	if data, err := os.ReadFile(encryptedKeyPath); err == nil {
+	// Try to restore from Vault Transit.
+	data, err := os.ReadFile(encryptedKeyPath)
+	if err == nil {
 		log.Printf("[TRANSIT] Found encrypted %s key at %s, decrypting via Vault Transit...", label, encryptedKeyPath)
 		keyPEM, err := TransitDecryptKey(ctx, cfg, data)
 		if err != nil {
@@ -197,6 +199,9 @@ func RestoreOrCreateNamedKey(ctx context.Context, cfg VaultConfig, encryptedKeyP
 		}
 		log.Printf("[TRANSIT] %s key restored successfully from Vault Transit", label)
 		return privKey, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("read encrypted %s key from %s: %w", label, encryptedKeyPath, err)
 	}
 
 	// No saved key - generate new one

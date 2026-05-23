@@ -41,13 +41,12 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		ExternalURL: "https://admin.example.test/app",
 		Port:        443,
 		Enabled:     true,
-		Metadata:    map[string]string{"dns_suffix": "example.test"},
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	})
 	dataStore.SavePolicyRule(&models.PolicyRule{
-		ID:       "policy-posture-1",
-		Name:     "Require managed endpoint posture",
+		ID:       "policy-device-data-1",
+		Name:     "Require managed endpoint device data",
 		Priority: 1,
 		Enabled:  true,
 		Conditions: models.RuleConditions{
@@ -60,8 +59,8 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		UpdatedAt: time.Now(),
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assignment-posture-1",
-		PolicyID:  "policy-posture-1",
+		ID:        "assignment-device-data-1",
+		PolicyID:  "policy-device-data-1",
 		TenantID:  transportTestTenantID,
 		Level:     "organization",
 		Priority:  1,
@@ -100,9 +99,12 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 			t.Fatalf("catalog response leaked top-level %s: %+v", forbidden, fields)
 		}
 	}
-	suffixes := fields["dns_suffixes"].GetListValue().GetValues()
-	if len(suffixes) != 1 || suffixes[0].GetStringValue() != "example.test" {
-		t.Fatalf("dns_suffixes = %+v", fields["dns_suffixes"])
+	for key := range fields {
+		switch key {
+		case "version", "resources", "ttl_seconds", "not_modified", "policy_epoch", "device_data_policy":
+		default:
+			t.Fatalf("unexpected catalog response field %q: %+v", key, fields)
+		}
 	}
 	resources := fields["resources"].GetListValue().GetValues()
 	if len(resources) != 1 {
@@ -112,14 +114,14 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 	if resource["fqdn"].GetStringValue() != "admin.example.test" || resource["resource_id"].GetStringValue() != "res-1" || resource["protocol"].GetStringValue() != "https" || int(resource["port"].GetNumberValue()) != 443 {
 		t.Fatalf("resource = %+v", resource)
 	}
-	posturePolicy := fields["posture_policy"].GetStructValue()
-	if posturePolicy == nil {
-		t.Fatalf("missing posture policy: %+v", fields)
+	deviceDataPolicy := fields["device_data_policy"].GetStructValue()
+	if deviceDataPolicy == nil {
+		t.Fatalf("missing device data policy: %+v", fields)
 	}
-	postureFields := posturePolicy.GetFields()
-	checks := postureFields["required_checks"].GetListValue().GetValues()
-	if len(checks) != 2 || checks[0].GetStringValue() != "Disk Encryption" || checks[1].GetStringValue() != "Firewall" || postureFields["required_check_status"].GetStringValue() != "good" {
-		t.Fatalf("posture policy = %+v", posturePolicy.AsMap())
+	deviceDataFields := deviceDataPolicy.GetFields()
+	checks := deviceDataFields["required_checks"].GetListValue().GetValues()
+	if len(checks) != 2 || checks[0].GetStringValue() != "Disk Encryption" || checks[1].GetStringValue() != "Firewall" || deviceDataFields["required_check_status"].GetStringValue() != "good" {
+		t.Fatalf("device data policy = %+v", deviceDataPolicy.AsMap())
 	}
 }
 

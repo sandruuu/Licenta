@@ -22,14 +22,14 @@ func (s *Server) handleOIDCUserInfo(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	parts := strings.SplitN(authHeader, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="ztna"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="trustcloud"`)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
 		return
 	}
 
 	claims, err := s.pa.Auth.ValidateToken(parts[1])
 	if err != nil {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="ztna", error="invalid_token"`)
+		w.Header().Set("WWW-Authenticate", `Bearer realm="trustcloud", error="invalid_token"`)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid_token"})
 		return
 	}

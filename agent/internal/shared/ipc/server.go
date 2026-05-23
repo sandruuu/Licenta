@@ -12,12 +12,6 @@ type Handler interface {
 	HandleIPC(context.Context, *Request) (*Response, error)
 }
 
-type HandlerFunc func(context.Context, *Request) (*Response, error)
-
-func (handler HandlerFunc) HandleIPC(ctx context.Context, request *Request) (*Response, error) {
-	return handler(ctx, request)
-}
-
 func Serve(ctx context.Context, listener net.Listener, handler Handler) error {
 	if ctx == nil {
 		ctx = context.Background()

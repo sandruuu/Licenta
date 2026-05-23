@@ -22,7 +22,7 @@ type enrollRateEntry struct {
 	resetAt time.Time
 }
 
-// Server is the HTTP API server for the ZTNA PDP component.
+// Server is the HTTP API server for the TrustCloud component.
 type Server struct {
 	pa             *pa.PolicyAdministrator
 	mux            *http.ServeMux
@@ -108,7 +108,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 		s.externalCAPEM = caPEM
 		log.Printf("[API] PKI provider: vault (url=%s path=%s)", policyAdmin.Cfg.PKIURL, policyAdmin.Cfg.PKIPath)
 	} else {
-		log.Printf("[API] PKI provider: none (dev mode, no Vault configured)")
+		log.Printf("[API] PKI provider: none (no Vault configured)")
 	}
 	if policyAdmin.Enrollment != nil {
 		policyAdmin.Enrollment.SetCertificateAuthority(s.signCSR, s.revokeCertificate, s.deviceRole)
@@ -170,7 +170,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/browser/session/", s.handleBrowserAgentSession) // Browser side of TrustAgent user login
 
 	// ─────────────────────────────────────────────
-	// OIDC / OAuth2 endpoints (Cloud acts as IdP)
+	// OIDC / OAuth2 endpoints (PDP acts as IdP)
 	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/auth/authorize", s.handleOIDCAuthorize)                   // OIDC Authorization endpoint
 	s.mux.HandleFunc("/auth/federated/callback", s.handleFederatedCallback)      // External IdP callback

@@ -55,7 +55,7 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, e
 	tmpl := &x509.CertificateRequest{
 		Subject: pkix.Name{
 			CommonName:   pdpFQDN,
-			Organization: []string{"ZTNA PDP"},
+			Organization: []string{"TrustCloud"},
 		},
 		DNSNames: []string{pdpFQDN, "localhost"},
 		IPAddresses: []net.IP{
@@ -172,6 +172,9 @@ func SaveEnrolledCert(result *SelfEnrollResult, certPath, caPath, dataDir string
 		Type:  "CERTIFICATE",
 		Bytes: result.Certificate.Certificate[0],
 	})
+	if err := EnsureCAPEMCompatible(caPath, result.CAPEM); err != nil {
+		return err
+	}
 	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
 		return fmt.Errorf("write PDP cert: %w", err)
 	}

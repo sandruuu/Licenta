@@ -129,20 +129,29 @@ func (server *Server) listen() (net.PacketConn, net.Listener, error) {
 		return nil, nil, fmt.Errorf("invalid DNS listen address %q", server.listenAddress)
 	}
 	if port == "0" {
-		tcpListener, err := net.Listen("tcp", net.JoinHostPort(host, port))
-		if err != nil {
-			return nil, nil, fmt.Errorf("listen DNS TCP %s: %w", server.listenAddress, err)
+		var lastErr error
+		for attempt := 0; attempt < 20; attempt++ {
+			udpConn, err := net.ListenPacket("udp", net.JoinHostPort(host, port))
+			if err != nil {
+				lastErr = fmt.Errorf("listen DNS UDP %s: %w", server.listenAddress, err)
+				continue
+			}
+			localAddr := udpConn.LocalAddr().String()
+			tcpListener, err := net.Listen("tcp", localAddr)
+			if err != nil {
+				udpConn.Close()
+				lastErr = fmt.Errorf("listen DNS TCP %s: %w", localAddr, err)
+				continue
+			}
+			server.mu.Lock()
+			server.localAddr = localAddr
+			server.mu.Unlock()
+			return udpConn, tcpListener, nil
 		}
-		localAddr := tcpListener.Addr().String()
-		udpConn, err := net.ListenPacket("udp", localAddr)
-		if err != nil {
-			tcpListener.Close()
-			return nil, nil, fmt.Errorf("listen DNS UDP %s: %w", localAddr, err)
+		if lastErr != nil {
+			return nil, nil, lastErr
 		}
-		server.mu.Lock()
-		server.localAddr = localAddr
-		server.mu.Unlock()
-		return udpConn, tcpListener, nil
+		return nil, nil, fmt.Errorf("listen DNS %s: no available UDP/TCP port pair", server.listenAddress)
 	}
 
 	udpConn, err := net.ListenPacket("udp", server.listenAddress)

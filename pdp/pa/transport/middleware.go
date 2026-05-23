@@ -19,15 +19,7 @@ import (
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
 
-const gatewayContextKey contextKey = "authenticatedGateway"
 const deviceEnrollmentContextKey contextKey = "authenticatedDeviceEnrollment"
-
-// gatewayFromContext extracts the authenticated gateway from the request context.
-// Returns nil, false if the middleware did not set a gateway (e.g. non-gateway endpoint).
-func gatewayFromContext(r *http.Request) (*models.Gateway, bool) {
-	gw, ok := r.Context().Value(gatewayContextKey).(*models.Gateway)
-	return gw, ok
-}
 
 func deviceEnrollmentFromContext(r *http.Request) (*models.DeviceEnrollment, bool) {
 	enrollment, ok := r.Context().Value(deviceEnrollmentContextKey).(*models.DeviceEnrollment)
@@ -139,32 +131,6 @@ func (s *Server) requireClientCert(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r)
-	})
-}
-
-// gatewayAuthMiddleware verifies that the calling gateway is enrolled by
-// matching the mTLS client certificate's tenant/gateway URI SAN against the
-// gateway database and checking the certificate fingerprint matches the record.
-// On success, the authenticated gateway is stored in the request context
-// and can be retrieved with gatewayFromContext(r).
-func (s *Server) gatewayAuthMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peerCert, ok := clientCertificateFromRequest(r)
-		if !ok {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{
-				"error": "client certificate required for gateway authentication",
-			})
-			return
-		}
-		gw, statusCode, errorMessage := s.authenticateGatewayCertificate(peerCert)
-		if statusCode != 0 {
-			writeJSON(w, statusCode, map[string]string{"error": errorMessage})
-			return
-		}
-
-		// Pass authenticated gateway identity to downstream handlers
-		ctx := context.WithValue(r.Context(), gatewayContextKey, gw)
-		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

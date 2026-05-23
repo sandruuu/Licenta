@@ -36,6 +36,10 @@ func serviceConfigJSON() string {
   "local_dns_server": "127.0.0.1",
   "synthetic_ip_cidr": "100.64.0.0/10",
   "harden_browser_doh": true,
+  "traffic_interception_enabled": true,
+  "traffic_proxy_listen_address": "127.0.0.1:18787",
+  "wfp_driver_device_path": "\\\\.\\TrustAgentWfp",
+  "wfp_fail_closed": true,
   "tray_timeout": "10s",
   "dashboard_refresh_interval": "30s"
 }`
@@ -48,22 +52,19 @@ func TestLoadServiceConfigLoadsServiceConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServiceConfig returned error: %v", err)
 	}
-	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != "ca.pem" || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH {
+	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != "ca.pem" || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH || !config.TrafficInterceptionEnabled || config.TrafficProxyListenAddress != "127.0.0.1:18787" || config.WFPDriverDevicePath != `\\.\TrustAgentWfp` || !config.WFPFailClosed {
 		t.Fatalf("service config = %+v", config)
 	}
 }
 
-func TestLoadServiceConfigAcceptsLegacyDeviceDataSyncKeys(t *testing.T) {
-	writeConfig(t, `{
-  "device_telemetry_interval": "30m",
-  "device_telemetry_change_scan_interval": "30s"
-}`)
+func TestLoadServiceConfigAcceptsUTF8BOM(t *testing.T) {
+	writeConfig(t, "\xef\xbb\xbf"+serviceConfigJSON())
 
 	config, err := LoadServiceConfig()
 	if err != nil {
 		t.Fatalf("LoadServiceConfig returned error: %v", err)
 	}
-	if config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second {
+	if config.PDPGRPCEndpoint != "pdp.example.com:443" {
 		t.Fatalf("service config = %+v", config)
 	}
 }

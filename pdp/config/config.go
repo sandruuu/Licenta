@@ -81,10 +81,10 @@ type GeoConfig struct {
 
 // RiskConfig controls the numeric risk-score model used by PE.
 type RiskConfig struct {
-	PostureCriticalAfter        time.Duration  `json:"posture_critical_after"`
-	PostureStaleAfter           time.Duration  `json:"posture_stale_after"`
-	PostureCriticalPoints       int            `json:"posture_critical_points"`
-	PostureStalePoints          int            `json:"posture_stale_points"`
+	DeviceDataCriticalAfter     time.Duration  `json:"device_data_critical_after"`
+	DeviceDataStaleAfter        time.Duration  `json:"device_data_stale_after"`
+	DeviceDataCriticalPoints    int            `json:"device_data_critical_points"`
+	DeviceDataStalePoints       int            `json:"device_data_stale_points"`
 	NoDeviceHealthPoints        int            `json:"no_device_health_points"`
 	HealthExcellentMin          int            `json:"health_excellent_min"`
 	HealthGoodMin               int            `json:"health_good_min"`
@@ -276,17 +276,17 @@ func (c *Config) ApplyDefaults() {
 	if c.Geo.ImpossibleTravelSpeedKMH <= 0 {
 		c.Geo.ImpossibleTravelSpeedKMH = 900
 	}
-	if c.Risk.PostureCriticalAfter <= 0 {
-		c.Risk.PostureCriticalAfter = 30 * time.Minute
+	if c.Risk.DeviceDataCriticalAfter <= 0 {
+		c.Risk.DeviceDataCriticalAfter = 30 * time.Minute
 	}
-	if c.Risk.PostureStaleAfter <= 0 {
-		c.Risk.PostureStaleAfter = 10 * time.Minute
+	if c.Risk.DeviceDataStaleAfter <= 0 {
+		c.Risk.DeviceDataStaleAfter = 10 * time.Minute
 	}
-	if c.Risk.PostureCriticalPoints <= 0 {
-		c.Risk.PostureCriticalPoints = 30
+	if c.Risk.DeviceDataCriticalPoints <= 0 {
+		c.Risk.DeviceDataCriticalPoints = 30
 	}
-	if c.Risk.PostureStalePoints <= 0 {
-		c.Risk.PostureStalePoints = 15
+	if c.Risk.DeviceDataStalePoints <= 0 {
+		c.Risk.DeviceDataStalePoints = 15
 	}
 	if c.Risk.NoDeviceHealthPoints <= 0 {
 		c.Risk.NoDeviceHealthPoints = 25

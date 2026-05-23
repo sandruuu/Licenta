@@ -21,13 +21,6 @@ func TestPingRequestRoundTrip(t *testing.T) {
 
 func TestDeviceDataReportRoundTrip(t *testing.T) {
 	collectedAt := time.Now().UTC()
-	request, err := NewRequest("req-1", OperationGetDeviceData, DeviceDataRequest{})
-	if err != nil {
-		t.Fatalf("NewRequest returned error: %v", err)
-	}
-	if request.Operation != OperationGetDeviceData {
-		t.Fatalf("operation = %q", request.Operation)
-	}
 	response, err := NewResponse("req-1", DeviceDataReport{
 		DeviceID:    "device-1",
 		Hostname:    "host-1",

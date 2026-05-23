@@ -1,0 +1,45 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider=%ManufacturerName%
+CatalogFile=trustagent_wfp.cat
+DriverVer=05/23/2026,1.0.0.0
+PnpLockdown=1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+trustagent_wfp.sys = 1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NT$ARCH$
+
+[Standard.NT$ARCH$]
+%TrustAgentWfp.DeviceDesc%=TrustAgentWfp_Install, Root\TrustAgentWfp
+
+[TrustAgentWfp_Install.NT]
+CopyFiles=Drivers_Dir
+
+[Drivers_Dir]
+trustagent_wfp.sys
+
+[TrustAgentWfp_Install.NT.Services]
+AddService=trustagent_wfp,0x00000002,TrustAgentWfp_Service
+
+[TrustAgentWfp_Service]
+DisplayName=%TrustAgentWfp.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\trustagent_wfp.sys
+
+[Strings]
+ManufacturerName="TrustAgent"
+DiskName="TrustAgent WFP Driver Installation Disk"
+TrustAgentWfp.DeviceDesc="TrustAgent WFP Redirect Driver"
+TrustAgentWfp.ServiceDesc="TrustAgent WFP Redirect Driver"

@@ -91,7 +91,7 @@ export const DEFAULT_DEVICE_CHECK_OPTIONS = [
   {
     value: 'Password & Lock',
     label: 'Password & Lock',
-    description: 'Password and screen lock posture.',
+    description: 'Password and screen lock device state.',
   },
 ];
 
@@ -154,7 +154,7 @@ export function deviceCheckOptionsFromReports(reports = []) {
       optionsByName.set(name, {
         value: name,
         label: name,
-        description: check.description || 'Reported by device posture telemetry.',
+        description: check.description || 'Reported by TrustAgent device data.',
       });
     });
   });

@@ -1,4 +1,4 @@
-// API client for the ZTNA PDP/PA backend
+// API client for the TrustCloud/PA backend
 const API_BASE = '/api';
 
 // Get the auth token from localStorage

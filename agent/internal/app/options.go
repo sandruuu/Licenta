@@ -15,6 +15,10 @@ type ServiceConfig struct {
 	LocalDNSServer                   string
 	SyntheticIPCIDR                  string
 	HardenBrowserDoH                 bool
+	TrafficInterceptionEnabled       bool
+	TrafficProxyListenAddress        string
+	WFPDriverDevicePath              string
+	WFPFailClosed                    bool
 }
 
 type TrayConfig struct {

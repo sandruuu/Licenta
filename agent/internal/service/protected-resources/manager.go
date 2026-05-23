@@ -12,6 +12,7 @@ import (
 
 	dnscontrol "agent/internal/service/dns-control"
 	dnsresolver "agent/internal/service/dns-resolver"
+	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/shared/ipc"
 )
 
@@ -25,15 +26,29 @@ type Config struct {
 	SyntheticIPCIDR  string
 	HardenDoH        bool
 	ReadyTimeout     time.Duration
+
+	TrafficInterceptionEnabled bool
+	TrafficProxyListenAddress  string
+	WFPDriverDevicePath        string
+	WFPFailClosed              bool
 }
 
 type Dependencies struct {
-	Logger     *slog.Logger
-	DNSControl DNSControl
+	Logger             *slog.Logger
+	DNSControl         DNSControl
+	TrafficInterceptor TrafficInterceptor
+	TrafficConnector   trafficinterception.StreamConnector
 }
 
 type DNSControl interface {
 	Apply(context.Context, dnscontrol.Config) error
+}
+
+type TrafficInterceptor interface {
+	Run(context.Context) error
+	ApplyMappings(context.Context, []trafficinterception.ResourceMapping) error
+	Clear(context.Context) error
+	Status() trafficinterception.Status
 }
 
 type Manager struct {
@@ -42,6 +57,7 @@ type Manager struct {
 	resolver     *dnsresolver.Resolver
 	server       *dnsresolver.Server
 	dnsControl   DNSControl
+	traffic      TrafficInterceptor
 	readyTimeout time.Duration
 
 	mu      sync.RWMutex
@@ -60,6 +76,10 @@ type Status struct {
 	CatalogVersion       string
 	PolicyEpoch          string
 	LastCatalogAppliedAt time.Time
+	TrafficState         string
+	TrafficProxyAddress  string
+	TrafficRuleCount     int
+	WFPRuleState         string
 	LastError            string
 }
 
@@ -83,18 +103,31 @@ func NewManager(config Config, dependencies Dependencies) (*Manager, error) {
 	if dnsControl == nil {
 		dnsControl = dnscontrol.NewManager()
 	}
+	traffic := dependencies.TrafficInterceptor
+	if traffic == nil {
+		trafficManager, err := trafficinterception.NewManager(trafficConfigFromConfig(config), trafficinterception.Dependencies{
+			Logger:    dependencies.Logger,
+			Connector: dependencies.TrafficConnector,
+		})
+		if err != nil {
+			return nil, err
+		}
+		traffic = trafficManager
+	}
 	return &Manager{
 		logger:       dependencies.Logger,
 		config:       config,
 		resolver:     resolver,
 		server:       server,
 		dnsControl:   dnsControl,
+		traffic:      traffic,
 		readyTimeout: firstPositiveDuration(config.ReadyTimeout, defaultReadyTimeout),
 		status: Status{
 			DNSListenAddress: config.DNSListenAddress,
 			DNSServer:        config.DNSServer,
 			SyntheticIPCIDR:  config.SyntheticIPCIDR,
 			ResolverState:    dnsresolver.StatusWaiting,
+			TrafficState:     trafficinterception.StatusDisabled,
 		},
 	}, nil
 }
@@ -106,7 +139,17 @@ func (manager *Manager) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := manager.Clear(ctx); err != nil {
+		manager.logger.Warn("could not clear stale protected resource rules on startup", "error", err)
+	}
 	manager.setRunning(true)
+	if manager.traffic != nil {
+		go func() {
+			if err := manager.traffic.Run(ctx); err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
+				manager.setError(fmt.Errorf("traffic interception stopped: %w", err))
+			}
+		}()
+	}
 	err := manager.server.Run(ctx)
 	manager.setRunning(false)
 	if err != nil && !errors.Is(err, context.Canceled) && ctx.Err() == nil {
@@ -135,12 +178,29 @@ func (manager *Manager) ApplyCatalog(ctx context.Context, catalog ipc.CatalogInf
 		manager.setError(err)
 		return err
 	}
+	if manager.config.TrafficInterceptionEnabled {
+		mappings, err := manager.resolver.EnsureMappings()
+		if err != nil {
+			_ = manager.resolver.ApplyPolicy(dnsresolver.Policy{})
+			manager.setError(err)
+			return err
+		}
+		if err := manager.traffic.ApplyMappings(ctx, trafficMappingsFromDNS(mappings)); err != nil {
+			_ = manager.resolver.ApplyPolicy(dnsresolver.Policy{})
+			_ = manager.traffic.Clear(ctx)
+			manager.setError(err)
+			return fmt.Errorf("apply traffic interception rules: %w", err)
+		}
+	}
 	if err := manager.dnsControl.Apply(ctx, dnscontrol.Config{
 		DNSNames:  nrptNames,
 		DNSServer: manager.config.DNSServer,
 		HardenDoH: manager.config.HardenDoH,
 	}); err != nil {
 		_ = manager.resolver.ApplyPolicy(dnsresolver.Policy{})
+		if manager.config.TrafficInterceptionEnabled {
+			_ = manager.traffic.Clear(ctx)
+		}
 		manager.setError(err)
 		return fmt.Errorf("apply NRPT rules: %w", err)
 	}
@@ -160,13 +220,21 @@ func (manager *Manager) Clear(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var errs []error
 	if err := manager.resolver.ApplyPolicy(dnsresolver.Policy{}); err != nil {
-		manager.setError(err)
-		return err
+		errs = append(errs, err)
+	}
+	if manager.traffic != nil {
+		if err := manager.traffic.Clear(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("clear traffic interception rules: %w", err))
+		}
 	}
 	if err := manager.dnsControl.Apply(ctx, dnscontrol.Config{}); err != nil {
+		errs = append(errs, fmt.Errorf("clear NRPT rules: %w", err))
+	}
+	if err := errors.Join(errs...); err != nil {
 		manager.setError(err)
-		return fmt.Errorf("clear NRPT rules: %w", err)
+		return err
 	}
 	manager.setCatalogApplied(0)
 	manager.logger.Info("protected resource DNS rules cleared")
@@ -189,6 +257,16 @@ func (manager *Manager) Status() Status {
 	status.PolicyEpoch = resolverStatus.PolicyEpoch
 	if resolverStatus.LastError != "" {
 		status.LastError = resolverStatus.LastError
+	}
+	if manager.traffic != nil {
+		trafficStatus := manager.traffic.Status()
+		status.TrafficState = trafficStatus.State
+		status.TrafficProxyAddress = trafficStatus.ProxyLocalAddress
+		status.TrafficRuleCount = trafficStatus.RuleCount
+		status.WFPRuleState = trafficStatus.WFP.State
+		if trafficStatus.LastError != "" {
+			status.LastError = trafficStatus.LastError
+		}
 	}
 	if !running && status.LastError == "" && status.ResourceCount > 0 {
 		status.LastError = "local DNS resolver is not running"
@@ -266,6 +344,30 @@ func resolverPolicyFromCatalog(catalog ipc.CatalogInfo) dnsresolver.Policy {
 		PolicyEpoch: catalog.PolicyEpoch,
 		Resources:   resources,
 		TTLSeconds:  catalog.TTLSeconds,
+	}
+}
+
+func trafficMappingsFromDNS(mappings []dnsresolver.Mapping) []trafficinterception.ResourceMapping {
+	values := make([]trafficinterception.ResourceMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		values = append(values, trafficinterception.ResourceMapping{
+			ResourceID:  mapping.ResourceID,
+			FQDN:        mapping.FQDN,
+			Protocol:    mapping.Protocol,
+			Port:        mapping.Port,
+			SyntheticIP: mapping.SyntheticIP,
+		})
+	}
+	return values
+}
+
+func trafficConfigFromConfig(config Config) trafficinterception.Config {
+	return trafficinterception.Config{
+		Enabled:            config.TrafficInterceptionEnabled,
+		ProxyListenAddress: config.TrafficProxyListenAddress,
+		WFPDevicePath:      config.WFPDriverDevicePath,
+		FailClosed:         config.WFPFailClosed,
+		ReadyTimeout:       config.ReadyTimeout,
 	}
 }
 

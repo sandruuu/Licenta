@@ -19,6 +19,16 @@ export default function ListToolbar({
           className="h-11 w-full rounded-md border border-border bg-surface-secondary pl-10 pr-4 text-sm font-semibold text-text-primary placeholder:text-text-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-muted"
         />
       </div>
+      {(summary || children) && (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          {summary && (
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-text-muted">
+              {summary}
+            </span>
+          )}
+          {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+        </div>
+      )}
     </div>
   );
 }

@@ -154,7 +154,7 @@ func generateTestCertificates(t *testing.T) testCertificates {
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          bigSerial(t),
-		Subject:               pkix.Name{CommonName: "ZTNA Test CA"},
+		Subject:               pkix.Name{CommonName: "TrustCloud Test CA"},
 		NotBefore:             now.Add(-time.Minute),
 		NotAfter:              now.Add(time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,

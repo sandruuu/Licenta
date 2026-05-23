@@ -24,7 +24,7 @@ type pdpIdentityState struct {
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
-	log.Println("=== ZTNA PDP Service (PA + PE) ===")
+	log.Println("=== TrustCloud Service (PA + PE) ===")
 
 	cfg := loadConfig("config.json")
 	ensureDataDir(cfg)
@@ -138,7 +138,7 @@ func (s *pdpIdentityState) getCertificate(*tls.ClientHelloInfo) (*tls.Certificat
 }
 
 func waitForShutdown(ctx context.Context, stopChan chan struct{}) {
-	log.Println("=== ZTNA PDP running. Press Ctrl+C to stop. ===")
+	log.Println("=== TrustCloud running. Press Ctrl+C to stop. ===")
 	<-ctx.Done()
 
 	log.Println("\n=== Shutting down... ===")

@@ -37,7 +37,7 @@ func TestServerReturnsNXDOMAINForUnknownCatalogResource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	if err := resolver.ApplyPolicy(Policy{DNSSuffixes: []string{"example.test"}}); err != nil {
+	if err := resolver.ApplyPolicy(Policy{}); err != nil {
 		t.Fatalf("ApplyPolicy returned error: %v", err)
 	}
 	server, done, cancel := startTestServer(t, resolver)

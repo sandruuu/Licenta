@@ -11,7 +11,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gateway
-    container_name: ${GATEWAY_CONTAINER_NAME:-ztna-gateway}
+    container_name: ${GATEWAY_CONTAINER_NAME:-trustgateway}
     restart: unless-stopped
     extra_hosts:
       - "pdp:host-gateway"

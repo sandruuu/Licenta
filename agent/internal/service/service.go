@@ -10,6 +10,9 @@ import (
 	devicedata "agent/internal/service/device-data"
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
+	flowauthorization "agent/internal/service/flow-authorization"
+	gatewaytunnel "agent/internal/service/gateway-tunnel"
+	pdpclient "agent/internal/service/pdp-client"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
 )
@@ -36,6 +39,14 @@ type Config struct {
 	DeviceDataSyncChangeScanInterval time.Duration
 	EnrollmentStatePath              string
 	DeviceKeyName                    string
+	LocalDNSListenAddress            string
+	LocalDNSServer                   string
+	SyntheticIPCIDR                  string
+	HardenBrowserDoH                 bool
+	TrafficInterceptionEnabled       bool
+	TrafficProxyListenAddress        string
+	WFPDriverDevicePath              string
+	WFPFailClosed                    bool
 }
 
 type Dependencies struct {
@@ -49,14 +60,20 @@ type Dependencies struct {
 	DeviceIdentity              enrollment.DeviceIdentity
 	EnrollmentStore             enrollment.Store
 	UserSessionClient           usersession.Client
+	FlowAuthorizer              flowauthorization.Client
+	GatewayTunnel               gatewayTunnel
+	PDPClient                   *pdpclient.Client
 	Clock                       func() time.Time
 }
 
 type DeviceDataCollector = devicedata.Collector
 type DeviceDataWatcher = devicedata.Watcher
 type DeviceDataSyncClient = devicedatasync.Client
-type DeviceDataSyncClientConfig = devicedatasync.ClientConfig
 type DeviceDataSyncClientFactory = devicedatasync.ClientFactory
+type gatewayTunnel interface {
+	OpenResourceStream(context.Context, gatewaytunnel.ResourceStreamRequest) (net.Conn, error)
+	Status() gatewaytunnel.Status
+}
 type ProtectedResourcesManager interface {
 	Run(context.Context) error
 	ApplyCatalog(context.Context, ipc.CatalogInfo) error
@@ -75,6 +92,7 @@ type Service struct {
 	protectedResources  ProtectedResourcesManager
 	deviceIdentity      enrollment.DeviceIdentity
 	deviceDataSync      *devicedatasync.Runner
+	pdpClient           *pdpclient.Client
 	clock               func() time.Time
 	deviceData          deviceDataState
 	config              Config

@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
+	github.com/hashicorp/yamux v0.1.2
 	github.com/miekg/dns v1.1.72
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/sys v0.42.0

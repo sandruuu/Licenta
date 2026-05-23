@@ -159,7 +159,7 @@ func (m *OIDCManager) RegisterClient(client *OIDCClient) {
 // native public client. It has no shared secret and must use PKCE S256 with a
 // loopback redirect URI as recommended by RFC 8252 and RFC 7636.
 func (m *OIDCManager) RegisterNativeConnectAppClient() {
-	m.registerNativeEndpointClient(NativeConnectAppClientID, "ZTNA Connect-App")
+	m.registerNativeEndpointClient(NativeConnectAppClientID, "TrustAgent Connect-App")
 }
 
 func (m *OIDCManager) registerNativeEndpointClient(clientID, name string) {

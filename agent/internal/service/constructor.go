@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
+	flowauthorization "agent/internal/service/flow-authorization"
+	pdpclient "agent/internal/service/pdp-client"
+	protectedresources "agent/internal/service/protected-resources"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
 )
@@ -76,6 +80,10 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 	if deviceIdentity == nil {
 		deviceIdentity = enrollment.NewDefaultDeviceIdentity()
 	}
+	pdpClient := dependencies.PDPClient
+	if pdpClient == nil {
+		pdpClient = pdpclient.New(pdpClientConfig(config), deviceIdentity)
+	}
 	var deviceDataSync *devicedatasync.Runner
 	enrollmentManager := enrollment.NewManager(enrollmentConfig(config), enrollment.Dependencies{
 		Logger:         dependencies.Logger,
@@ -91,10 +99,10 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 	})
 	var service *Service
 	userSessionManager := usersession.NewManager(userSessionConfig(config), usersession.Dependencies{
-		Logger:         dependencies.Logger,
-		Client:         dependencies.UserSessionClient,
-		Enrollment:     enrollmentManager,
-		DeviceIdentity: deviceIdentity,
+		Logger:        dependencies.Logger,
+		Client:        dependencies.UserSessionClient,
+		ClientFactory: userSessionClientFactory(pdpClient),
+		Enrollment:    enrollmentManager,
 		DeviceDataSnapshot: func() ipc.DeviceDataReport {
 			if service == nil {
 				return ipc.DeviceDataReport{}
@@ -115,18 +123,32 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		},
 		Clock: dependencies.Clock,
 	})
+	resourceConnector := newResourceStreamConnector(resourceStreamConnectorConfig{
+		PDPCAFile:     config.PDPCAFile,
+		GatewayCAFile: config.PDPCAFile,
+	}, dependencies, enrollmentManager, userSessionManager, deviceIdentity, pdpClient)
+	protectedResources := dependencies.ProtectedResources
+	if protectedResources == nil {
+		if manager, err := protectedresources.NewManager(protectedResourcesConfig(config), protectedresources.Dependencies{
+			Logger:           dependencies.Logger,
+			TrafficConnector: resourceConnector,
+		}); err != nil {
+			dependencies.Logger.Warn("protected resources manager could not be initialized", "error", err)
+		} else {
+			protectedResources = manager
+		}
+	}
 	var syncCollector devicedatasync.Collector
 	if dependencies.DeviceDataCollector != nil {
 		syncCollector = deviceDataSyncCollector(&service)
 	}
 	deviceDataSync = devicedatasync.NewRunner(deviceDataSyncConfig(config), devicedatasync.Dependencies{
-		Logger:         dependencies.Logger,
-		Collector:      syncCollector,
-		Watcher:        dependencies.DeviceDataWatcher,
-		Enrollment:     enrollmentManager,
-		DeviceIdentity: deviceIdentity,
-		ClientFactory:  dependencies.DeviceDataSyncClientFactory,
-		Clock:          dependencies.Clock,
+		Logger:        dependencies.Logger,
+		Collector:     syncCollector,
+		Watcher:       dependencies.DeviceDataWatcher,
+		Enrollment:    enrollmentManager,
+		ClientFactory: deviceDataSyncClientFactory(dependencies.DeviceDataSyncClientFactory, pdpClient),
+		Clock:         dependencies.Clock,
 	})
 	service = &Service{
 		logger:              dependencies.Logger,
@@ -135,14 +157,80 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		deviceDataCollector: deviceDataCollectorFromDependencies(dependencies),
 		enrollment:          enrollmentManager,
 		userSessions:        userSessionManager,
-		protectedResources:  dependencies.ProtectedResources,
+		protectedResources:  protectedResources,
 		deviceIdentity:      deviceIdentity,
 		deviceDataSync:      deviceDataSync,
+		pdpClient:           pdpClient,
 		clock:               dependencies.Clock,
 		deviceData:          deviceDataState{Status: deviceDataStatus},
 		config:              config,
 	}
 	return service
+}
+
+func pdpClientConfig(config Config) pdpclient.Config {
+	return pdpclient.Config{
+		PDPGRPCEndpoint:  config.PDPGRPCEndpoint,
+		PDPTLSServerName: config.PDPTLSServerName,
+		PDPCAFile:        config.PDPCAFile,
+	}
+}
+
+func userSessionClientFactory(pdpClient *pdpclient.Client) usersession.ClientFactory {
+	if pdpClient == nil {
+		return func(context.Context, usersession.Config, enrollment.EnrollmentRecord) (usersession.Client, error) {
+			return nil, fmt.Errorf("shared PDP gRPC client is required for user session")
+		}
+	}
+	return func(ctx context.Context, _ usersession.Config, record enrollment.EnrollmentRecord) (usersession.Client, error) {
+		connection, err := pdpClient.Connection(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		return usersession.NewGRPCClientFromConnection(connection)
+	}
+}
+
+func deviceDataSyncClientFactory(custom DeviceDataSyncClientFactory, pdpClient *pdpclient.Client) DeviceDataSyncClientFactory {
+	if custom != nil {
+		return custom
+	}
+	if pdpClient == nil {
+		return func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return nil, fmt.Errorf("shared PDP gRPC client is required for device data sync")
+		}
+	}
+	return func(ctx context.Context, record enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+		connection, err := pdpClient.Connection(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		return devicedatasync.NewGRPCClientFromConnection(connection)
+	}
+}
+
+func flowAuthorizationClientFromPDP(ctx context.Context, pdpClient *pdpclient.Client, record enrollment.EnrollmentRecord) (flowauthorization.Client, error) {
+	if pdpClient == nil {
+		return nil, nil
+	}
+	connection, err := pdpClient.Connection(ctx, record)
+	if err != nil {
+		return nil, err
+	}
+	return flowauthorization.NewGRPCClientFromConnection(connection)
+}
+
+func protectedResourcesConfig(config Config) protectedresources.Config {
+	return protectedresources.Config{
+		DNSListenAddress:           config.LocalDNSListenAddress,
+		DNSServer:                  config.LocalDNSServer,
+		SyntheticIPCIDR:            config.SyntheticIPCIDR,
+		HardenDoH:                  config.HardenBrowserDoH,
+		TrafficInterceptionEnabled: config.TrafficInterceptionEnabled,
+		TrafficProxyListenAddress:  config.TrafficProxyListenAddress,
+		WFPDriverDevicePath:        config.WFPDriverDevicePath,
+		WFPFailClosed:              config.WFPFailClosed,
+	}
 }
 
 func deviceDataSyncCollector(service **Service) devicedatasync.Collector {
@@ -175,9 +263,6 @@ func enrollmentConfig(config Config) enrollment.Config {
 
 func userSessionConfig(config Config) usersession.Config {
 	return usersession.Config{
-		PDPGRPCEndpoint:   config.PDPGRPCEndpoint,
-		PDPTLSServerName:  config.PDPTLSServerName,
-		PDPCAFile:         config.PDPCAFile,
 		LoginTimeout:      config.LoginTimeout,
 		LoginPollInterval: config.LoginPollInterval,
 	}
@@ -185,11 +270,6 @@ func userSessionConfig(config Config) usersession.Config {
 
 func deviceDataSyncConfig(config Config) devicedatasync.Config {
 	return devicedatasync.Config{
-		Client: devicedatasync.ClientConfig{
-			PDPGRPCEndpoint:  config.PDPGRPCEndpoint,
-			PDPTLSServerName: config.PDPTLSServerName,
-			PDPCAFile:        config.PDPCAFile,
-		},
 		Interval:           config.DeviceDataSyncInterval,
 		ChangeScanInterval: config.DeviceDataSyncChangeScanInterval,
 	}

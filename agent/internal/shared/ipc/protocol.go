@@ -14,7 +14,6 @@ const (
 	OperationPing                       Operation = "Ping"
 	OperationGetStatus                  Operation = "GetStatus"
 	OperationGetDashboard               Operation = "GetDashboard"
-	OperationGetDeviceData              Operation = "GetDeviceData"
 	OperationStartEnrollmentInteractive Operation = "StartEnrollmentInteractive"
 	OperationStartUserLoginInteractive  Operation = "StartUserLoginInteractive"
 	OperationLogoutUserSession          Operation = "LogoutUserSession"
@@ -61,7 +60,6 @@ func SupportedOperations() map[Operation]struct{} {
 		OperationPing:                       {},
 		OperationGetStatus:                  {},
 		OperationGetDashboard:               {},
-		OperationGetDeviceData:              {},
 		OperationStartEnrollmentInteractive: {},
 		OperationStartUserLoginInteractive:  {},
 		OperationLogoutUserSession:          {},

@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+type testHandlerFunc func(context.Context, *Request) (*Response, error)
+
+func (handler testHandlerFunc) HandleIPC(ctx context.Context, request *Request) (*Response, error) {
+	return handler(ctx, request)
+}
+
 func TestFrameRoundTrip(t *testing.T) {
 	var buffer bytes.Buffer
 	if err := WriteFrame(&buffer, []byte("hello")); err != nil {
@@ -28,7 +34,7 @@ func TestClientServerPingRoundTrip(t *testing.T) {
 	defer clientConn.Close()
 
 	go func() {
-		_ = ServeConn(context.Background(), serverConn, HandlerFunc(func(ctx context.Context, request *Request) (*Response, error) {
+		_ = ServeConn(context.Background(), serverConn, testHandlerFunc(func(ctx context.Context, request *Request) (*Response, error) {
 			var ping PingRequest
 			if err := DecodeBody(request.Body, &ping); err != nil {
 				return nil, err

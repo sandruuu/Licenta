@@ -2,17 +2,15 @@ package enrollment
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/base64"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	pdptransport "agent/internal/service/pdp-transport"
+
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -28,36 +26,15 @@ type GRPCEnrollmentClient struct {
 }
 
 func NewGRPCEnrollmentClient(ctx context.Context, config Config) (*GRPCEnrollmentClient, error) {
-	target := strings.TrimSpace(config.PDPGRPCEndpoint)
-	if target == "" {
-		return nil, fmt.Errorf("pdp_grpc_endpoint is required for enrollment")
-	}
-	tlsConfig, err := enrollmentTLSConfig(config)
+	connection, err := pdptransport.NewClient(pdptransport.Config{
+		Endpoint:   config.PDPGRPCEndpoint,
+		ServerName: config.PDPTLSServerName,
+		CAFile:     config.PDPCAFile,
+	}, "enrollment")
 	if err != nil {
 		return nil, err
 	}
-	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	if err != nil {
-		return nil, fmt.Errorf("create PDP enrollment gRPC client: %w", err)
-	}
 	return &GRPCEnrollmentClient{connection: connection}, nil
-}
-
-func enrollmentTLSConfig(config Config) (*tls.Config, error) {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: strings.TrimSpace(config.PDPTLSServerName)}
-	if strings.TrimSpace(config.PDPCAFile) == "" {
-		return tlsConfig, nil
-	}
-	caPEM, err := os.ReadFile(strings.TrimSpace(config.PDPCAFile))
-	if err != nil {
-		return nil, fmt.Errorf("read pdp_ca_file: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("pdp_ca_file contains no certificates")
-	}
-	tlsConfig.RootCAs = pool
-	return tlsConfig, nil
 }
 
 func (client *GRPCEnrollmentClient) StartSession(ctx context.Context, request EnrollmentStartSessionRequest) (EnrollmentStartSessionResponse, error) {
@@ -204,4 +181,3 @@ func stringSliceField(fields map[string]any, name string) []string {
 	}
 	return result
 }
-

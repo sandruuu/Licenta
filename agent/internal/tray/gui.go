@@ -58,10 +58,6 @@ func currentProcessIdentity() processIdentity {
 	return identity
 }
 
-func GUIAssets() embed.FS {
-	return guiAssets
-}
-
 func runGUI(ctx context.Context, trayOptions Options, logger *slog.Logger) error {
 	if ctx == nil {
 		ctx = context.Background()

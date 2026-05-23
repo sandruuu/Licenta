@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	AgentTokenAudience      = "ztna-pdp"
-	AgentSessionAudience    = "ztna-agent-api"
-	AgentSessionPurpose     = "ztna.agent_session"
-	EnrollmentTokenAudience = "ztna-enrollment"
+	AgentTokenAudience      = "trustcloud"
+	AgentSessionAudience    = "trustagent-api"
+	AgentSessionPurpose     = "trustagent.session"
+	EnrollmentTokenAudience = "trustcloud-enrollment"
 	EnrollmentTokenPurpose  = "device_enrollment"
 	EnrollmentTokenTTL      = 5 * time.Minute
 )
@@ -75,7 +75,7 @@ type AgentSessionTokenRequest struct {
 	WindowsLogonSessionID       string
 	WindowsSessionID            string
 	CertificateThumbprintSHA256 string
-	PostureRevision             string
+	DeviceDataRevision          string
 	PolicyEpoch                 int
 	Scopes                      []string
 	ACR                         string
@@ -136,7 +136,7 @@ func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry, mfaTokenExpiry time.D
 		tokenExpiry:           tokenExpiry,
 		mfaTokenExpiry:        mfaTokenExpiry,
 		enrollmentTokenExpiry: enrollmentTTL,
-		issuer:                "ztna-pdp",
+		issuer:                "trustcloud",
 	}, nil
 }
 
@@ -160,10 +160,10 @@ func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce s
 	if err != nil {
 		return "", fmt.Errorf("generate JTI: %w", err)
 	}
-	acr := "urn:ztna:loa:1"
+	acr := "urn:trustcloud:loa:1"
 	amr := []string{"pwd"}
 	if mfaDone {
-		acr = "urn:ztna:loa:2"
+		acr = "urn:trustcloud:loa:2"
 		amr = []string{"pwd", "mfa"}
 	}
 
@@ -214,11 +214,11 @@ func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (st
 	}
 	scopes := req.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{"catalog:read", "posture:write", "flow:authorize", "session:renew", "session:revoke"}
+		scopes = []string{"catalog:read", "device-data:write", "flow:authorize", "session:renew", "session:revoke"}
 	}
 	acr := strings.TrimSpace(req.ACR)
 	if acr == "" {
-		acr = "urn:ztna:loa:1"
+		acr = "urn:trustcloud:loa:1"
 	}
 	amr := req.AMR
 	if len(amr) == 0 {
@@ -301,7 +301,7 @@ func (j *JWTManager) GenerateEnrollmentTokenForUserSID(userID, username, role, d
 		Purpose:  EnrollmentTokenPurpose,
 		Nonce:    strings.TrimSpace(nonce),
 		MFADone:  false,
-		ACR:      "urn:ztna:loa:1",
+		ACR:      "urn:trustcloud:loa:1",
 		AMR:      []string{"pwd"},
 	}
 

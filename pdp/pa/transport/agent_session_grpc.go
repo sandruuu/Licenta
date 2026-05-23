@@ -83,7 +83,7 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		LocalUserSIDHash:      localUserSIDHash,
 		WindowsLogonSessionID: windowsLogonSessionID,
 		WindowsSessionID:      windowsSessionID,
-		PostureRevision:       firstNonEmptyAgentSession(structFieldString(request, "device_data_revision"), structFieldString(request, "posture_revision")),
+		DeviceDataRevision:    strings.TrimSpace(structFieldString(request, "device_data_revision")),
 		ClaimSecretHash:       hashSessionSecret(claimSecret),
 		AuthURL:               service.server.publicOrigin() + "/browser/session/" + sessionID,
 		Status:                agentSessionStatusWaitingForUserLogin,
@@ -163,9 +163,9 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 		WindowsLogonSessionID:       session.WindowsLogonSessionID,
 		WindowsSessionID:            session.WindowsSessionID,
 		CertificateThumbprintSHA256: session.DeviceCertThumbprint,
-		PostureRevision:             session.PostureRevision,
+		DeviceDataRevision:          session.DeviceDataRevision,
 		PolicyEpoch:                 session.PolicyEpoch,
-		ACR:                         "urn:ztna:loa:2",
+		ACR:                         "urn:trustcloud:loa:2",
 		AMR:                         []string{"idp"},
 	})
 	if err != nil {
@@ -285,10 +285,6 @@ func (service *agentSessionGRPCService) validatedSessionRequest(ctx context.Cont
 }
 
 func catalogSnapshotStruct(snapshot catalog.Snapshot) (*structpb.Struct, error) {
-	suffixValues := make([]interface{}, 0, len(snapshot.DNSSuffixes))
-	for _, suffix := range snapshot.DNSSuffixes {
-		suffixValues = append(suffixValues, suffix)
-	}
 	resourceValues := make([]interface{}, 0, len(snapshot.Resources))
 	for _, resource := range snapshot.Resources {
 		resourceValues = append(resourceValues, map[string]interface{}{
@@ -303,7 +299,6 @@ func catalogSnapshotStruct(snapshot catalog.Snapshot) (*structpb.Struct, error) 
 	return structpb.NewStruct(map[string]interface{}{
 		"version":      snapshot.Version,
 		"resources":    resourceValues,
-		"dns_suffixes": suffixValues,
 		"ttl_seconds":  float64(snapshot.TTLSeconds),
 		"policy_epoch": snapshot.PolicyEpoch,
 	})

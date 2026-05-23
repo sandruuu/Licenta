@@ -29,7 +29,7 @@ func TestServeConnAttachesNamedPipePeerIdentity(t *testing.T) {
 	defer cancel()
 	identityCh := make(chan PeerIdentity, 1)
 	go func() {
-		_ = Serve(ctx, listener, HandlerFunc(func(ctx context.Context, request *Request) (*Response, error) {
+		_ = Serve(ctx, listener, testHandlerFunc(func(ctx context.Context, request *Request) (*Response, error) {
 			identity, ok := PeerIdentityFromContext(ctx)
 			if !ok {
 				return NewErrorResponse(request.ID, ErrorCodeInternal, "missing peer identity"), nil

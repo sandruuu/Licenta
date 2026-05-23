@@ -42,7 +42,7 @@ func TestAuthTokenUsesAgentAudience(t *testing.T) {
 	if len(claims.Audience) != 1 || claims.Audience[0] != AgentTokenAudience {
 		t.Fatalf("audience = %v", claims.Audience)
 	}
-	if _, err := manager.ParseAuthTokenForAudience(authToken, "ztna-gateway"); err == nil {
+	if _, err := manager.ParseAuthTokenForAudience(authToken, "trustgateway"); err == nil {
 		t.Fatalf("ParseAuthTokenForAudience accepted gateway audience")
 	}
 }

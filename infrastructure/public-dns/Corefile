@@ -1,5 +1,5 @@
-ztna.test:53 {
-    file /etc/coredns/db.ztna.test
+trustcloud.test:53 {
+    file /etc/coredns/db.trustcloud.zone
     log
     errors
 }

@@ -85,8 +85,8 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		Process:      req.Process,
 	}
 	if pa != nil && pa.Store != nil {
-		if posture, ok := pa.Store.GetDevicePosture(deviceID); ok {
-			accessReq.DeviceHealth = deviceHealthFromPosture(posture)
+		if deviceData, ok := pa.Store.GetDeviceData(deviceID); ok {
+			accessReq.DeviceHealth = deviceHealthFromData(deviceData)
 		} else if health, ok := pa.Store.GetDeviceHealth(deviceID); ok {
 			accessReq.DeviceHealth = health
 		}
@@ -319,7 +319,7 @@ func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Reso
 	return gateway, endpoint, nil
 }
 
-func deviceHealthFromPosture(report *models.DevicePostureReport) *models.DeviceHealthReport {
+func deviceHealthFromData(report *models.DeviceDataReport) *models.DeviceHealthReport {
 	if report == nil {
 		return nil
 	}

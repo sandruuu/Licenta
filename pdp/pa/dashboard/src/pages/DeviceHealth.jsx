@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Clock3, RefreshCw, MonitorSmartphone, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { getDeviceDataReport, getDeviceDataReports, getEnrollments } from '../api';
 import PageHeader from '../components/ui/PageHeader';
@@ -17,8 +17,8 @@ function formatTime(ts) {
   });
 }
 
-function postureInfo(checks = [], row = {}) {
-  if (!row.has_report || checks.length === 0) return { text: 'No telemetry', variant: 'neutral', rank: 'unknown' };
+function deviceDataInfo(checks = [], row = {}) {
+  if (!row.has_report || checks.length === 0) return { text: 'No data', variant: 'neutral', rank: 'unknown' };
   if (checks.some((c) => c.status === 'critical')) return { text: 'Critical', variant: 'danger', rank: 'critical' };
   if (checks.some((c) => c.status === 'warning' || c.status === 'unavailable')) return { text: 'Warning', variant: 'warning', rank: 'warning' };
   return { text: 'Good', variant: 'success', rank: 'good' };
@@ -63,10 +63,10 @@ function enrollmentToDeviceRow(enrollment) {
   };
 }
 
-function mergeDeviceRows(postureReports, enrollments) {
+function mergeDeviceRows(deviceDataReports, enrollments) {
   const byDeviceID = new Map();
 
-  for (const report of postureReports) {
+  for (const report of deviceDataReports) {
     if (!report?.device_id) continue;
     byDeviceID.set(report.device_id, { ...report, has_report: true });
   }
@@ -104,7 +104,7 @@ export default function DeviceHealth() {
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [error, setError] = useState('');
 
-  const loadList = async () => {
+  const loadList = useCallback(async () => {
     setLoadingList(true);
     setError('');
     try {
@@ -121,17 +121,18 @@ export default function DeviceHealth() {
         return;
       }
 
-      const keep = list.find((r) => r.device_id === selectedDevice);
-      const next = keep?.device_id || list[0].device_id;
-      setSelectedDevice(next);
+      setSelectedDevice((current) => {
+        const keep = list.find((r) => r.device_id === current);
+        return keep?.device_id || list[0].device_id;
+      });
     } catch (e) {
       setError(e?.message || 'Failed to load device data');
     } finally {
       setLoadingList(false);
     }
-  };
+  }, []);
 
-  const loadDetail = async (deviceId) => {
+  const loadDetail = useCallback(async (deviceId) => {
     if (!deviceId) {
       setSelectedReport(null);
       return;
@@ -152,17 +153,17 @@ export default function DeviceHealth() {
     } finally {
       setLoadingDetail(false);
     }
-  };
+  }, [reports]);
 
   useEffect(() => {
-    loadList();
-  }, []);
+    void loadList();
+  }, [loadList]);
 
   useEffect(() => {
     if (selectedDevice) {
-      loadDetail(selectedDevice);
+      void loadDetail(selectedDevice);
     }
-  }, [selectedDevice, reports]);
+  }, [selectedDevice, loadDetail]);
 
   const summary = useMemo(() => {
     const total = reports.length;
@@ -172,7 +173,7 @@ export default function DeviceHealth() {
     let unknown = 0;
 
     for (const report of reports) {
-      const label = postureInfo(report.checks || [], report);
+      const label = deviceDataInfo(report.checks || [], report);
       if (label.rank === 'good') good++;
       else if (label.rank === 'warning') warning++;
       else if (label.rank === 'critical') critical++;
@@ -204,14 +205,14 @@ export default function DeviceHealth() {
       key: 'status',
       label: 'Status',
       render: (v, row) => {
-        const info = postureInfo(row.checks || [], row);
+        const info = deviceDataInfo(row.checks || [], row);
         return <Badge variant={info.variant}>{info.text}</Badge>;
       },
     },
     {
       key: 'reported_at',
       label: 'Last Report',
-      render: (v, row) => <span className="text-mono">{row.has_report ? formatTime(v) : 'No telemetry'}</span>,
+      render: (v, row) => <span className="text-mono">{row.has_report ? formatTime(v) : 'No data'}</span>,
     },
     {
       key: 'enrolled_at',
@@ -250,10 +251,10 @@ export default function DeviceHealth() {
       {/* Stat Cards */}
       <div className="grid grid-cols-5 gap-4 mb-6">
         <StatCard label="Total Devices" value={summary.total} icon={MonitorSmartphone} color="blue" />
-        <StatCard label="Good Posture" value={summary.good} icon={ShieldCheck} color="green" />
+        <StatCard label="Good Data" value={summary.good} icon={ShieldCheck} color="green" />
         <StatCard label="Warning" value={summary.warning} icon={ShieldAlert} color="orange" />
         <StatCard label="Critical" value={summary.critical} icon={ShieldAlert} color="red" />
-        <StatCard label="No Telemetry" value={summary.unknown} icon={Clock3} color="blue" />
+        <StatCard label="No Data" value={summary.unknown} icon={Clock3} color="blue" />
       </div>
 
       {/* Device List */}
@@ -294,8 +295,8 @@ export default function DeviceHealth() {
             columns={detailColumns}
             data={selectedReport ? selectedReport.checks || [] : []}
             loading={loadingDetail}
-            emptyTitle={!selectedDevice ? 'Select a device to view checks.' : selectedReport && !selectedReport.has_report ? 'No telemetry reported yet.' : 'No checks found for this report.'}
-            emptyMessage={!selectedDevice ? 'Click on a device above to view its posture checks.' : selectedReport && !selectedReport.has_report ? 'The device is enrolled, but it has not sent posture checks yet.' : 'No checks found for this report.'}
+            emptyTitle={!selectedDevice ? 'Select a device to view checks.' : selectedReport && !selectedReport.has_report ? 'No device data reported yet.' : 'No checks found for this report.'}
+            emptyMessage={!selectedDevice ? 'Click on a device above to view its checks.' : selectedReport && !selectedReport.has_report ? 'The device is enrolled, but it has not sent device data yet.' : 'No checks found for this report.'}
           />
         </div>
       </div>

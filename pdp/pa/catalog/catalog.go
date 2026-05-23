@@ -21,13 +21,12 @@ type Service struct {
 }
 
 type Snapshot struct {
-	Version       string          `json:"version"`
-	DNSSuffixes   []string        `json:"dns_suffixes"`
-	Resources     []ResourceEntry `json:"resources"`
-	TTLSeconds    int             `json:"ttl_seconds"`
-	NotModified   bool            `json:"not_modified"`
-	PolicyEpoch   string          `json:"policy_epoch"`
-	PosturePolicy PosturePolicy   `json:"posture_policy,omitempty"`
+	Version          string           `json:"version"`
+	Resources        []ResourceEntry  `json:"resources"`
+	TTLSeconds       int              `json:"ttl_seconds"`
+	NotModified      bool             `json:"not_modified"`
+	PolicyEpoch      string           `json:"policy_epoch"`
+	DeviceDataPolicy DeviceDataPolicy `json:"device_data_policy,omitempty"`
 }
 
 type ResourceEntry struct {
@@ -37,7 +36,7 @@ type ResourceEntry struct {
 	Port       int    `json:"port"`
 }
 
-type PosturePolicy struct {
+type DeviceDataPolicy struct {
 	RequiredChecks      []string `json:"required_checks,omitempty"`
 	RequiredCheckStatus string   `json:"required_check_status,omitempty"`
 }
@@ -51,7 +50,7 @@ func NewService(store *store.Store, ttlSeconds ...int) *Service {
 }
 
 func EmptySnapshot() Snapshot {
-	return newSnapshot(nil, nil, PosturePolicy{}, defaultTTLSeconds)
+	return newSnapshot(nil, DeviceDataPolicy{}, defaultTTLSeconds)
 }
 
 func (service *Service) BuildForTenantUser(tenantID string, user *models.User, groupIDs, groupNames []string) Snapshot {
@@ -68,10 +67,9 @@ func (service *Service) BuildForTenantUser(tenantID string, user *models.User, g
 
 	resources := service.store.ListResourcesByTenant(tenantID)
 	accessible := service.accessibleResources(tenantID, user, groupIDs, groupNames, resources)
-	suffixes := buildSuffixes(accessible)
 	entries := buildResources(accessible)
-	posturePolicy := buildPosturePolicyForUser(service.store, tenantID, user, groupIDs, groupNames, accessible)
-	return newSnapshot(suffixes, entries, posturePolicy, service.ttlSeconds)
+	deviceDataPolicy := buildDeviceDataPolicyForUser(service.store, tenantID, user, groupIDs, groupNames, accessible)
+	return newSnapshot(entries, deviceDataPolicy, service.ttlSeconds)
 }
 
 func (service *Service) accessibleResources(tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) []*models.Resource {
@@ -183,39 +181,20 @@ func ResourcePort(resource *models.Resource, protocol string) int {
 	}
 }
 
-func newSnapshot(suffixes []string, resources []ResourceEntry, posturePolicy PosturePolicy, ttlSeconds int) Snapshot {
+func newSnapshot(resources []ResourceEntry, deviceDataPolicy DeviceDataPolicy, ttlSeconds int) Snapshot {
 	if ttlSeconds <= 0 {
 		ttlSeconds = defaultTTLSeconds
 	}
-	posturePolicy = normalizePosturePolicy(posturePolicy)
-	version := version(suffixes, resources, posturePolicy)
+	deviceDataPolicy = normalizeDeviceDataPolicy(deviceDataPolicy)
+	version := version(resources, deviceDataPolicy)
 	return Snapshot{
-		Version:       version,
-		DNSSuffixes:   suffixes,
-		Resources:     resources,
-		TTLSeconds:    ttlSeconds,
-		NotModified:   false,
-		PolicyEpoch:   version,
-		PosturePolicy: posturePolicy,
+		Version:          version,
+		Resources:        resources,
+		TTLSeconds:       ttlSeconds,
+		NotModified:      false,
+		PolicyEpoch:      version,
+		DeviceDataPolicy: deviceDataPolicy,
 	}
-}
-
-func buildSuffixes(resources []*models.Resource) []string {
-	suffixSet := make(map[string]struct{})
-	for _, resource := range resources {
-		if resource == nil || !resource.Enabled {
-			continue
-		}
-		for _, suffix := range suffixesForResource(resource) {
-			suffixSet[suffix] = struct{}{}
-		}
-	}
-	suffixes := make([]string, 0, len(suffixSet))
-	for suffix := range suffixSet {
-		suffixes = append(suffixes, suffix)
-	}
-	sort.Strings(suffixes)
-	return suffixes
 }
 
 func buildResources(resources []*models.Resource) []ResourceEntry {
@@ -245,19 +224,18 @@ func buildResources(resources []*models.Resource) []ResourceEntry {
 	return entries
 }
 
-func version(suffixes []string, resources []ResourceEntry, posturePolicy PosturePolicy) string {
+func version(resources []ResourceEntry, deviceDataPolicy DeviceDataPolicy) string {
 	payload, _ := json.Marshal(struct {
-		DNSSuffixes   []string        `json:"dns_suffixes"`
-		Resources     []ResourceEntry `json:"resources"`
-		PosturePolicy PosturePolicy   `json:"posture_policy"`
-	}{DNSSuffixes: suffixes, Resources: resources, PosturePolicy: normalizePosturePolicy(posturePolicy)})
+		Resources        []ResourceEntry  `json:"resources"`
+		DeviceDataPolicy DeviceDataPolicy `json:"device_data_policy"`
+	}{Resources: resources, DeviceDataPolicy: normalizeDeviceDataPolicy(deviceDataPolicy)})
 	fingerprint := sha256.Sum256(payload)
 	return hex.EncodeToString(fingerprint[:16])
 }
 
-func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) PosturePolicy {
+func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) DeviceDataPolicy {
 	if dataStore == nil || user == nil {
-		return PosturePolicy{}
+		return DeviceDataPolicy{}
 	}
 	required := map[string]struct{}{}
 	requiredStatus := ""
@@ -266,7 +244,7 @@ func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *mo
 			continue
 		}
 		for _, rule := range dataStore.ListPolicyRulesForAccessGroups(tenantID, resource.ID, groupIDs, groupNames) {
-			if rule == nil || !rule.Enabled || !posturePolicyRuleAction(rule.Action) {
+			if rule == nil || !rule.Enabled || !deviceDataPolicyRuleAction(rule.Action) {
 				continue
 			}
 			if !catalogRuleMatchesIdentity(rule, user, groupIDs, groupNames, resource) {
@@ -279,7 +257,7 @@ func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *mo
 			for _, check := range checks {
 				required[check] = struct{}{}
 			}
-			status := normalizePostureStatus(rule.Conditions.RequiredCheckStatus)
+			status := normalizeDeviceDataStatus(rule.Conditions.RequiredCheckStatus)
 			if status == "" {
 				status = "good"
 			}
@@ -289,7 +267,7 @@ func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *mo
 		}
 	}
 	if len(required) == 0 {
-		return PosturePolicy{}
+		return DeviceDataPolicy{}
 	}
 	checks := make([]string, 0, len(required))
 	for check := range required {
@@ -299,24 +277,24 @@ func buildPosturePolicyForUser(dataStore *store.Store, tenantID string, user *mo
 	if requiredStatus == "" {
 		requiredStatus = "good"
 	}
-	return PosturePolicy{RequiredChecks: checks, RequiredCheckStatus: requiredStatus}
+	return DeviceDataPolicy{RequiredChecks: checks, RequiredCheckStatus: requiredStatus}
 }
 
-func posturePolicyRuleAction(action string) bool {
+func deviceDataPolicyRuleAction(action string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
 	return action == "allow" || action == "mfa_required"
 }
 
-func normalizePosturePolicy(policy PosturePolicy) PosturePolicy {
+func normalizeDeviceDataPolicy(policy DeviceDataPolicy) DeviceDataPolicy {
 	checks := normalizeCheckNames(policy.RequiredChecks)
 	if len(checks) == 0 {
-		return PosturePolicy{}
+		return DeviceDataPolicy{}
 	}
-	status := normalizePostureStatus(policy.RequiredCheckStatus)
+	status := normalizeDeviceDataStatus(policy.RequiredCheckStatus)
 	if status == "" {
 		status = "good"
 	}
-	return PosturePolicy{RequiredChecks: checks, RequiredCheckStatus: status}
+	return DeviceDataPolicy{RequiredChecks: checks, RequiredCheckStatus: status}
 }
 
 func normalizeCheckNames(values []string) []string {
@@ -336,7 +314,7 @@ func normalizeCheckNames(values []string) []string {
 	return checks
 }
 
-func normalizePostureStatus(status string) string {
+func normalizeDeviceDataStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "good", "warning", "critical", "unavailable":
 		return strings.ToLower(strings.TrimSpace(status))
@@ -383,69 +361,6 @@ func containsInt(values []int, candidate int) bool {
 		}
 	}
 	return false
-}
-
-func suffixesForResource(resource *models.Resource) []string {
-	if resource == nil {
-		return nil
-	}
-	suffixSet := make(map[string]struct{})
-	if resource.Metadata != nil {
-		for _, key := range []string{"dns_suffixes", "dns_suffix", "catalog_dns_suffixes", "catalog_dns_suffix", "nrpt_suffixes", "nrpt_suffix"} {
-			for _, candidate := range splitSuffixes(resource.Metadata[key]) {
-				if suffix := normalizeSuffix(candidate); suffix != "" {
-					suffixSet[suffix] = struct{}{}
-				}
-			}
-		}
-	}
-	if len(suffixSet) == 0 {
-		if suffix := parentSuffix(resourceFQDN(resource)); suffix != "" {
-			suffixSet[suffix] = struct{}{}
-		}
-	}
-	suffixes := make([]string, 0, len(suffixSet))
-	for suffix := range suffixSet {
-		suffixes = append(suffixes, suffix)
-	}
-	sort.Strings(suffixes)
-	return suffixes
-}
-
-func splitSuffixes(raw string) []string {
-	return strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ';' || r == '\n' || r == '\t' || r == ' '
-	})
-}
-
-func parentSuffix(host string) string {
-	host = normalizeHost(host)
-	if host == "" {
-		return ""
-	}
-	parts := strings.Split(host, ".")
-	if len(parts) < 3 {
-		return ""
-	}
-	return normalizeSuffix(strings.Join(parts[1:], "."))
-}
-
-func normalizeSuffix(raw string) string {
-	suffix := normalizeHost(strings.TrimPrefix(strings.TrimSpace(raw), "*."))
-	suffix = strings.TrimPrefix(strings.TrimSpace(suffix), ".")
-	if suffix == "" || suffix == "localhost" || net.ParseIP(suffix) != nil {
-		return ""
-	}
-	parts := strings.Split(suffix, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	for _, part := range parts {
-		if part == "" || strings.ContainsAny(part, "*:_/") {
-			return ""
-		}
-	}
-	return suffix
 }
 
 func resourceFQDN(resource *models.Resource) string {

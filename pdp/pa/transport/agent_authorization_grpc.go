@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	agentAuthorizationGRPCServiceName   = "ztna.agent.AgentAuthorizationService"
+	agentAuthorizationGRPCServiceName   = "trustcloud.agent.AgentAuthorizationService"
 	agentAuthorizationGRPCAuthorizePath = "/" + agentAuthorizationGRPCServiceName + "/AuthorizeResource"
 )
 

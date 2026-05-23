@@ -431,10 +431,10 @@ export default function OrganizationDetail() {
             <FormInput value={idpForm.name || ''} onChange={(event) => setIdPForm({ ...idpForm, name: event.target.value })} placeholder="Keycloak" />
           </FormField>
           <FormField label="OIDC client ID" className="mb-3">
-            <FormInput value={idpForm.client_id || ''} onChange={(event) => setIdPForm({ ...idpForm, client_id: event.target.value })} placeholder="ztna-pdp" className="font-mono" />
+            <FormInput value={idpForm.client_id || ''} onChange={(event) => setIdPForm({ ...idpForm, client_id: event.target.value })} placeholder="trustcloud" className="font-mono" />
           </FormField>
           <FormField label="Issuer URL" className="mb-3 md:col-span-2">
-            <FormInput value={idpForm.issuer || ''} onChange={(event) => setIdPForm({ ...idpForm, issuer: event.target.value })} placeholder="http://keycloak:8080/realms/ztna-lab" className="font-mono" />
+            <FormInput value={idpForm.issuer || ''} onChange={(event) => setIdPForm({ ...idpForm, issuer: event.target.value })} placeholder="http://keycloak:8080/realms/trustcloud-lab" className="font-mono" />
           </FormField>
           <FormField label="OIDC client secret" className="mb-3">
             <FormInput type="password" value={idpForm.client_secret || ''} onChange={(event) => setIdPForm({ ...idpForm, client_secret: event.target.value })} placeholder="Required for confidential clients" />

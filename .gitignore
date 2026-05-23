@@ -1,5 +1,5 @@
 # ============================================================
-#  ZTNA — Root .gitignore
+#  TrustCloud — Root .gitignore
 #  Generated after full project analysis (2026-05-11)
 # ============================================================
 
@@ -38,9 +38,23 @@
 # ── Build output ──
 build/bin/
 agent/build/
+agent/wfp-driver/x64/
+agent/wfp-driver/trustagent_wfp/
+infrastructure/vault/state/
 dist/
 dist-ssr/
 frontend/dist/
+
+# ── WFP driver generated artifacts ──
+agent/wfp-driver/**/*.tlog/
+agent/wfp-driver/**/*.obj
+agent/wfp-driver/**/*.pdb
+agent/wfp-driver/**/*.sys
+agent/wfp-driver/**/*.cat
+agent/wfp-driver/**/*.cer
+agent/wfp-driver/**/*.recipe
+agent/wfp-driver/**/*.lastbuildstate
+agent/wfp-driver/**/*.FileListAbsolute.txt
 
 # ── Node.js dependencies ──
 node_modules/

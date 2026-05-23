@@ -2,6 +2,7 @@ package protectedresources
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -11,6 +12,7 @@ import (
 
 	dnscontrol "agent/internal/service/dns-control"
 	dnsresolver "agent/internal/service/dns-resolver"
+	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/shared/ipc"
 
 	"github.com/miekg/dns"
@@ -42,8 +44,7 @@ func TestManagerAppliesCatalogToResolverAndNRPT(t *testing.T) {
 	}()
 
 	catalog := ipc.CatalogInfo{
-		Version:     "cat-1",
-		DNSSuffixes: []string{"Internal.Example"},
+		Version: "cat-1",
 		Resources: []ipc.CatalogResource{{
 			ResourceID: "res-1",
 			FQDN:       "app.internal.example",
@@ -93,30 +94,164 @@ func TestManagerClearsCatalogAndNRPT(t *testing.T) {
 	}
 }
 
-func TestManagerDoesNotCreateNRPTFromSuffixesOnly(t *testing.T) {
+func TestManagerClearsStaleRulesOnRun(t *testing.T) {
 	nrpt := &fakeDNSControl{}
-	manager, err := NewManager(Config{DNSListenAddress: "127.0.0.1:0"}, Dependencies{
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DNSControl: nrpt,
+	traffic := &fakeTrafficInterceptor{}
+	manager, err := NewManager(Config{
+		DNSListenAddress:           "127.0.0.1:0",
+		TrafficInterceptionEnabled: true,
+		TrafficProxyListenAddress:  "127.0.0.1:0",
+	}, Dependencies{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DNSControl:         nrpt,
+		TrafficInterceptor: traffic,
 	})
 	if err != nil {
 		t.Fatalf("NewManager returned error: %v", err)
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+	waitForManagerDNS(t, manager)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	applied := nrpt.first()
+	if len(applied.DNSNames) != 0 || applied.DNSServer != "" {
+		t.Fatalf("startup clear NRPT config = %+v", applied)
+	}
+	if traffic.clearCount() == 0 {
+		t.Fatalf("traffic interceptor was not cleared on startup")
+	}
+}
+
+func TestManagerClearAttemptsNRPTEvenWhenTrafficClearFails(t *testing.T) {
+	nrpt := &fakeDNSControl{}
+	traffic := &fakeTrafficInterceptor{clearErr: errors.New("driver unavailable")}
+	manager, err := NewManager(Config{
+		DNSListenAddress:           "127.0.0.1:0",
+		TrafficInterceptionEnabled: true,
+	}, Dependencies{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DNSControl:         nrpt,
+		TrafficInterceptor: traffic,
+	})
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	if err := manager.Clear(context.Background()); err == nil {
+		t.Fatalf("Clear returned nil, want traffic clear error")
+	}
+	applied := nrpt.last()
+	if len(applied.DNSNames) != 0 || applied.DNSServer != "" {
+		t.Fatalf("NRPT clear was not attempted after traffic error: %+v", applied)
+	}
+}
+
+func TestManagerAppliesTrafficInterceptionMappingsWhenEnabled(t *testing.T) {
+	nrpt := &fakeDNSControl{}
+	traffic := &fakeTrafficInterceptor{}
+	manager, err := NewManager(Config{
+		DNSListenAddress:           "127.0.0.1:0",
+		TrafficInterceptionEnabled: true,
+		TrafficProxyListenAddress:  "127.0.0.1:18787",
+		SyntheticIPCIDR:            dnsresolver.DefaultCGNATCIDR,
+		ReadyTimeout:               2 * time.Second,
+	}, Dependencies{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DNSControl:         nrpt,
+		TrafficInterceptor: traffic,
+	})
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+	waitForManagerDNS(t, manager)
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	}()
+
 	if err := manager.ApplyCatalog(context.Background(), ipc.CatalogInfo{
-		Version:     "cat-empty",
-		DNSSuffixes: []string{"internal.example"},
+		Version: "cat-traffic",
+		Resources: []ipc.CatalogResource{{
+			ResourceID: "res-1",
+			FQDN:       "app.internal.example",
+			Protocol:   "tcp",
+			Port:       443,
+		}},
+		TTLSeconds: 60,
 	}); err != nil {
 		t.Fatalf("ApplyCatalog returned error: %v", err)
 	}
-	applied := nrpt.last()
-	if len(applied.DNSNames) != 0 {
-		t.Fatalf("NRPT config = %+v, want no rules from suffix-only catalog", applied)
+	mappings := traffic.last()
+	if len(mappings) != 1 {
+		t.Fatalf("traffic mappings = %+v, want one mapping", mappings)
+	}
+	if mappings[0].ResourceID != "res-1" || mappings[0].FQDN != "app.internal.example" || mappings[0].Port != 443 {
+		t.Fatalf("traffic mapping = %+v", mappings[0])
+	}
+	if net.ParseIP(mappings[0].SyntheticIP) == nil {
+		t.Fatalf("traffic mapping synthetic IP is invalid: %+v", mappings[0])
 	}
 }
 
 type fakeDNSControl struct {
 	mu      sync.Mutex
 	applied []dnscontrol.Config
+}
+
+type fakeTrafficInterceptor struct {
+	mu       sync.Mutex
+	applied  [][]trafficinterception.ResourceMapping
+	cleared  int
+	runCount int
+	clearErr error
+}
+
+func (interceptor *fakeTrafficInterceptor) Run(ctx context.Context) error {
+	interceptor.mu.Lock()
+	interceptor.runCount++
+	interceptor.mu.Unlock()
+	<-ctx.Done()
+	return nil
+}
+
+func (interceptor *fakeTrafficInterceptor) ApplyMappings(_ context.Context, mappings []trafficinterception.ResourceMapping) error {
+	interceptor.mu.Lock()
+	defer interceptor.mu.Unlock()
+	copyValue := append([]trafficinterception.ResourceMapping(nil), mappings...)
+	interceptor.applied = append(interceptor.applied, copyValue)
+	return nil
+}
+
+func (interceptor *fakeTrafficInterceptor) Clear(context.Context) error {
+	interceptor.mu.Lock()
+	defer interceptor.mu.Unlock()
+	interceptor.cleared++
+	return interceptor.clearErr
+}
+
+func (interceptor *fakeTrafficInterceptor) Status() trafficinterception.Status {
+	return trafficinterception.Status{State: trafficinterception.StatusReady}
+}
+
+func (interceptor *fakeTrafficInterceptor) last() []trafficinterception.ResourceMapping {
+	interceptor.mu.Lock()
+	defer interceptor.mu.Unlock()
+	if len(interceptor.applied) == 0 {
+		return nil
+	}
+	return append([]trafficinterception.ResourceMapping(nil), interceptor.applied[len(interceptor.applied)-1]...)
 }
 
 func (control *fakeDNSControl) Apply(_ context.Context, config dnscontrol.Config) error {
@@ -135,20 +270,30 @@ func (control *fakeDNSControl) last() dnscontrol.Config {
 	return control.applied[len(control.applied)-1]
 }
 
+func (control *fakeDNSControl) first() dnscontrol.Config {
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if len(control.applied) == 0 {
+		return dnscontrol.Config{}
+	}
+	return control.applied[0]
+}
+
+func (interceptor *fakeTrafficInterceptor) clearCount() int {
+	interceptor.mu.Lock()
+	defer interceptor.mu.Unlock()
+	return interceptor.cleared
+}
+
 func waitForManagerDNS(t *testing.T, manager *Manager) {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-deadline:
-			t.Fatalf("local DNS resolver did not publish an address")
-		case <-ticker.C:
-			if manager.LocalDNSAddress() != "" {
-				return
-			}
-		}
+	select {
+	case <-time.After(2 * time.Second):
+		t.Fatalf("local DNS resolver did not become ready")
+	case <-manager.server.Ready():
+	}
+	if manager.LocalDNSAddress() == "" {
+		t.Fatalf("local DNS resolver did not publish an address; status=%+v", manager.Status())
 	}
 }
 

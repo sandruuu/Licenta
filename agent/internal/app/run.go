@@ -7,7 +7,6 @@ import (
 	"agent/internal/service"
 	devicedata "agent/internal/service/device-data"
 	"agent/internal/service/host"
-	protectedresources "agent/internal/service/protected-resources"
 	"agent/internal/tray"
 )
 
@@ -20,15 +19,10 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		protectedResources, err := protectedresources.NewManager(protectedResourcesConfigFromConfig(config), protectedresources.Dependencies{Logger: logger})
-		if err != nil {
-			return err
-		}
 		svc := service.New(serviceConfigFromConfig(config), service.Dependencies{
 			Logger:              logger,
 			DeviceDataCollector: devicedata.NewDefaultCollector(logger),
 			DeviceDataWatcher:   devicedata.NewDefaultWatcher(logger),
-			ProtectedResources:  protectedResources,
 		})
 		return host.RunService(host.ServiceName, svc.Run, logger)
 	}
@@ -37,15 +31,6 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	return tray.Run(ctx, trayOptionsFromConfig(config), logger)
-}
-
-func protectedResourcesConfigFromConfig(config ServiceConfig) protectedresources.Config {
-	return protectedresources.Config{
-		DNSListenAddress: config.LocalDNSListenAddress,
-		DNSServer:        config.LocalDNSServer,
-		SyntheticIPCIDR:  config.SyntheticIPCIDR,
-		HardenDoH:        config.HardenBrowserDoH,
-	}
 }
 
 func serviceConfigFromConfig(config ServiceConfig) service.Config {
@@ -58,6 +43,14 @@ func serviceConfigFromConfig(config ServiceConfig) service.Config {
 		DeviceDataSyncInterval:           config.DeviceDataSyncInterval,
 		DeviceDataSyncChangeScanInterval: config.DeviceDataSyncChangeScanInterval,
 		EnrollmentStatePath:              config.EnrollmentStatePath,
+		LocalDNSListenAddress:            config.LocalDNSListenAddress,
+		LocalDNSServer:                   config.LocalDNSServer,
+		SyntheticIPCIDR:                  config.SyntheticIPCIDR,
+		HardenBrowserDoH:                 config.HardenBrowserDoH,
+		TrafficInterceptionEnabled:       config.TrafficInterceptionEnabled,
+		TrafficProxyListenAddress:        config.TrafficProxyListenAddress,
+		WFPDriverDevicePath:              config.WFPDriverDevicePath,
+		WFPFailClosed:                    config.WFPFailClosed,
 	}
 }
 

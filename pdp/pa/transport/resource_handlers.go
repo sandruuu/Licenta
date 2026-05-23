@@ -123,9 +123,9 @@ func (s *Server) handleAdminDeviceData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reports := s.pa.Store.ListDevicePosture()
+	reports := s.pa.Store.ListDeviceData()
 	if reports == nil {
-		reports = []*models.DevicePostureReport{}
+		reports = []*models.DeviceDataReport{}
 	}
 	sort.SliceStable(reports, func(i, j int) bool {
 		return reports[i].ReportedAt.After(reports[j].ReportedAt)
@@ -146,7 +146,7 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	report, ok := s.pa.Store.GetDevicePosture(deviceID)
+	report, ok := s.pa.Store.GetDeviceData(deviceID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
 		return
@@ -184,12 +184,12 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	postureCount := 0
+	deviceDataCount := 0
 	healthyDevices := 0
-	allDevicePosture := s.pa.Store.ListDevicePosture()
-	for _, posture := range allDevicePosture {
-		postureCount++
-		if postureIsHealthy(posture) {
+	allDeviceData := s.pa.Store.ListDeviceData()
+	for _, report := range allDeviceData {
+		deviceDataCount++
+		if deviceDataIsHealthy(report) {
 			healthyDevices++
 		}
 	}
@@ -200,13 +200,13 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		TotalResources: len(resources),
 		RecentDenials:  recentDenials,
 		HealthyDevices: healthyDevices,
-		TotalDevices:   postureCount,
+		TotalDevices:   deviceDataCount,
 	}
 
 	writeJSON(w, http.StatusOK, stats)
 }
 
-func postureIsHealthy(report *models.DevicePostureReport) bool {
+func deviceDataIsHealthy(report *models.DeviceDataReport) bool {
 	if report == nil || len(report.Checks) == 0 {
 		return false
 	}

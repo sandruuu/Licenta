@@ -20,7 +20,7 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 		ID:          "res-1",
 		Name:        "Internal Web",
 		Type:        "web",
-		ExternalURL: "https://internal-web.ztna.test/app",
+		ExternalURL: "https://internal-web.trustcloud.test/app",
 		TenantID:    "tenant-1",
 		Enabled:     true,
 		CreatedAt:   now,
@@ -57,11 +57,8 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 	if len(snapshot.Resources) != 1 {
 		t.Fatalf("resources = %+v, want one resource", snapshot.Resources)
 	}
-	if snapshot.Resources[0].FQDN != "internal-web.ztna.test" {
+	if snapshot.Resources[0].FQDN != "internal-web.trustcloud.test" {
 		t.Fatalf("FQDN = %q, want hostname derived from external_url", snapshot.Resources[0].FQDN)
-	}
-	if len(snapshot.DNSSuffixes) != 1 || snapshot.DNSSuffixes[0] != "ztna.test" {
-		t.Fatalf("DNSSuffixes = %+v, want derived parent suffix", snapshot.DNSSuffixes)
 	}
 }
 
@@ -74,10 +71,10 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 
 	now := time.Now()
 	for _, resource := range []*models.Resource{
-		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.ztna.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.ztna.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.ztna.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.ztna.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SaveResource(resource)
 	}
@@ -89,9 +86,9 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 		dataStore.SavePolicyRule(rule)
 	}
 	for _, assignment := range []*models.PolicyAssignment{
-		{ID: "assign-users", PolicyID: "policy-users", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "ZTNA-Users", Priority: 10, Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-users", PolicyID: "policy-users", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "TrustCloud-Users", Priority: 10, Enabled: true, CreatedAt: now, UpdatedAt: now},
 		{ID: "assign-all", PolicyID: "policy-all", TenantID: "tenant-1", Level: "resource", ResourceID: "res-all", Priority: 20, Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "assign-deny", PolicyID: "policy-deny", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "ZTNA-Users", Priority: 1, Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-deny", PolicyID: "policy-deny", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "TrustCloud-Users", Priority: 1, Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SavePolicyAssignment(assignment)
 	}
@@ -102,7 +99,7 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 		Email:    "user@example.test",
 		Role:     "user",
 		TenantID: "tenant-1",
-	}, []string{"grp-users"}, []string{"ZTNA-Users"})
+	}, []string{"grp-users"}, []string{"TrustCloud-Users"})
 
 	got := make([]string, 0, len(snapshot.Resources))
 	for _, resource := range snapshot.Resources {

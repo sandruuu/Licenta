@@ -11,7 +11,7 @@ import (
 	"pdp/pa/devices"
 )
 
-func statusCodeForDeviceTelemetryError(err error) int {
+func statusCodeForDeviceDataError(err error) int {
 	switch {
 	case errors.Is(err, devices.ErrDeviceIDRequired):
 		return http.StatusBadRequest
@@ -19,7 +19,7 @@ func statusCodeForDeviceTelemetryError(err error) int {
 		return http.StatusForbidden
 	case errors.Is(err, devices.ErrNoPriorHealthReport):
 		return http.StatusPreconditionRequired
-	case errors.Is(err, devices.ErrNoPriorPosture):
+	case errors.Is(err, devices.ErrNoPriorDeviceData):
 		return http.StatusPreconditionFailed
 	case errors.Is(err, devices.ErrServiceUnavailable):
 		return http.StatusServiceUnavailable

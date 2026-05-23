@@ -1,0 +1,187 @@
+#!/bin/sh
+set -eu
+
+VAULT_ADDR="${VAULT_ADDR:-http://vault:8200}"
+APP_TOKEN="${TRUSTCLOUD_VAULT_TOKEN:-trustcloud-vault-token}"
+STATE_DIR="${TRUSTCLOUD_VAULT_STATE_DIR:-/vault/state}"
+INIT_FILE="$STATE_DIR/init.env"
+
+export VAULT_ADDR
+mkdir -p "$STATE_DIR"
+
+wait_for_vault() {
+  i=0
+  while [ "$i" -lt 60 ]; do
+    set +e
+    vault status >/tmp/vault-status.txt 2>&1
+    code=$?
+    set -e
+    if [ "$code" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$code" -eq 2 ] && grep -Eq "Initialized|Sealed" /tmp/vault-status.txt; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  cat /tmp/vault-status.txt >&2 || true
+  echo "Vault did not become reachable" >&2
+  exit 1
+}
+
+read_init_file() {
+  # shellcheck disable=SC1090
+  . "$INIT_FILE"
+  if [ -z "${UNSEAL_KEY:-}" ] || [ -z "${ROOT_TOKEN:-}" ]; then
+    echo "Vault init file is incomplete: $INIT_FILE" >&2
+    exit 1
+  fi
+}
+
+init_vault_if_needed() {
+  if vault status | grep -Eq "Initialized[[:space:]]+false"; then
+    init_output="$(vault operator init -key-shares=1 -key-threshold=1)"
+    printf '%s\n' "$init_output" > "$STATE_DIR/init.txt"
+    chmod 600 "$STATE_DIR/init.txt"
+
+    UNSEAL_KEY="$(printf '%s\n' "$init_output" | sed -n 's/^Unseal Key 1:[[:space:]]*//p')"
+    ROOT_TOKEN="$(printf '%s\n' "$init_output" | sed -n 's/^Initial Root Token:[[:space:]]*//p')"
+    umask 077
+    {
+      printf "UNSEAL_KEY='%s'\n" "$UNSEAL_KEY"
+      printf "ROOT_TOKEN='%s'\n" "$ROOT_TOKEN"
+    } > "$INIT_FILE"
+    return
+  fi
+
+  if [ ! -f "$INIT_FILE" ]; then
+    echo "Vault is initialized but $INIT_FILE is missing. Restore this file or unseal Vault manually." >&2
+    exit 1
+  fi
+  read_init_file
+}
+
+unseal_vault() {
+  if vault status | grep -Eq "Sealed[[:space:]]+true"; then
+    vault operator unseal "$UNSEAL_KEY" >/dev/null
+  fi
+}
+
+ensure_secret_engine() {
+  mount="$1"
+  type="$2"
+  if ! vault secrets list | grep -q "^${mount}/"; then
+    vault secrets enable -path="$mount" "$type" >/dev/null
+  fi
+}
+
+ensure_pki_ca() {
+  if ! vault read pki_int/cert/ca >/dev/null 2>&1; then
+    vault secrets tune -max-lease-ttl=8760h pki_int >/dev/null
+    vault write -field=certificate pki_int/root/generate/internal \
+      common_name="TrustCloud" \
+      ttl=8760h > "$STATE_DIR/trustcloud-ca.pem"
+    chmod 600 "$STATE_DIR/trustcloud-ca.pem"
+  fi
+}
+
+ensure_transit_key() {
+  if ! vault read transit/keys/trustcloud-pdp-key >/dev/null 2>&1; then
+    vault write -f transit/keys/trustcloud-pdp-key >/dev/null
+  fi
+}
+
+write_pki_roles() {
+  vault write pki_int/roles/trustcloud \
+    allowed_domains="pdp,localhost,trustcloud" \
+    key_type=ec \
+    allow_bare_domains=true \
+    allow_subdomains=true \
+    allow_localhost=true \
+    allow_ip_sans=true \
+    client_flag=true \
+    server_flag=true \
+    max_ttl=168h >/dev/null
+
+  vault write pki_int/roles/trustagent-device \
+    allow_any_name=true \
+    key_type=ec \
+    enforce_hostnames=false \
+    allowed_uri_sans="trustagent://device/*" \
+    client_flag=true \
+    server_flag=false \
+    max_ttl=720h >/dev/null
+
+  vault write pki_int/roles/trustgateway \
+    allow_any_name=true \
+    key_type=any \
+    enforce_hostnames=false \
+    allowed_uri_sans="trustgateway://*" \
+    allow_ip_sans=true \
+    client_flag=true \
+    server_flag=true \
+    max_ttl=168h >/dev/null
+}
+
+write_pdp_policy() {
+  cat > /tmp/trustcloud-pki-policy.hcl <<'POLICY'
+path "transit/encrypt/trustcloud-pdp-key" {
+  capabilities = ["update"]
+}
+
+path "transit/decrypt/trustcloud-pdp-key" {
+  capabilities = ["update"]
+}
+
+path "transit/keys/trustcloud-pdp-key" {
+  capabilities = ["read"]
+}
+
+path "pki_int/cert/ca" {
+  capabilities = ["read"]
+}
+
+path "pki_int/ca/pem" {
+  capabilities = ["read"]
+}
+
+path "pki_int/sign/*" {
+  capabilities = ["update"]
+}
+
+path "pki_int/sign-verbatim/*" {
+  capabilities = ["update"]
+}
+
+path "pki_int/revoke" {
+  capabilities = ["update"]
+}
+POLICY
+  vault policy write trustcloud-pki /tmp/trustcloud-pki-policy.hcl >/dev/null
+}
+
+ensure_app_token() {
+  if ! vault token lookup "$APP_TOKEN" >/dev/null 2>&1; then
+    vault token create \
+      -id="$APP_TOKEN" \
+      -policy=trustcloud-pki \
+      -ttl=720h \
+      -renewable=true >/dev/null
+  fi
+}
+
+wait_for_vault
+init_vault_if_needed
+unseal_vault
+
+export VAULT_TOKEN="$ROOT_TOKEN"
+ensure_secret_engine "transit" "transit"
+ensure_transit_key
+ensure_secret_engine "pki_int" "pki"
+ensure_pki_ca
+write_pki_roles
+write_pdp_policy
+ensure_app_token
+
+echo "Vault persistent PKI and Transit bootstrap completed."

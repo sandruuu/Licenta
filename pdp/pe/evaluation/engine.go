@@ -15,7 +15,7 @@ import (
 
 // AccessContext is the normalized, side-effect-free input evaluated by PE.
 // PA is responsible for loading rules, user attributes, risk signals, and
-// posture before calling the engine.
+// device data before calling the engine.
 type AccessContext struct {
 	Request             models.AccessRequest
 	Rules               []*models.PolicyRule

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -23,13 +24,15 @@ type configFile struct {
 	EnrollmentPollInterval                 string `json:"enrollment_poll_interval,omitempty"`
 	DeviceDataSyncInterval                 string `json:"device_data_sync_interval,omitempty"`
 	DeviceDataSyncChangeScanInterval       string `json:"device_data_sync_change_scan_interval,omitempty"`
-	LegacyDeviceDataSyncInterval           string `json:"device_telemetry_interval,omitempty"`
-	LegacyDeviceDataSyncChangeScanInterval string `json:"device_telemetry_change_scan_interval,omitempty"`
 	EnrollmentStatePath                    string `json:"enrollment_state_path,omitempty"`
 	LocalDNSListenAddress                  string `json:"local_dns_listen_address,omitempty"`
 	LocalDNSServer                         string `json:"local_dns_server,omitempty"`
 	SyntheticIPCIDR                        string `json:"synthetic_ip_cidr,omitempty"`
 	HardenBrowserDoH                       bool   `json:"harden_browser_doh,omitempty"`
+	TrafficInterceptionEnabled             *bool  `json:"traffic_interception_enabled,omitempty"`
+	TrafficProxyListenAddress              string `json:"traffic_proxy_listen_address,omitempty"`
+	WFPDriverDevicePath                    string `json:"wfp_driver_device_path,omitempty"`
+	WFPFailClosed                          *bool  `json:"wfp_fail_closed,omitempty"`
 }
 
 func loadServiceConfig(serviceConfig ServiceConfig) (ServiceConfig, error) {
@@ -58,30 +61,28 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 	options.LocalDNSServer = strings.TrimSpace(config.LocalDNSServer)
 	options.SyntheticIPCIDR = strings.TrimSpace(config.SyntheticIPCIDR)
 	options.HardenBrowserDoH = config.HardenBrowserDoH
+	if config.TrafficInterceptionEnabled != nil {
+		options.TrafficInterceptionEnabled = *config.TrafficInterceptionEnabled
+	}
+	options.TrafficProxyListenAddress = strings.TrimSpace(config.TrafficProxyListenAddress)
+	options.WFPDriverDevicePath = strings.TrimSpace(config.WFPDriverDevicePath)
+	options.WFPFailClosed = true
+	if config.WFPFailClosed != nil {
+		options.WFPFailClosed = *config.WFPFailClosed
+	}
 	if options.EnrollmentTimeout, err = optionalConfigDuration("enrollment_timeout", config.EnrollmentTimeout); err != nil {
 		return options, err
 	}
 	if options.EnrollmentPollInterval, err = optionalConfigDuration("enrollment_poll_interval", config.EnrollmentPollInterval); err != nil {
 		return options, err
 	}
-	deviceDataSyncInterval := firstNonEmptyConfig(config.DeviceDataSyncInterval, config.LegacyDeviceDataSyncInterval)
-	if options.DeviceDataSyncInterval, err = optionalConfigDuration("device_data_sync_interval", deviceDataSyncInterval); err != nil {
+	if options.DeviceDataSyncInterval, err = optionalConfigDuration("device_data_sync_interval", config.DeviceDataSyncInterval); err != nil {
 		return options, err
 	}
-	deviceDataSyncChangeScanInterval := firstNonEmptyConfig(config.DeviceDataSyncChangeScanInterval, config.LegacyDeviceDataSyncChangeScanInterval)
-	if options.DeviceDataSyncChangeScanInterval, err = optionalConfigDuration("device_data_sync_change_scan_interval", deviceDataSyncChangeScanInterval); err != nil {
+	if options.DeviceDataSyncChangeScanInterval, err = optionalConfigDuration("device_data_sync_change_scan_interval", config.DeviceDataSyncChangeScanInterval); err != nil {
 		return options, err
 	}
 	return options, nil
-}
-
-func firstNonEmptyConfig(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func applyTrayConfig(options TrayConfig, config configFile) (TrayConfig, error) {
@@ -149,6 +150,7 @@ func readFileConfig(path string) (configFile, error) {
 	if err != nil {
 		return configFile{}, err
 	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 	var config configFile
 	if err := json.Unmarshal(data, &config); err != nil {
 		return configFile{}, fmt.Errorf("decode agent config %s: %w", cleanPath, err)

@@ -52,7 +52,7 @@ func TestHandleProvisionSessionCommand(t *testing.T) {
 			"internal_port":      float64(22),
 			"protocol":           "ssh",
 			"expires_at":         now.Add(time.Hour).Format(time.RFC3339Nano),
-			"constraints":        []interface{}{"managed_device", "healthy_posture"},
+			"constraints":        []interface{}{"managed_device", "healthy_device_data"},
 			"policy_version":     "policy-7",
 			"max_bandwidth_mbps": float64(25),
 		},

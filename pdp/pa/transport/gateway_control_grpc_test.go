@@ -40,7 +40,7 @@ func TestGatewayControlStreamSendsCommandsAndValidatesAcks(t *testing.T) {
 			InternalPort:     22,
 			Protocol:         "ssh",
 			ExpiresAt:        time.Now().Add(time.Hour),
-			Constraints:      []string{"managed_device", "healthy_posture"},
+			Constraints:      []string{"managed_device", "healthy_device_data"},
 			PolicyVersion:    "policy-7",
 			MaxBandwidthMbps: 25,
 		})

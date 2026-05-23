@@ -11,20 +11,41 @@ export default function Sessions() {
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const load = () => {
+  const refreshSessions = async () => {
     setLoading(true);
-    getSessions()
-      .then((data) => setSessions(Array.isArray(data) ? data : []))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    try {
+      const data = await getSessions();
+      setSessions(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    let active = true;
+    getSessions()
+      .then((data) => {
+        if (active) {
+          setSessions(Array.isArray(data) ? data : []);
+        }
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleRevoke = async (id) => {
     if (!confirm('Revoke this session?')) return;
     await revokeSession(id);
-    load();
+    await refreshSessions();
   };
 
   const isExpired = (session) => new Date(session.expires_at) < new Date();

@@ -78,47 +78,6 @@ func TestServiceReportsUnenrolledStatus(t *testing.T) {
 	}
 }
 
-func TestServiceReturnsDeviceDataReport(t *testing.T) {
-	now := time.Unix(1000, 0).UTC()
-	service := newTestService(serviceTestOptions{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:  func() time.Time { return now },
-		DeviceDataCollector: fakeDeviceDataCollector{report: ipc.DeviceDataReport{
-			DeviceID:    "device-1",
-			Hostname:    "host-1",
-			OS:          "Windows",
-			CollectedAt: now,
-			Checks: []ipc.DeviceDataCheck{{
-				Name:        "Firewall",
-				Status:      ipc.DeviceDataStatusCritical,
-				Description: "Firewall is disabled",
-			}},
-		}},
-	})
-	request, err := ipc.NewRequest("req-1", ipc.OperationGetDeviceData, ipc.DeviceDataRequest{})
-	if err != nil {
-		t.Fatalf("NewRequest returned error: %v", err)
-	}
-	response, err := service.HandleIPC(context.Background(), request)
-	if err != nil {
-		t.Fatalf("HandleIPC returned error: %v", err)
-	}
-	if !response.OK {
-		t.Fatalf("response error = %+v", response.Error)
-	}
-	var report ipc.DeviceDataReport
-	if err := ipc.DecodeBody(response.Body, &report); err != nil {
-		t.Fatalf("DecodeBody returned error: %v", err)
-	}
-	if report.DeviceID != "device-1" || len(report.Checks) != 1 || report.Checks[0].Status != ipc.DeviceDataStatusCritical {
-		t.Fatalf("report = %+v", report)
-	}
-	status := service.status()
-	if status.DeviceDataStatus != deviceDataStatusCollected || status.DeviceDataCheckCount != 1 || !status.DeviceDataCollectedAt.Equal(now) {
-		t.Fatalf("status = %+v", status)
-	}
-}
-
 func TestServiceReturnsAgentDashboard(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	service := newTestService(serviceTestOptions{
@@ -307,7 +266,7 @@ func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
 		},
 		EnrollmentStore:     store,
 		DeviceDataCollector: fakeDeviceDataCollector{report: testDeviceDataReport(now, ipc.DeviceDataStatusGood)},
-		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
 			return deviceDataSyncClient, nil
 		},
 	})
@@ -352,7 +311,7 @@ func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
 		EnrollmentStore:     store,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
-		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
 			return deviceDataSyncClient, nil
 		},
 	})
@@ -389,7 +348,7 @@ func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T
 		EnrollmentStore:     store,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
-		DeviceDataSyncClientFactory: func(context.Context, DeviceDataSyncClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (DeviceDataSyncClient, error) {
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
 			return deviceDataSyncClient, nil
 		},
 	})
@@ -435,8 +394,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 			Email:             "user@example.com",
 		},
 		catalog: usersession.CatalogResponse{
-			Version:     "cat_1",
-			DNSSuffixes: []string{"internal.example"},
+			Version: "cat_1",
 			Resources: []ipc.CatalogResource{{
 				ResourceID:  "res_crm",
 				DisplayName: "CRM",
@@ -487,7 +445,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		t.Fatalf("dashboard user session = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
 	}
 	applied := protectedResources.lastApplied()
-	if applied.Version != "cat_1" || len(applied.Resources) != 1 || len(applied.DNSSuffixes) != 1 {
+	if applied.Version != "cat_1" || len(applied.Resources) != 1 {
 		t.Fatalf("protected resources catalog = %+v", applied)
 	}
 }

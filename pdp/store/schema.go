@@ -129,7 +129,7 @@ func (s *Store) createTables() error {
 			reported_at TEXT DEFAULT '',
 			tenant_id TEXT DEFAULT ''
 		)`,
-		`CREATE TABLE IF NOT EXISTS device_posture (
+		`CREATE TABLE IF NOT EXISTS device_data (
 			device_id TEXT PRIMARY KEY,
 			hostname TEXT DEFAULT '',
 			os TEXT DEFAULT '',
@@ -330,7 +330,7 @@ func (s *Store) createTables() error {
 		`ALTER TABLE resources ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE audit_log ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE device_health ADD COLUMN tenant_id TEXT DEFAULT ''`,
-		`ALTER TABLE device_posture ADD COLUMN tenant_id TEXT DEFAULT ''`,
+		`ALTER TABLE device_data ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE device_enrollments ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE gateways ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		// Tenant HRD fields
@@ -345,6 +345,9 @@ func (s *Store) createTables() error {
 		s.db.Exec(m) // ignore "duplicate column" errors
 	}
 
+	if err := s.migrateDeviceDataFromOldTable(); err != nil {
+		return err
+	}
 	if err := s.enforceSingleIdentityProviderPerTenant(); err != nil {
 		return err
 	}
@@ -387,6 +390,66 @@ func (s *Store) createTables() error {
 	}
 
 	return nil
+}
+
+func (s *Store) migrateDeviceDataFromOldTable() error {
+	exists, err := s.tableExists("device_posture")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	hasTenantID, err := s.tableHasColumn("device_posture", "tenant_id")
+	if err != nil {
+		return err
+	}
+	tenantExpr := "''"
+	if hasTenantID {
+		tenantExpr = "tenant_id"
+	}
+	_, err = s.db.Exec(fmt.Sprintf(`INSERT OR IGNORE INTO device_data
+		(device_id, hostname, os, checks_json, collected_at, reported_at, tenant_id)
+		SELECT device_id, hostname, os, checks_json, collected_at, reported_at, %s
+		FROM device_posture`, tenantExpr))
+	if err != nil {
+		return fmt.Errorf("migrate old device data table: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) tableExists(name string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("query table %s existence: %w", name, err)
+	}
+	return count > 0, nil
+}
+
+func (s *Store) tableHasColumn(tableName, columnName string) (bool, error) {
+	rows, err := s.db.Query(`PRAGMA table_info(` + tableName + `)`)
+	if err != nil {
+		return false, fmt.Errorf("query %s columns: %w", tableName, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("scan %s columns: %w", tableName, err)
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate %s columns: %w", tableName, err)
+	}
+	return false, nil
 }
 
 func (s *Store) cleanupLegacyPolicyDataOnce() error {

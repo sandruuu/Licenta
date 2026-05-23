@@ -2,8 +2,6 @@ package ipc
 
 import "time"
 
-type DeviceDataRequest struct{}
-
 const (
 	DeviceDataStatusGood        = "good"
 	DeviceDataStatusWarning     = "warning"

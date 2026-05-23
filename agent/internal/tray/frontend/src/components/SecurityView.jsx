@@ -60,8 +60,6 @@ const CHECKS = [
   },
 ];
 
-const HIDDEN_CHECK_NAMES = new Set(['connectivity', 'network']);
-
 const REMEDIATIONS = {
   os: {
     title: 'Review operating system data',
@@ -122,15 +120,6 @@ const REMEDIATIONS = {
       'Update antivirus definitions and retry the health check.',
     ],
     why: 'Antivirus protection helps detect malicious software before access is granted.',
-  },
-  connectivity: {
-    title: 'Restore agent connectivity',
-    action: 'Retry connection',
-    steps: [
-      'Connect to a network with internet access.',
-      'Restart the TRUSTAGENT service if the device stays offline.',
-    ],
-    why: 'Connectivity is required so the endpoint can report device data and receive policy.',
   },
 };
 
@@ -414,9 +403,6 @@ function buildHealthRows(dashboard, checking) {
     if (used.has(index)) {
       return;
     }
-    if (isHiddenCheck(check?.name)) {
-      return;
-    }
     rows.push(rowFromCheck({
       id: `extra_${index}`,
       names: [String(check?.name || '').toLowerCase()],
@@ -507,10 +493,6 @@ function normalizeName(value) {
     .toLowerCase()
     .replace(/&/g, 'and')
     .replace(/\s+/g, ' ');
-}
-
-function isHiddenCheck(name) {
-  return HIDDEN_CHECK_NAMES.has(normalizeName(name));
 }
 
 function isPipeUnavailable(dashboard, error) {

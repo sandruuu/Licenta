@@ -54,10 +54,10 @@ func NewWithDatabasePath(dataDir, databasePath string) *Store {
 func (s *Store) InitDB() error {
 	dbPath := s.databasePath
 	if dbPath == "" && s.dataDir != "" {
-		dbPath = filepath.Join(s.dataDir, "ztna.db")
+		dbPath = filepath.Join(s.dataDir, "trustcloud.db")
 	}
 	if dbPath == "" {
-		dbPath = "ztna.db"
+		dbPath = "trustcloud.db"
 	}
 
 	var err error

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	deviceCatalogGRPCServiceName    = "ztna.catalog.DeviceCatalogService"
+	deviceCatalogGRPCServiceName    = "trustcloud.catalog.DeviceCatalogService"
 	deviceCatalogGRPCGetCatalogPath = "/" + deviceCatalogGRPCServiceName + "/GetCatalog"
 )
 
@@ -63,10 +63,6 @@ func (service *deviceCatalogGRPCService) GetCatalog(ctx context.Context, request
 		return response, nil
 	}
 
-	suffixValues := make([]interface{}, 0, len(snapshot.DNSSuffixes))
-	for _, suffix := range snapshot.DNSSuffixes {
-		suffixValues = append(suffixValues, suffix)
-	}
 	resourceValues := make([]interface{}, 0, len(snapshot.Resources))
 	for _, resource := range snapshot.Resources {
 		resourceValues = append(resourceValues, map[string]interface{}{
@@ -76,21 +72,20 @@ func (service *deviceCatalogGRPCService) GetCatalog(ctx context.Context, request
 			"port":        float64(resource.Port),
 		})
 	}
-	postureChecks := make([]interface{}, 0, len(snapshot.PosturePolicy.RequiredChecks))
-	for _, check := range snapshot.PosturePolicy.RequiredChecks {
-		postureChecks = append(postureChecks, check)
+	deviceDataChecks := make([]interface{}, 0, len(snapshot.DeviceDataPolicy.RequiredChecks))
+	for _, check := range snapshot.DeviceDataPolicy.RequiredChecks {
+		deviceDataChecks = append(deviceDataChecks, check)
 	}
 
 	response, err := structpb.NewStruct(map[string]interface{}{
 		"version":      snapshot.Version,
-		"dns_suffixes": suffixValues,
 		"resources":    resourceValues,
 		"ttl_seconds":  float64(snapshot.TTLSeconds),
 		"not_modified": snapshot.NotModified,
 		"policy_epoch": snapshot.PolicyEpoch,
-		"posture_policy": map[string]interface{}{
-			"required_checks":       postureChecks,
-			"required_check_status": snapshot.PosturePolicy.RequiredCheckStatus,
+		"device_data_policy": map[string]interface{}{
+			"required_checks":       deviceDataChecks,
+			"required_check_status": snapshot.DeviceDataPolicy.RequiredCheckStatus,
 		},
 	})
 	if err != nil {
@@ -123,7 +118,7 @@ func (s *Server) initDeviceCatalogGRPC() {
 	grpcServer.RegisterService(&agentEnrollmentGRPCServiceDesc, &agentEnrollmentGRPCService{server: s})
 	grpcServer.RegisterService(&agentSessionGRPCServiceDesc, &agentSessionGRPCService{server: s})
 	grpcServer.RegisterService(&deviceCatalogGRPCServiceDesc, &deviceCatalogGRPCService{server: s})
-	grpcServer.RegisterService(&deviceTelemetryGRPCServiceDesc, &deviceTelemetryGRPCService{server: s})
+	grpcServer.RegisterService(&deviceDataGRPCServiceDesc, &deviceDataGRPCService{server: s})
 	grpcServer.RegisterService(&agentAuthorizationGRPCServiceDesc, &agentAuthorizationGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayEnrollmentGRPCServiceDesc, &gatewayEnrollmentGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayTrustGRPCServiceDesc, &gatewayTrustGRPCService{server: s})

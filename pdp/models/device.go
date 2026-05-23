@@ -13,8 +13,8 @@ type DeviceHealthReport struct {
 	TenantID     string        `json:"tenant_id,omitempty"`
 }
 
-// DevicePostureReport is the normalized posture payload used by policies.
-type DevicePostureReport struct {
+// DeviceDataReport is the normalized raw device data payload used by policies.
+type DeviceDataReport struct {
 	DeviceID    string        `json:"device_id"`
 	Hostname    string        `json:"hostname"`
 	OS          string        `json:"os"`

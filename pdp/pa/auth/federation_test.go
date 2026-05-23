@@ -73,9 +73,9 @@ func TestValidateAndMapExternalClaimsVerifiesIDTokenSignature(t *testing.T) {
 		"email":    "email",
 		"groups":   "groups",
 	}, time.Minute, time.Second)
-	fedCfg := &models.FederationConfig{Issuer: issuer, ClientID: "ztna-pdp"}
+	fedCfg := &models.FederationConfig{Issuer: issuer, ClientID: "trustcloud"}
 
-	idToken := signTestIDToken(t, signingKey, keyID, issuer, "ztna-pdp", "nonce-1")
+	idToken := signTestIDToken(t, signingKey, keyID, issuer, "trustcloud", "nonce-1")
 	claims, err := fp.ValidateAndMapExternalClaims(fedCfg, idToken, "nonce-1", nil)
 	if err != nil {
 		t.Fatalf("ValidateAndMapExternalClaims() error = %v", err)
@@ -84,7 +84,7 @@ func TestValidateAndMapExternalClaimsVerifiesIDTokenSignature(t *testing.T) {
 		t.Fatalf("unexpected mapped claims: %+v", claims)
 	}
 
-	badToken := signTestIDToken(t, wrongKey, keyID, issuer, "ztna-pdp", "nonce-1")
+	badToken := signTestIDToken(t, wrongKey, keyID, issuer, "trustcloud", "nonce-1")
 	if _, err := fp.ValidateAndMapExternalClaims(fedCfg, badToken, "nonce-1", nil); err == nil {
 		t.Fatal("ValidateAndMapExternalClaims() accepted token signed by unknown key")
 	}
@@ -109,7 +109,7 @@ func signTestIDToken(t *testing.T, key *rsa.PrivateKey, kid, issuer, audience, n
 		"sub":                "user-1",
 		"preferred_username": "alice",
 		"email":              "alice@example.test",
-		"groups":             []string{"ZTNA-Users"},
+		"groups":             []string{"TrustCloud-Users"},
 		"nonce":              nonce,
 		"exp":                time.Now().Add(time.Hour).Unix(),
 		"iat":                time.Now().Unix(),

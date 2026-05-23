@@ -28,7 +28,7 @@ type agentSessionTransaction struct {
 	LocalUserSIDHash           string
 	WindowsLogonSessionID      string
 	WindowsSessionID           string
-	PostureRevision            string
+	DeviceDataRevision         string
 	ClaimSecretHash            string
 	AuthURL                    string
 	Status                     string

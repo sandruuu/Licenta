@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"crypto/x509"
 	"log"
 	"strings"
 	"time"
@@ -42,22 +41,6 @@ func (s *Server) checkEnrollRateLimit(ip string) bool {
 		return allowed
 	}
 	return false
-}
-
-func canonicalCSRPEM(input string) (string, error) {
-	return paenrollment.CanonicalCSRPEM(input)
-}
-
-func parseCSR(input string) (*x509.CertificateRequest, []byte, error) {
-	return paenrollment.ParseCSR(input)
-}
-
-func computeCSRFingerprint(csrPEM string) (string, error) {
-	return paenrollment.ComputeCSRFingerprint(csrPEM)
-}
-
-func shortFingerprint(value string) string {
-	return paenrollment.ShortFingerprint(value)
 }
 
 func enrollmentClientMessage(err error) string {

@@ -1,4 +1,4 @@
-name: ztna-lab
+name: truststack
 
 networks:
   public:
@@ -6,57 +6,67 @@ networks:
     ipam:
       config:
         - subnet: 172.30.0.0/24
-  dmz:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.22.0.0/24
-  private:
-    driver: bridge
-    internal: true
-    ipam:
-      config:
-        - subnet: 10.10.0.0/24
   security:
     driver: bridge
     internal: true
     ipam:
       config:
         - subnet: 172.24.0.0/24
+  private:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
 
 services:
-  pdp:
-    build:
-      context: ./pdp
-      dockerfile: Dockerfile
-    container_name: ztna-pdp
+  vault:
+    image: hashicorp/vault:1.17
+    container_name: trustcloud-vault
+    cap_add:
+      - IPC_LOCK
+    entrypoint: ["vault"]
     ports:
-      - "8443:8443"
+      - "8200:8200"
+    command: ["server", "-config", "/vault/config/vault.hcl"]
     networks:
-      public:
-        ipv4_address: 172.30.0.20
-        aliases:
-          - pdp
       security:
-        ipv4_address: 172.24.0.20
+        ipv4_address: 172.24.0.5
     volumes:
-      - ./pdp/certs:/app/certs:ro
-      - ./pdp/data:/app/data
-      - ./pdp/config.json:/app/config.json:ro
-      - ./pdp/pa/dashboard/dist:/app/dashboard/dist:ro
-    restart: unless-stopped
+      - vault-data:/vault/file
+      - ./infrastructure/vault/config:/vault/config:ro
+    environment:
+      - VAULT_ADDR=http://127.0.0.1:8200
+      - VAULT_API_ADDR=http://vault:8200
+      - SKIP_CHOWN=true
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
+      test: ["CMD-SHELL", "vault status >/dev/null 2>&1 || [ $$? -eq 2 ]"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  vault-init:
+    image: hashicorp/vault:1.17
+    container_name: trustcloud-vault-init
+    depends_on:
+      vault:
+        condition: service_healthy
+    networks:
+      security:
+    volumes:
+      - ./infrastructure/vault/bootstrap.sh:/vault/bootstrap/bootstrap.sh:ro
+      - ./infrastructure/vault/state:/vault/state
+    environment:
+      - VAULT_ADDR=http://vault:8200
+      - TRUSTCLOUD_VAULT_TOKEN=${TRUSTCLOUD_VAULT_TOKEN:-trustcloud-vault-token}
+    entrypoint: ["/bin/sh", "/vault/bootstrap/bootstrap.sh"]
+    restart: "no"
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.1
-    container_name: ztna-keycloak
-    profiles:
-      - idp
+    container_name: trustcloud-keycloak
     command:
       - start-dev
       - --import-realm
@@ -77,9 +87,44 @@ services:
       - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
     restart: unless-stopped
 
+  pdp:
+    build:
+      context: ./pdp
+      dockerfile: Dockerfile
+    container_name: trustcloud
+    ports:
+      - "8443:8443"
+    networks:
+      public:
+        ipv4_address: 172.30.0.20
+        aliases:
+          - pdp
+          - trustcloud
+      security:
+        ipv4_address: 172.24.0.20
+        aliases:
+          - pdp
+          - trustcloud
+    volumes:
+      - ./pdp/data:/app/data
+      - ./pdp/config.json:/app/config.json:ro
+      - ./pdp/pa/dashboard/dist:/app/dashboard/dist:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   public-dns:
     image: coredns/coredns:1.11.1
-    container_name: ztna-public-dns
+    container_name: trustcloud-public-dns
     ports:
       - "1053:53/udp"
       - "1053:53/tcp"
@@ -91,137 +136,9 @@ services:
     command: ["-conf", "/etc/coredns/Corefile"]
     restart: unless-stopped
 
-  sessionstore:
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile.sessionstore
-    container_name: ztna-sessionstore
-    volumes:
-      - gateway-data:/app/data
-    networks:
-      dmz:
-        ipv4_address: 172.22.0.12
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:6380/health || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-
-  syslog:
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile.syslog
-    container_name: ztna-syslog
-    networks:
-      dmz:
-        ipv4_address: 172.22.0.13
-    volumes:
-      - gateway-logs:/app/logs
-    restart: unless-stopped
-
-  gateway-admin:
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile.admin
-    container_name: ztna-gateway-admin
-    ports:
-      - "8444:8444"
-    networks:
-      dmz:
-        ipv4_address: 172.22.0.11
-      security:
-        ipv4_address: 172.24.0.11
-    volumes:
-      - ./gateway/docker-config.json:/app/config/gateway-config.json
-      - ./gateway/certs:/app/certs
-      - gateway-data:/app/data
-    environment:
-      - GATEWAY_API_KEY=${GATEWAY_API_KEY:?GATEWAY_API_KEY must be set}
-      - ADMIN_AUTO_SETUP=${ADMIN_AUTO_SETUP:-false}
-      - ADMIN_EMAIL=${ADMIN_EMAIL:-}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
-      - PKI_URL=${PKI_URL:-http://vault:8200}
-      - PKI_TOKEN=${PKI_TOKEN:-}
-      - PKI_PATH=${PKI_PATH:-pki_int}
-      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
-    depends_on:
-      sessionstore:
-        condition: service_healthy
-      syslog:
-        condition: service_started
-      pdp:
-        condition: service_healthy
-    restart: unless-stopped
-
-  gateway-portal:
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile.portal
-    container_name: ztna-gateway-portal
-    ports:
-      - "9443:9443"
-      - "9444:9444"
-
-    networks:
-      public:
-        ipv4_address: 172.30.0.10
-      dmz:
-        ipv4_address: 172.22.0.10
-      private:
-        ipv4_address: 10.10.0.5
-      security:
-        ipv4_address: 172.24.0.10
-    volumes:
-      - ./gateway/docker-config.json:/app/config/gateway-config.json
-      - ./gateway/certs:/app/certs
-      - gateway-data:/app/data
-    environment:
-      - GATEWAY_API_KEY=${GATEWAY_API_KEY:?GATEWAY_API_KEY must be set}
-      - PKI_URL=${PKI_URL:-http://vault:8200}
-      - PKI_TOKEN=${PKI_TOKEN:-}
-      - PKI_PATH=${PKI_PATH:-pki_int}
-      - PKI_ROLE_GATEWAY=${PKI_ROLE_GATEWAY:-ztna-gateway}
-    depends_on:
-      pdp:
-        condition: service_healthy
-      sessionstore:
-        condition: service_healthy
-      syslog:
-        condition: service_started
-      gateway-admin:
-        condition: service_started
-      private-dns:
-        condition: service_started
-    restart: unless-stopped
-
-  vault:
-    image: hashicorp/vault:1.17
-    container_name: ztna-vault
-    profiles:
-      - vault
-    cap_add:
-      - IPC_LOCK
-    ports:
-      - "8200:8200"
-    command: >
-      server -dev
-      -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN:-ztna-dev-root-token}
-      -dev-listen-address=0.0.0.0:8200
-    networks:
-      security:
-        ipv4_address: 172.24.0.5
-    volumes:
-      - vault-data:/vault/file
-    environment:
-      - VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200
-      - VAULT_ADDR=http://0.0.0.0:8200
-    restart: unless-stopped
-
   private-dns:
     image: coredns/coredns:1.11.1
-    container_name: ztna-private-dns
+    container_name: trustcloud-private-dns
     networks:
       private:
         ipv4_address: 10.10.0.53
@@ -230,44 +147,40 @@ services:
     command: ["-conf", "/etc/coredns/Corefile"]
     restart: unless-stopped
 
-  rdp-desktop:
-    build:
-      context: ./infrastructure/rdp-desktop
-    container_name: ztna-rdp-desktop
-    networks:
-      private:
-        ipv4_address: 10.10.0.10
-    environment:
-      - RDP_USER=${RDP_USER:-admin}
-      - RDP_PASSWORD=${RDP_PASSWORD:?RDP_PASSWORD must be set}
-    restart: unless-stopped
-
-  ssh-server:
-    build:
-      context: ./infrastructure/ssh-server
-    container_name: ztna-ssh-server
-    networks:
-      private:
-        ipv4_address: 10.10.0.30
-    environment:
-      - SSH_USER=${SSH_USER:-admin}
-      - SSH_PASSWORD=${SSH_PASSWORD:?SSH_PASSWORD must be set}
-    restart: unless-stopped
-
   web-app:
     image: hashicorp/http-echo:1.0
-    container_name: ztna-web-app
-    command: ["-listen=:8080", "-text=ZTNA internal web app"]
+    container_name: trustcloud-web-app
+    command: ["-listen=:8080", "-text=TrustCloud internal web app"]
     networks:
       private:
         ipv4_address: 10.10.0.20
     restart: unless-stopped
 
+  ssh-server:
+    build:
+      context: ./infrastructure/ssh-server
+    container_name: trustcloud-ssh-server
+    networks:
+      private:
+        ipv4_address: 10.10.0.30
+    environment:
+      - SSH_USER=${SSH_USER:-admin}
+      - SSH_PASSWORD=${SSH_PASSWORD:-admin}
+    restart: unless-stopped
+
+  rdp-desktop:
+    build:
+      context: ./infrastructure/rdp-desktop
+    container_name: trustcloud-rdp-desktop
+    networks:
+      private:
+        ipv4_address: 10.10.0.10
+    environment:
+      - RDP_USER=${RDP_USER:-admin}
+      - RDP_PASSWORD=${RDP_PASSWORD:-admin}
+    restart: unless-stopped
+
 volumes:
-  gateway-logs:
-    driver: local
-  gateway-data:
-    driver: local
   vault-data:
     driver: local
   keycloak-data:

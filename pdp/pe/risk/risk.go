@@ -19,12 +19,12 @@ func CalculateRiskScore(ctx models.RiskContext, cfgs ...config.RiskConfig) int {
 		if !ctx.DeviceHealth.ReportedAt.IsZero() {
 			age := time.Since(ctx.DeviceHealth.ReportedAt)
 			switch {
-			case age > cfg.PostureCriticalAfter:
-				log.Printf("[RISK] Posture critically stale: device=%s age=%s", ctx.DeviceHealth.DeviceID, age)
-				score += cfg.PostureCriticalPoints
-			case age > cfg.PostureStaleAfter:
-				log.Printf("[RISK] Posture stale: device=%s age=%s", ctx.DeviceHealth.DeviceID, age)
-				score += cfg.PostureStalePoints
+			case age > cfg.DeviceDataCriticalAfter:
+				log.Printf("[RISK] Device data critically stale: device=%s age=%s", ctx.DeviceHealth.DeviceID, age)
+				score += cfg.DeviceDataCriticalPoints
+			case age > cfg.DeviceDataStaleAfter:
+				log.Printf("[RISK] Device data stale: device=%s age=%s", ctx.DeviceHealth.DeviceID, age)
+				score += cfg.DeviceDataStalePoints
 			}
 		}
 

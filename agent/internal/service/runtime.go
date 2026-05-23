@@ -13,6 +13,7 @@ func (service *Service) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	defer service.closePDPClient()
 	service.transition(StateStarting)
 	service.setStartedAt(time.Now().UTC())
 	service.enrollment.Refresh(ctx)
@@ -44,6 +45,15 @@ func (service *Service) Run(ctx context.Context) error {
 	}
 	service.transition(StateStopped)
 	return nil
+}
+
+func (service *Service) closePDPClient() {
+	if service == nil || service.pdpClient == nil {
+		return
+	}
+	if err := service.pdpClient.Close(); err != nil {
+		service.logger.Warn("failed to close PDP gRPC client", "error", err)
+	}
 }
 
 func (service *Service) runProtectedResources(ctx context.Context) {

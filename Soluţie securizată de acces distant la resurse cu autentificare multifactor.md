@@ -99,7 +99,7 @@ Din punct de vedere arhitectural, acesta este împărțit în două procese dist
 Este componenta responsabilă pentru funcțiile privilegiate ale aplicației:
 
 * utilizarea **Trusted Platform Module (TPM) 2.0** pentru gestionarea identității hardware a dispozitivului și pentru protejarea materialului criptografic utilizat în stabilirea canalelor de comunicație securizate de tip mTLS;   
-* interceptarea și redirecționarea traficului prin utilizarea **TUN/Windows Filtering Platform (WFP)**, care permite intercepția conexiunilor și redirecționarea a acestora către proxy-ul local al agentului; (varianta TUN este suficientă pentru implementare?)  
+* interceptarea și redirecționarea traficului prin utilizarea **Windows Filtering Platform (WFP)**, prin mecanismul de connect redirection pentru conexiuni TCP IPv4 către spațiul sintetic `100.64.0.0/10`, astfel încât acestea să fie redirecționate către proxy-ul local al agentului;  
 * manipularea politicilor de rezoluție DNS prin configurarea **Name Resolution Policy Table (NRPT)** pentru a forța rezoluția domeniilor prin agent, ocolind setările DNS ale rețelei locale;  
 * utilizează **Windows Management Instrumentation (WMI)** pentru colectarea informațiilor de telemetrie ale dispozitivului (starea antivirusului, configurația firewall-ului, patch-urile instalate etc.) și le transmite către Policy Administrator (PA) imediat după înrolare, la intervale de 30 de minute și în cazul producerii unor evenimente critice sau al remedierii unei probleme (de exemplu, dezactivarea sau reactivarea firewall-ului).
 
@@ -174,13 +174,13 @@ Utilizatorul se poate deconecta din interfața Agentului. În acest caz, Service
 
 ## Sincronizarea listei de resurse
 
-Sincronizarea listei de resurse permise se realizează după autentificarea utilizatorului, prin sesiunea mTLS dintre Agent și Policy Administrator. Cererea este autorizată cu tokenul de sesiune emis pentru utilizatorul autentificat, iar PDP returnează catalogul filtrat pe baza politicilor aplicabile utilizatorului, grupurilor sale, dispozitivului și resurselor definite. Lista conține FQDN-urile externe ale resurselor disponibile, identificatorii resurselor interne, precum și sufixele DNS asociate domeniilor private.
+Sincronizarea listei de resurse permise se realizează după autentificarea utilizatorului, prin sesiunea mTLS dintre Agent și Policy Administrator. Cererea este autorizată cu tokenul de sesiune emis pentru utilizatorul autentificat, iar PDP returnează catalogul filtrat pe baza politicilor aplicabile utilizatorului, grupurilor sale, dispozitivului și resurselor definite. Lista conține FQDN-urile externe concrete ale resurselor disponibile și identificatorii resurselor interne.
 
-Pe baza listei sincronizate sunt generate automat regulile locale NRPT (Name Resolution Policy Table), utilizate pentru controlul rezoluției DNS aferente resurselor protejate.
+Pe baza listei sincronizate sunt generate automat regulile locale NRPT (Name Resolution Policy Table), câte una pentru fiecare FQDN concret primit în catalog.
 
 ## Configurarea interceptării DNS
 
-Atunci când sistemul de operare inițiază o cerere DNS, regulile NRPT verifică dacă domeniul solicitat aparține unui sufix intern definit în lista de resurse. Dacă această condiție este îndeplinită, cererea DNS este redirecționată către resolverul local al Agentului. 
+Atunci când sistemul de operare inițiază o cerere DNS, regulile NRPT verifică dacă domeniul solicitat corespunde unui FQDN concret primit în catalog. Dacă această condiție este îndeplinită, cererea DNS este redirecționată către resolverul local al Agentului. 
 
 Resolverul verifică dacă resursa solicitată există în lista sincronizată. În cazul în care aceasta este definită, Agentul nu returnează adresa IP reală a resursei, ci alocă un IP sintetic din spațiul CGNAT (100.64.0.0/10). Acest IP este utilizat exclusiv pentru identificarea, interceptarea și redirecționarea traficului către tunelul securizat.
 
@@ -188,7 +188,7 @@ Dacă domeniul nu există în lista, Agentul nu generează un IP sintetic, iar c
 
 ## Interceptarea conexiunii
 
-Agentul preia controlul asupra traficului printr-un mecanism local de interceptare bazat pe TUN/Windows Filtering Platform (WFP). Regulile sunt configurate pentru a identifica traficul destinat spațiului de adrese CGNAT utilizat pentru mapările sintetice, astfel încât pachetele către aceste adrese nu sunt rutate către o destinație externă, ci sunt capturate de componenta locală a Agentului. 
+Agentul preia controlul asupra traficului printr-un mecanism local de interceptare bazat pe Windows Filtering Platform (WFP), folosind connect redirection. Regulile sunt configurate pentru a identifica exclusiv conexiunile TCP IPv4 către spațiul de adrese CGNAT utilizat pentru mapările sintetice, astfel încât acestea nu sunt rutate către o destinație externă, ci sunt redirecționate către proxy-ul local al Agentului. 
 
 Prin consultarea tabelei interne de mapare, Agentul corelează adresa IP sintetică și portul de destinație cu resursa logică definită în lista de resurse. 
 

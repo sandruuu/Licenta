@@ -1,0 +1,102 @@
+{
+  "realm": "trustcloud-partner",
+  "displayName": "TrustCloud Partner",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "groups": [
+    {
+      "name": "PARTNER-Admins"
+    },
+    {
+      "name": "PARTNER-Users"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "trustcloud-partner",
+      "name": "TrustCloud Auth Broker - Partner",
+      "description": "OIDC client registration used by the PDP/PA auth broker for the partner tenant federation test.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "trustcloud-partner-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "frontchannelLogout": false,
+      "redirectUris": [
+        "https://localhost:8443/auth/federated/callback",
+        "https://pdp:8443/auth/federated/callback"
+      ],
+      "webOrigins": [
+        "https://localhost:8443",
+        "https://pdp:8443"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@partner.trustcloud.test",
+      "email": "admin@partner.trustcloud.test",
+      "firstName": "Partner",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "groups": [
+        "/PARTNER-Admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "PartnerAdmin123!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "user@partner.trustcloud.test",
+      "email": "user@partner.trustcloud.test",
+      "firstName": "Partner",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "groups": [
+        "/PARTNER-Users"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "PartnerUser123!",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

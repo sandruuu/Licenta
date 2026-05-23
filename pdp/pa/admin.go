@@ -63,7 +63,7 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 	return pa
 }
 
-// ReportDeviceHealth processes a scored device health report from direct device telemetry or legacy compatibility paths.
+// ReportDeviceHealth processes a scored device health report from compatibility paths.
 func (pa *PolicyAdministrator) ReportDeviceHealth(report *models.DeviceHealthReport) {
 	if pa == nil || pa.Devices == nil {
 		return
@@ -71,9 +71,9 @@ func (pa *PolicyAdministrator) ReportDeviceHealth(report *models.DeviceHealthRep
 	pa.Devices.RecordHealth(report)
 }
 
-func (pa *PolicyAdministrator) ReportDevicePosture(report *models.DevicePostureReport) {
+func (pa *PolicyAdministrator) ReportDeviceData(report *models.DeviceDataReport) {
 	if pa == nil || pa.Devices == nil {
 		return
 	}
-	pa.Devices.RecordPosture(report)
+	pa.Devices.RecordDeviceData(report)
 }

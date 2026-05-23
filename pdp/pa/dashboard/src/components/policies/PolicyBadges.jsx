@@ -40,19 +40,3 @@ export function PolicySentence({ policy }) {
     </div>
   );
 }
-
-export function StatTile({ icon: Icon, label, value }) {
-  return (
-    <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">{label}</p>
-          <p className="mt-2 text-2xl font-bold leading-none text-text-primary">{value}</p>
-        </div>
-        <span className="grid h-10 w-10 place-items-center rounded-md bg-accent-muted text-accent">
-          <Icon size={18} />
-        </span>
-      </div>
-    </div>
-  );
-}

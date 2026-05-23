@@ -47,7 +47,7 @@ func TestNativeConnectAppLoopbackRedirectValidation(t *testing.T) {
 	if !IsNativeEndpointClientID(NativeConnectAppClientID) {
 		t.Fatalf("native endpoint client helper rejected connect-app")
 	}
-	if IsNativeEndpointClientID("ztna-agent") || IsNativeEndpointClientID("gateway") {
+	if IsNativeEndpointClientID("trustagent") || IsNativeEndpointClientID("gateway") {
 		t.Fatalf("native endpoint client helper accepted unrelated client ID")
 	}
 }

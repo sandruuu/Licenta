@@ -7,12 +7,15 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/windows/registry"
 )
 
 const (
-	dnsPolicyConfigPath = `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig`
+	dnsClientPolicyPath = `SOFTWARE\Policies\Microsoft\Windows NT\DNSClient`
+	dnsPolicyConfigName = `DnsPolicyConfig`
+	dnsPolicyConfigPath = dnsClientPolicyPath + `\` + dnsPolicyConfigName
 	chromePolicyPath    = `SOFTWARE\Policies\Google\Chrome`
 	edgePolicyPath      = `SOFTWARE\Policies\Microsoft\Edge`
 	firefoxDoHPath      = `SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS`
@@ -54,7 +57,7 @@ func applyNRPTWithCmdlets(ctx context.Context, names []string, dnsServer string)
 	script.WriteString(nrptRulePrefix)
 	script.WriteString("*' } | ForEach-Object { Remove-DnsClientNrptRule -Name $_.Name -Force }\n")
 	if len(names) > 0 {
-		script.WriteString("Set-DnsClientNrptGlobal -EnableDAForAllNetworks EnableAlways -QueryPolicy QueryBoth -SecureNameQueryFallback FallbackPrivate | Out-Null\n")
+		script.WriteString("Set-DnsClientNrptGlobal -EnableDAForAllNetworks EnableAlways -QueryPolicy QueryBoth -SecureNameQueryFallback FallbackPrivate\n")
 	}
 	for _, name := range names {
 		keyName := RuleKey(name)
@@ -63,8 +66,6 @@ func applyNRPTWithCmdlets(ctx context.Context, names []string, dnsServer string)
 		}
 		script.WriteString("Add-DnsClientNrptRule -Namespace ")
 		script.WriteString(powerShellString(nrptNameValue(name)))
-		script.WriteString(" -DAEnable -DANameServers ")
-		script.WriteString(powerShellString(dnsServer))
 		script.WriteString(" -NameServers ")
 		script.WriteString(powerShellString(dnsServer))
 		script.WriteString(" -DisplayName ")
@@ -81,14 +82,17 @@ func applyNRPTWithCmdlets(ctx context.Context, names []string, dnsServer string)
 }
 
 func deleteLegacyNRPTKeys() error {
-	base, _, err := registry.CreateKey(registry.LOCAL_MACHINE, dnsPolicyConfigPath, registry.ALL_ACCESS)
+	base, err := registry.OpenKey(registry.LOCAL_MACHINE, dnsPolicyConfigPath, registry.ALL_ACCESS)
 	if err != nil {
+		if err == syscall.ERROR_FILE_NOT_FOUND {
+			return nil
+		}
 		return err
 	}
-	defer base.Close()
 
 	existing, err := base.ReadSubKeyNames(-1)
 	if err != nil {
+		base.Close()
 		return err
 	}
 	for _, keyName := range existing {
@@ -96,10 +100,43 @@ func deleteLegacyNRPTKeys() error {
 			continue
 		}
 		if err := registry.DeleteKey(base, keyName); err != nil {
+			base.Close()
 			return err
 		}
 	}
+	if err := deleteEmptyLegacyNRPTKey(base); err != nil {
+		return err
+	}
 	return nil
+}
+
+func deleteEmptyLegacyNRPTKey(base registry.Key) error {
+	subkeys, err := base.ReadSubKeyNames(-1)
+	if err != nil {
+		base.Close()
+		return err
+	}
+	values, err := base.ReadValueNames(-1)
+	if err != nil {
+		base.Close()
+		return err
+	}
+	if len(subkeys) > 0 || len(values) > 0 {
+		return base.Close()
+	}
+	if err := base.Close(); err != nil {
+		return err
+	}
+	parent, err := registry.OpenKey(registry.LOCAL_MACHINE, dnsClientPolicyPath, registry.ALL_ACCESS)
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	err = registry.DeleteKey(parent, dnsPolicyConfigName)
+	if err == syscall.ERROR_FILE_NOT_FOUND {
+		return nil
+	}
+	return err
 }
 
 func powerShellString(value string) string {

@@ -2,10 +2,7 @@ package usersession
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +11,6 @@ import (
 	"agent/internal/shared/ipc"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -29,29 +25,41 @@ const (
 
 type GRPCClient struct {
 	connection *grpc.ClientConn
-	cleanup    func()
 }
 
 func (manager *Manager) ensureClient(ctx context.Context, record enrollment.EnrollmentRecord) (Client, error) {
+	deviceID := strings.TrimSpace(record.DeviceID)
+	thumbprint := strings.TrimSpace(record.DeviceCertThumbprint)
 	manager.mu.RLock()
 	client := manager.client
-	manager.mu.RUnlock()
-	if client != nil {
+	if client != nil && (manager.clientDeviceID == "" || (manager.clientDeviceID == deviceID && manager.clientThumbprint == thumbprint)) {
+		manager.mu.RUnlock()
 		return client, nil
 	}
-	if manager.deviceIdentity == nil {
-		manager.deviceIdentity = enrollment.NewDefaultDeviceIdentity()
+	manager.mu.RUnlock()
+	factory := manager.clientFactory
+	if factory == nil {
+		return nil, fmt.Errorf("shared PDP gRPC client factory is required for user session")
 	}
-	client, err := NewGRPCClient(ctx, manager.config, record, manager.deviceIdentity)
+	client, err := factory(ctx, manager.config, record)
 	if err != nil {
 		return nil, err
 	}
 	manager.mu.Lock()
 	if manager.client == nil {
 		manager.client = client
+		manager.clientDeviceID = deviceID
+		manager.clientThumbprint = thumbprint
 	} else {
-		_ = client.Close()
-		client = manager.client
+		if manager.clientDeviceID == "" || (manager.clientDeviceID == deviceID && manager.clientThumbprint == thumbprint) {
+			_ = client.Close()
+			client = manager.client
+		} else {
+			_ = manager.client.Close()
+			manager.client = client
+			manager.clientDeviceID = deviceID
+			manager.clientThumbprint = thumbprint
+		}
 	}
 	manager.mu.Unlock()
 	return client, nil
@@ -74,51 +82,11 @@ func (manager *Manager) clientForLogout(ctx context.Context) (Client, error) {
 	return manager.ensureClient(ctx, record)
 }
 
-func NewGRPCClient(ctx context.Context, config Config, record enrollment.EnrollmentRecord, identity enrollment.DeviceIdentity) (*GRPCClient, error) {
-	target := strings.TrimSpace(config.PDPGRPCEndpoint)
-	if target == "" {
-		return nil, fmt.Errorf("pdp_grpc_endpoint is required for user session")
+func NewGRPCClientFromConnection(connection *grpc.ClientConn) (*GRPCClient, error) {
+	if connection == nil {
+		return nil, fmt.Errorf("PDP gRPC connection is required for user session")
 	}
-	certificate, cleanup, err := identity.ClientCertificate(ctx, record)
-	if err != nil {
-		return nil, fmt.Errorf("load device client certificate: %w", err)
-	}
-	tlsConfig, err := sessionTLSConfig(config, certificate)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, err
-	}
-	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, fmt.Errorf("create PDP session gRPC client: %w", err)
-	}
-	return &GRPCClient{connection: connection, cleanup: cleanup}, nil
-}
-
-func sessionTLSConfig(config Config, certificate tls.Certificate) (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		ServerName:   strings.TrimSpace(config.PDPTLSServerName),
-		Certificates: []tls.Certificate{certificate},
-	}
-	if strings.TrimSpace(config.PDPCAFile) == "" {
-		return tlsConfig, nil
-	}
-	caPEM, err := os.ReadFile(strings.TrimSpace(config.PDPCAFile))
-	if err != nil {
-		return nil, fmt.Errorf("read pdp_ca_file: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("pdp_ca_file contains no certificates")
-	}
-	tlsConfig.RootCAs = pool
-	return tlsConfig, nil
+	return &GRPCClient{connection: connection}, nil
 }
 
 func (client *GRPCClient) StartSession(ctx context.Context, request StartSessionRequest) (StartSessionResponse, error) {
@@ -212,7 +180,6 @@ func (client *GRPCClient) GetCatalog(ctx context.Context, request GetCatalogRequ
 	fields := response.AsMap()
 	return CatalogResponse{
 		Version:     stringField(fields, "version"),
-		DNSSuffixes: stringListField(fields["dns_suffixes"]),
 		Resources:   catalogResources(fields["resources"]),
 		TTLSeconds:  int(numberField(fields, "ttl_seconds")),
 		PolicyEpoch: stringField(fields, "policy_epoch"),
@@ -232,16 +199,6 @@ func (client *GRPCClient) RevokeSession(ctx context.Context, request RevokeSessi
 }
 
 func (client *GRPCClient) Close() error {
-	if client == nil {
-		return nil
-	}
-	if client.cleanup != nil {
-		client.cleanup()
-		client.cleanup = nil
-	}
-	if client.connection != nil {
-		return client.connection.Close()
-	}
 	return nil
 }
 
@@ -327,19 +284,4 @@ func catalogResources(value any) []ipc.CatalogResource {
 		}
 	}
 	return resources
-}
-
-func stringListField(value any) []string {
-	raw, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	values := make([]string, 0, len(raw))
-	for _, item := range raw {
-		text := strings.TrimSpace(fmt.Sprint(item))
-		if text != "" {
-			values = append(values, text)
-		}
-	}
-	return values
 }

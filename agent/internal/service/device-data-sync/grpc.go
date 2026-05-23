@@ -2,17 +2,11 @@ package devicedatasync
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"os"
-	"strings"
 
-	"agent/internal/service/enrollment"
 	"agent/internal/shared/ipc"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -21,65 +15,15 @@ const (
 	grpcReportDeviceDataPath = "/" + grpcServiceName + "/ReportDeviceData"
 )
 
-type ClientConfig struct {
-	PDPGRPCEndpoint  string
-	PDPTLSServerName string
-	PDPCAFile        string
-}
-
 type GRPCClient struct {
 	connection *grpc.ClientConn
-	cleanup    func()
 }
 
-func NewGRPCClient(ctx context.Context, config ClientConfig, record enrollment.EnrollmentRecord, identity enrollment.DeviceIdentity) (Client, error) {
-	target := strings.TrimSpace(config.PDPGRPCEndpoint)
-	if target == "" {
-		return nil, fmt.Errorf("pdp_grpc_endpoint is required for device data sync")
+func NewGRPCClientFromConnection(connection *grpc.ClientConn) (Client, error) {
+	if connection == nil {
+		return nil, fmt.Errorf("PDP gRPC connection is required for device data sync")
 	}
-	if identity == nil {
-		identity = enrollment.NewDefaultDeviceIdentity()
-	}
-	certificate, cleanup, err := identity.ClientCertificate(ctx, record)
-	if err != nil {
-		return nil, fmt.Errorf("load device client certificate: %w", err)
-	}
-	tlsConfig, err := tlsConfig(config, certificate)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, err
-	}
-	connection, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, fmt.Errorf("create PDP device data gRPC client: %w", err)
-	}
-	return &GRPCClient{connection: connection, cleanup: cleanup}, nil
-}
-
-func tlsConfig(config ClientConfig, certificate tls.Certificate) (*tls.Config, error) {
-	tlsConfig := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		ServerName:   strings.TrimSpace(config.PDPTLSServerName),
-		Certificates: []tls.Certificate{certificate},
-	}
-	if strings.TrimSpace(config.PDPCAFile) == "" {
-		return tlsConfig, nil
-	}
-	caPEM, err := os.ReadFile(strings.TrimSpace(config.PDPCAFile))
-	if err != nil {
-		return nil, fmt.Errorf("read pdp_ca_file: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("pdp_ca_file contains no certificates")
-	}
-	tlsConfig.RootCAs = pool
-	return tlsConfig, nil
+	return &GRPCClient{connection: connection}, nil
 }
 
 func (client *GRPCClient) ReportDeviceData(ctx context.Context, report ipc.DeviceDataReport) error {
@@ -92,16 +36,6 @@ func (client *GRPCClient) ReportDeviceData(ctx context.Context, report ipc.Devic
 }
 
 func (client *GRPCClient) Close() error {
-	if client == nil {
-		return nil
-	}
-	if client.cleanup != nil {
-		client.cleanup()
-		client.cleanup = nil
-	}
-	if client.connection != nil {
-		return client.connection.Close()
-	}
 	return nil
 }
 

@@ -16,7 +16,6 @@ func TestResolverResolvesOnlyCatalogResources(t *testing.T) {
 	if err := resolver.ApplyPolicy(Policy{
 		Version:     "v1",
 		PolicyEpoch: "epoch-1",
-		DNSSuffixes: []string{"Example.Test", ".example.test"},
 		TTLSeconds:  60,
 		Resources: []Resource{{
 			FQDN:       "Admin.Example.Test.",
@@ -45,17 +44,17 @@ func TestResolverResolvesOnlyCatalogResources(t *testing.T) {
 		t.Fatalf("Lookup() = %+v, %t", lookup, ok)
 	}
 	status := resolver.Status()
-	if status.State != StatusReady || status.DNSSuffixCount != 1 || status.ResourceCount != 1 || status.ActiveMappingCount != 1 || status.CatalogVersion != "v1" {
+	if status.State != StatusReady || status.ResourceCount != 1 || status.ActiveMappingCount != 1 || status.CatalogVersion != "v1" {
 		t.Fatalf("status = %+v", status)
 	}
 }
 
-func TestResolverRejectsSuffixOnlyUnknownResources(t *testing.T) {
+func TestResolverRejectsUnknownResources(t *testing.T) {
 	resolver, err := New(Options{})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
-	if err := resolver.ApplyPolicy(Policy{DNSSuffixes: []string{"example.test"}}); err != nil {
+	if err := resolver.ApplyPolicy(Policy{}); err != nil {
 		t.Fatalf("ApplyPolicy returned error: %v", err)
 	}
 	_, err = resolver.Resolve("unknown.example.test")
@@ -93,6 +92,38 @@ func TestResolverReusesAndPurgesMappings(t *testing.T) {
 	}
 	if _, ok := resolver.Lookup(first.SyntheticIP); ok {
 		t.Fatalf("stale mapping for removed resource remained active")
+	}
+}
+
+func TestResolverEnsuresMappingsForCatalogResources(t *testing.T) {
+	now := time.Unix(3000, 0).UTC()
+	resolver, err := New(Options{Clock: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if err := resolver.ApplyPolicy(Policy{Resources: []Resource{
+		{FQDN: "b.example.test", ResourceID: "res-b", Protocol: "tcp", Port: 443},
+		{FQDN: "a.example.test", ResourceID: "res-a", Protocol: "tcp", Port: 8443},
+	}}); err != nil {
+		t.Fatalf("ApplyPolicy returned error: %v", err)
+	}
+	mappings, err := resolver.EnsureMappings()
+	if err != nil {
+		t.Fatalf("EnsureMappings returned error: %v", err)
+	}
+	if len(mappings) != 2 {
+		t.Fatalf("EnsureMappings returned %d mappings, want 2", len(mappings))
+	}
+	if mappings[0].FQDN != "a.example.test" || mappings[1].FQDN != "b.example.test" {
+		t.Fatalf("mappings are not sorted by FQDN: %+v", mappings)
+	}
+	for _, mapping := range mappings {
+		if ip := net.ParseIP(mapping.SyntheticIP); ip == nil || !mustCIDR(t, DefaultCGNATCIDR).Contains(ip) {
+			t.Fatalf("synthetic IP %q is outside CGNAT range", mapping.SyntheticIP)
+		}
+		if _, ok := resolver.Lookup(mapping.SyntheticIP); !ok {
+			t.Fatalf("mapping %q was not indexed by synthetic IP", mapping.SyntheticIP)
+		}
 	}
 }
 

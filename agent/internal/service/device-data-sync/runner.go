@@ -22,7 +22,6 @@ const (
 )
 
 type Config struct {
-	Client             ClientConfig
 	Interval           time.Duration
 	ChangeScanInterval time.Duration
 	CallTimeout        time.Duration
@@ -51,28 +50,26 @@ type Client interface {
 	Close() error
 }
 
-type ClientFactory func(context.Context, ClientConfig, enrollment.EnrollmentRecord, enrollment.DeviceIdentity) (Client, error)
+type ClientFactory func(context.Context, enrollment.EnrollmentRecord) (Client, error)
 
 type Dependencies struct {
-	Logger         *slog.Logger
-	Collector      Collector
-	Watcher        Watcher
-	Enrollment     EnrollmentRecordProvider
-	DeviceIdentity enrollment.DeviceIdentity
-	ClientFactory  ClientFactory
-	Clock          func() time.Time
+	Logger        *slog.Logger
+	Collector     Collector
+	Watcher       Watcher
+	Enrollment    EnrollmentRecordProvider
+	ClientFactory ClientFactory
+	Clock         func() time.Time
 }
 
 type Runner struct {
-	logger         *slog.Logger
-	collector      Collector
-	watcher        Watcher
-	enrollment     EnrollmentRecordProvider
-	deviceIdentity enrollment.DeviceIdentity
-	clientFactory  ClientFactory
-	clock          func() time.Time
-	config         Config
-	trigger        chan string
+	logger        *slog.Logger
+	collector     Collector
+	watcher       Watcher
+	enrollment    EnrollmentRecordProvider
+	clientFactory ClientFactory
+	clock         func() time.Time
+	config        Config
+	trigger       chan string
 
 	client               Client
 	clientDeviceID       string
@@ -100,20 +97,15 @@ func NewRunner(config Config, dependencies Dependencies) *Runner {
 	if clock == nil {
 		clock = time.Now
 	}
-	clientFactory := dependencies.ClientFactory
-	if clientFactory == nil {
-		clientFactory = NewGRPCClient
-	}
 	return &Runner{
-		logger:         logger,
-		collector:      dependencies.Collector,
-		watcher:        dependencies.Watcher,
-		enrollment:     dependencies.Enrollment,
-		deviceIdentity: dependencies.DeviceIdentity,
-		clientFactory:  clientFactory,
-		clock:          clock,
-		config:         config,
-		trigger:        make(chan string, 8),
+		logger:        logger,
+		collector:     dependencies.Collector,
+		watcher:       dependencies.Watcher,
+		enrollment:    dependencies.Enrollment,
+		clientFactory: dependencies.ClientFactory,
+		clock:         clock,
+		config:        config,
+		trigger:       make(chan string, 8),
 	}
 }
 
@@ -224,7 +216,7 @@ func (runner *Runner) ensureClient(ctx context.Context, record enrollment.Enroll
 	if runner.clientFactory == nil {
 		return nil, errors.New("device data sync client factory is not configured")
 	}
-	client, err := runner.clientFactory(ctx, runner.config.Client, record, runner.deviceIdentity)
+	client, err := runner.clientFactory(ctx, record)
 	if err != nil {
 		return nil, err
 	}

@@ -81,14 +81,6 @@ func (s *Server) getCAPEM() ([]byte, error) {
 	return nil, fmt.Errorf("CA not initialized")
 }
 
-func (s *Server) signerReady() bool {
-	return s.externalPKI != nil
-}
-
-func normalizeEnrollmentComponent(component string) string {
-	return paenrollment.NormalizeComponent(component)
-}
-
 func (s *Server) deviceRole(_ string) string {
 	return s.pa.Cfg.PKIRoleDevice
 }

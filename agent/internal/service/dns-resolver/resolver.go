@@ -33,7 +33,6 @@ type Options struct {
 type Policy struct {
 	Version     string
 	PolicyEpoch string
-	DNSSuffixes []string
 	Resources   []Resource
 	TTLSeconds  int
 }
@@ -59,7 +58,6 @@ type Mapping struct {
 type Status struct {
 	State              string
 	CGNATRange         string
-	DNSSuffixCount     int
 	ResourceCount      int
 	ActiveMappingCount int
 	CatalogVersion     string
@@ -79,7 +77,6 @@ type Resolver struct {
 	policyTTL   time.Duration
 	version     string
 	policyEpoch string
-	suffixes    map[string]struct{}
 	resources   map[string]Resource
 	byName      map[string]*Mapping
 	byIP        map[string]*Mapping
@@ -120,7 +117,6 @@ func New(options Options) (*Resolver, error) {
 		nextIP:     start + 2,
 		defaultTTL: defaultMappingTTL,
 		policyTTL:  defaultMappingTTL,
-		suffixes:   make(map[string]struct{}),
 		resources:  make(map[string]Resource),
 		byName:     make(map[string]*Mapping),
 		byIP:       make(map[string]*Mapping),
@@ -132,7 +128,6 @@ func (resolver *Resolver) ApplyPolicy(policy Policy) error {
 	if resolver == nil {
 		return errors.New("dns resolver is nil")
 	}
-	suffixes := normalizeSuffixes(policy.DNSSuffixes)
 	resources := normalizeResources(policy.Resources)
 	now := resolver.clock().UTC()
 	resourceSet := make(map[string]Resource, len(resources))
@@ -142,10 +137,6 @@ func (resolver *Resolver) ApplyPolicy(policy Policy) error {
 
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
-	resolver.suffixes = make(map[string]struct{}, len(suffixes))
-	for _, suffix := range suffixes {
-		resolver.suffixes[suffix] = struct{}{}
-	}
 	resolver.resources = resourceSet
 	resolver.version = strings.TrimSpace(policy.Version)
 	resolver.policyEpoch = strings.TrimSpace(policy.PolicyEpoch)
@@ -177,6 +168,34 @@ func (resolver *Resolver) Resolve(name string) (Mapping, error) {
 
 	resolver.mu.Lock()
 	defer resolver.mu.Unlock()
+	return resolver.resolveLocked(fqdn, now)
+}
+
+func (resolver *Resolver) EnsureMappings() ([]Mapping, error) {
+	if resolver == nil {
+		return nil, errors.New("dns resolver is nil")
+	}
+	now := resolver.clock().UTC()
+
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
+	names := make([]string, 0, len(resolver.resources))
+	for fqdn := range resolver.resources {
+		names = append(names, fqdn)
+	}
+	sort.Strings(names)
+	mappings := make([]Mapping, 0, len(names))
+	for _, fqdn := range names {
+		mapping, err := resolver.resolveLocked(fqdn, now)
+		if err != nil {
+			return nil, err
+		}
+		mappings = append(mappings, mapping)
+	}
+	return mappings, nil
+}
+
+func (resolver *Resolver) resolveLocked(fqdn string, now time.Time) (Mapping, error) {
 	resource, ok := resolver.resources[fqdn]
 	if !ok {
 		resolver.lastError = ErrResourceNotInCatalog.Error()
@@ -250,7 +269,6 @@ func (resolver *Resolver) Status() Status {
 	return Status{
 		State:              resolver.state,
 		CGNATRange:         resolver.cgnatCIDR,
-		DNSSuffixCount:     len(resolver.suffixes),
 		ResourceCount:      len(resolver.resources),
 		ActiveMappingCount: len(resolver.byIP),
 		CatalogVersion:     resolver.version,
@@ -340,33 +358,6 @@ func normalizeResources(values []Resource) []Resource {
 		return resources[left].FQDN < resources[right].FQDN
 	})
 	return resources
-}
-
-func normalizeSuffixes(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		suffix := normalizeSuffix(value)
-		if suffix != "" {
-			seen[suffix] = struct{}{}
-		}
-	}
-	suffixes := make([]string, 0, len(seen))
-	for suffix := range seen {
-		suffixes = append(suffixes, suffix)
-	}
-	sort.Strings(suffixes)
-	return suffixes
-}
-
-func normalizeSuffix(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.TrimPrefix(value, "*.")
-	value = strings.TrimPrefix(value, ".")
-	value = strings.TrimSuffix(value, ".")
-	if value == "" || !strings.Contains(value, ".") || strings.ContainsAny(value, " /\\:\x00") || net.ParseIP(value) != nil {
-		return ""
-	}
-	return value
 }
 
 func normalizeHost(value string) string {

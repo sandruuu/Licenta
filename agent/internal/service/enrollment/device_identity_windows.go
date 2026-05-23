@@ -11,7 +11,6 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
@@ -68,9 +67,7 @@ func (identity windowsDeviceIdentity) CreateEnrollmentCSR(ctx context.Context, k
 		return EnrollmentCSR{}, err
 	}
 	defer signer.Close()
-	csrTemplate := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "TrustAgent Device Enrollment"},
-	}
+	csrTemplate := &x509.CertificateRequest{}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)
 	if err != nil {
 		return EnrollmentCSR{}, fmt.Errorf("create enrollment CSR: %w", err)
@@ -587,4 +584,3 @@ func acquireCertificatePrivateKey(certContext *windows.CertContext) error {
 	}
 	return nil
 }
-

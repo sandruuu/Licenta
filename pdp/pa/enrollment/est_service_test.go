@@ -140,7 +140,7 @@ func TestServiceCompleteESTEnrollmentAcceptsDeviceURISAN(t *testing.T) {
 	request := models.EnrollmentRequest{
 		DeviceID:  deviceID,
 		Component: "endpoint",
-		CSRPEM:    testEnrollmentCSRPEMWithDeviceURI(t, testEnrollmentKey(t), "ztna-device-2050b1864ca3647164fea13ac86d759e7f8bfb5ede15e202", deviceID, "alice@example.com"),
+		CSRPEM:    testEnrollmentCSRPEMWithDeviceURI(t, testEnrollmentKey(t), "trustagent-device-2050b1864ca3647164fea13ac86d759e7f8bfb5ede15e202", deviceID, "alice@example.com"),
 	}
 	identity := ESTEnrollmentIdentity{
 		DeviceID:       deviceID,

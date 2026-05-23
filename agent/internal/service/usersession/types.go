@@ -25,9 +25,6 @@ const (
 )
 
 type Config struct {
-	PDPGRPCEndpoint   string
-	PDPTLSServerName  string
-	PDPCAFile         string
 	LoginTimeout      time.Duration
 	LoginPollInterval time.Duration
 }
@@ -35,8 +32,8 @@ type Config struct {
 type Dependencies struct {
 	Logger             *slog.Logger
 	Client             Client
+	ClientFactory      ClientFactory
 	Enrollment         EnrollmentProvider
-	DeviceIdentity     enrollment.DeviceIdentity
 	DeviceDataSnapshot func() ipc.DeviceDataReport
 	OnCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	OnLogout           func(context.Context, ipc.PeerIdentity) error
@@ -55,6 +52,8 @@ type Client interface {
 	RevokeSession(context.Context, RevokeSessionRequest) error
 	Close() error
 }
+
+type ClientFactory func(context.Context, Config, enrollment.EnrollmentRecord) (Client, error)
 
 type StartSessionRequest struct {
 	DeviceID              string
@@ -110,7 +109,6 @@ type GetCatalogRequest struct {
 
 type CatalogResponse struct {
 	Version     string
-	DNSSuffixes []string
 	Resources   []ipc.CatalogResource
 	TTLSeconds  int
 	PolicyEpoch string
@@ -124,6 +122,15 @@ type RevokeSessionRequest struct {
 type RuntimeState struct {
 	UserSession ipc.UserSessionInfo
 	Catalog     ipc.CatalogInfo
+}
+
+type AuthenticatedSession struct {
+	AgentSessionID    string
+	AgentSessionToken string
+	DisplayName       string
+	Email             string
+	ExpiresAt         time.Time
+	Catalog           ipc.CatalogInfo
 }
 
 type sessionState struct {
@@ -150,8 +157,10 @@ type Manager struct {
 	logger             *slog.Logger
 	config             Config
 	client             Client
+	clientFactory      ClientFactory
+	clientDeviceID     string
+	clientThumbprint   string
 	enrollment         EnrollmentProvider
-	deviceIdentity     enrollment.DeviceIdentity
 	deviceDataSnapshot func() ipc.DeviceDataReport
 	onCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	onLogout           func(context.Context, ipc.PeerIdentity) error

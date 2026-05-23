@@ -1,12 +1,9 @@
 package transport
 
 import (
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"strings"
-
-	paenrollment "pdp/pa/enrollment"
 )
 
 func bearerToken(r *http.Request) (string, error) {
@@ -16,8 +13,4 @@ func bearerToken(r *http.Request) (string, error) {
 		return "", fmt.Errorf("bearer token required")
 	}
 	return strings.TrimSpace(parts[1]), nil
-}
-
-func validateCSREmailIdentity(csr *x509.CertificateRequest, username string) error {
-	return paenrollment.ValidateCSREmailIdentity(csr, username)
 }
