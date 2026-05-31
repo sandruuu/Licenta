@@ -8,6 +8,7 @@ import (
 
 	"pdp/certs"
 	"pdp/models"
+	"pdp/pa/events"
 	"pdp/util"
 )
 
@@ -86,6 +87,14 @@ func (s *Service) RevokeDeviceEnrollment(enrollmentID string) (*models.DeviceEnr
 	}
 	enrollment.Status = "revoked"
 	s.store.SaveDeviceEnrollment(enrollment)
+	if s.publisher != nil {
+		s.publisher.PublishCAEPEvent(events.TopicDeviceRevoked, map[string]string{
+			"device_id":     enrollment.DeviceID,
+			"tenant_id":     enrollment.TenantID,
+			"enrollment_id": enrollment.ID,
+			"reason":        "device_enrollment_revoked",
+		})
+	}
 	return enrollment, nil
 }
 

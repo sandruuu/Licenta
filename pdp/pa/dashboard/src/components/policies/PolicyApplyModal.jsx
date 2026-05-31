@@ -1,8 +1,8 @@
 import { createElement, useState } from 'react';
-import { Building2, CheckCircle2, KeyRound, Users } from 'lucide-react';
+import { Building2, CheckCircle2, Info, KeyRound, Users } from 'lucide-react';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
-import FormField, { FormCheckbox, FormInput, FormRow, FormSelect } from '../ui/FormField';
+import FormField, { FormCheckbox, FormInput, FormSelect } from '../ui/FormField';
 import Modal from '../ui/Modal';
 import { layerIcons } from './policyIcons';
 import {
@@ -99,6 +99,23 @@ function ScopeContext({ form, maps, groupsForAssignment }) {
   );
 }
 
+function PolicyPrecedenceNote() {
+  return (
+    <section className="flex items-start gap-3 rounded-md border border-border bg-surface p-4">
+      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-accent-muted text-accent">
+        <Info size={16} />
+      </span>
+      <div className="min-w-0">
+        <h3 className="text-sm font-bold text-text-primary">Multiple policy evaluation</h3>
+        <p className="mt-1 text-sm leading-6 text-text-secondary">
+          When multiple policies apply to the same access request, all matching policies are evaluated together.
+          Final decision priority is Block access, then Require MFA, then Skip MFA, then Allow access.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function AssignmentTypeCard({ layer, selected, onSelect }) {
   const Icon = layerIcons[layer.value];
   return (
@@ -139,7 +156,12 @@ function SelectableTable({ title, countLabel, searchPlaceholder, items, selected
           <Badge variant={selectedIDs.length ? 'accent' : 'neutral'}>{countLabel(selectedIDs.length)}</Badge>
         </div>
         <div className="mt-3">
-          <FormInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder={searchPlaceholder} />
+          <FormInput
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={searchPlaceholder}
+            className="border-border bg-surface font-bold shadow-sm hover:border-text-muted focus:ring-[3px]"
+          />
         </div>
       </div>
       <div className="max-h-[280px] overflow-y-auto">
@@ -263,6 +285,8 @@ export default function PolicyApplyModal({
 
       <ScopeContext form={form} maps={maps} groupsForAssignment={groupsForAssignment} />
 
+      <PolicyPrecedenceNote />
+
       <section className="rounded-md border border-border bg-surface p-4">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <h3 className="text-base font-bold text-text-primary">Specify type</h3>
@@ -288,16 +312,11 @@ export default function PolicyApplyModal({
         </div>
       </section>
 
-      <FormRow>
-        <FormField label="Order policies">
-          <FormInput type="number" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} />
-        </FormField>
-        <FormField label="Selected targets">
-          <div className="flex h-[38px] items-center rounded-md border border-border bg-surface px-3 text-sm font-bold text-text-primary">
-            {selectedCountForLayer(form)} selected
-          </div>
-        </FormField>
-      </FormRow>
+      <FormField label="Selected targets">
+        <div className="flex h-[38px] items-center rounded-md border border-border bg-surface px-3 text-sm font-bold text-text-primary">
+          {selectedCountForLayer(form)} selected
+        </div>
+      </FormField>
 
       {['resource', 'resource_group'].includes(form.level) && (
         <SelectableTable
@@ -318,8 +337,8 @@ export default function PolicyApplyModal({
               key: 'policy',
               label: 'Application policy',
               value: (resource) => {
-                const existing = assignments.find((assignment) => assignment.resource_id === resource.id && assignment.level === 'resource');
-                return existing ? maps.policies.get(existing.policy_id)?.name || 'Assigned' : 'New policy';
+                const existing = assignments.filter((assignment) => assignment.resource_id === resource.id && assignment.level === 'resource');
+                return existing.length ? `${existing.length} assigned` : 'New policy';
               },
             },
           ]}
@@ -386,8 +405,8 @@ export default function PolicyApplyModal({
                 key: 'policy',
                 label: 'User-Group policy',
                 value: (group) => {
-                  const existing = assignments.find((assignment) => assignment.group_id === group.id && assignment.level === 'group');
-                  return existing ? maps.policies.get(existing.policy_id)?.name || 'Assigned' : 'New policy';
+                  const existing = assignments.filter((assignment) => assignment.group_id === group.id && assignment.level === 'group');
+                  return existing.length ? `${existing.length} assigned` : 'New policy';
                 },
               },
             ]}

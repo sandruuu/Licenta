@@ -31,6 +31,7 @@ import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '..
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { formatDateTime } from '../utils/format';
 import { actionMeta } from '../components/policies/policyModel';
+import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 function DetailValue({ label, value, mono = false }) {
   return (
@@ -67,7 +68,7 @@ function usersForGroup(group, usersByID) {
 
 function policyVariant(action) {
   if (action === 'deny') return 'danger';
-  if (action === 'mfa_required') return 'warning';
+  if (action === 'step_up_required') return 'warning';
   return 'success';
 }
 
@@ -163,7 +164,7 @@ export default function ResourceDetail() {
         name: editForm.name?.trim(),
         description: editForm.description?.trim(),
         type: editForm.type,
-        tenant_id: editForm.tenant_id,
+        organization_id: editForm.tenant_id,
         gateway_id: editForm.gateway_id,
         host: editForm.host?.trim(),
         port: parseInt(editForm.port, 10) || 0,
@@ -245,7 +246,7 @@ export default function ResourceDetail() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-3">
                     <h1 className="text-2xl font-bold leading-tight text-text-primary">{resource.name || resource.id}</h1>
-                    <Badge variant="info">{(resource.type || '-').toUpperCase()}</Badge>
+                    <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
                     <Badge variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</Badge>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">

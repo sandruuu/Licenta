@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { clearToken } from '../api';
+import BrandLogo from './ui/BrandLogo';
 import ThemeToggle from './ui/ThemeToggle';
 import {
   LayoutDashboard,
@@ -12,7 +13,6 @@ import {
   LogOut,
   Building2,
   ShieldCheck,
-  Shield,
 } from 'lucide-react';
 
 const navSections = [
@@ -52,14 +52,10 @@ export default function Layout() {
         className="sidebar-shell group fixed left-1.5 top-1.5 z-40 flex h-[calc(100vh-12px)] w-[88px] flex-col gap-2 rounded-md p-2 transition-[width] duration-300 ease-out hover:w-[292px]"
       >
         <div className="sidebar-panel flex h-20 shrink-0 items-center justify-center gap-0 rounded-md px-3 transition-colors group-hover:justify-start group-hover:gap-3">
-          <span className="grid h-10 w-10 shrink-0 place-items-center text-accent">
-            <Shield className="h-7 w-7" />
-          </span>
-          <div className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
-            <h1 className="text-lg font-bold leading-none text-text-primary">
-              <span className="text-accent">TRUST</span>CLOUD
-            </h1>
-          </div>
+          <BrandLogo
+            className="flex w-full items-center justify-center gap-0 group-hover:justify-start group-hover:gap-3"
+            textWrapperClassName="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100"
+          />
         </div>
 
         <div className="sidebar-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md">

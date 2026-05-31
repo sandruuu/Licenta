@@ -76,10 +76,9 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		PKITransitKey:       "trustcloud-pdp-key",
 		PKITimeout:          10 * time.Second,
 		JWTExpiry:           time.Hour,
-		MFATokenExpiry:      5 * time.Minute,
 		JWTTransitKey:       "trustcloud-pdp-key",
 		JWTKeyEncryptedPath: dataDir + "/jwt_signing_key.enc",
-		TOTPIssuer:          "TrustCloud-PDP",
+		TOTPIssuer:          "TrustCloud",
 		SessionExpiry:       time.Hour,
 		MaxSessions:         5,
 		MaxLoginAttempts:    5,
@@ -127,7 +126,6 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:        "test_allow_admin_access",
 		Name:      "Allow admin access in transport tests",
-		Priority:  1,
 		Enabled:   true,
 		Action:    "allow",
 		CreatedAt: now,
@@ -141,12 +139,16 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		PolicyID:  "test_allow_admin_access",
 		TenantID:  transportTestTenantID,
 		Level:     "organization",
-		Priority:  1,
 		Enabled:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	server := &Server{pa: policyAdmin, mtlsCAPool: x509.NewCertPool(), sessionGateways: make(map[string]string)}
+	server := &Server{
+		pa:              policyAdmin,
+		mtlsCAPool:      x509.NewCertPool(),
+		sessionGateways: make(map[string]string),
+		stepUpAuth:      newStepUpBrowserAuthStore(cfg.Runtime.BrowserAuthSessionTTL),
+	}
 	server.wireSessionDeleteSink()
 	return server, dataStore
 }

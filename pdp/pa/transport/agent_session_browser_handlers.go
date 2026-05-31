@@ -145,6 +145,7 @@ func (s *Server) redirectAgentSessionToIDP(w http.ResponseWriter, r *http.Reques
 		ClientID:      idpCfg.ClientID,
 		ClientSecret:  idpCfg.ClientSecret,
 		Scopes:        idpCfg.Scopes,
+		Prompt:        "login",
 		AutoDiscovery: idpCfg.AutoDiscovery,
 		ClaimMapping:  idpCfg.ClaimMapping,
 	}

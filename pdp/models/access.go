@@ -33,27 +33,31 @@ type AccessRequest struct {
 
 // AccessDecision is the policy engine's response.
 type AccessDecision struct {
-	Decision    string   `json:"decision"`
-	Reason      string   `json:"reason"`
-	RiskScore   int      `json:"risk_score"`
-	MatchedRule string   `json:"matched_rule"`
-	Policies    []string `json:"policies"`
-	SessionID   string   `json:"session_id,omitempty"`
-	ExpiresAt   int64    `json:"expires_at,omitempty"`
+	Decision         string                `json:"decision"`
+	Reason           string                `json:"reason"`
+	RiskScore        int                   `json:"risk_score"`
+	AccessConditions AccessConditions      `json:"access_conditions,omitempty"`
+	SessionControls  SessionPolicyControls `json:"session_controls,omitempty"`
+	MatchedRule      string                `json:"matched_rule"`
+	Policies         []string              `json:"policies"`
+	SessionID        string                `json:"session_id,omitempty"`
+	ExpiresAt        int64                 `json:"expires_at,omitempty"`
+	StepUp           *StepUpRequirement    `json:"step_up,omitempty"`
 }
 
 // RiskContext contains all contextual information used for risk scoring.
 type RiskContext struct {
-	UserID             string
-	SourceIP           string
-	DeviceHealth       *DeviceHealthReport
-	FailedAttempts     int
-	IsNewDevice        bool
-	IsNewLocation      bool
-	TimeOfDay          time.Time
-	Protocol           string
-	GeoVelocity        float64
-	IsImpossibleTravel bool
+	UserID                string
+	SourceIP              string
+	DeviceHealth          *DeviceHealthReport
+	FailedAttempts        int
+	IsNewDevice           bool
+	IsNewLocation         bool
+	TimeOfDay             time.Time
+	Protocol              string
+	GeoVelocity           float64
+	IsImpossibleTravel    bool
+	IsUserBaselineAnomaly bool
 
 	AnomalyAlerts []string
 	AnomalyScore  int

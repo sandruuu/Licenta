@@ -8,32 +8,34 @@ import (
 
 // RuntimeConfig holds operational knobs that used to live as literals in code.
 type RuntimeConfig struct {
-	StoreAutoSaveInterval   time.Duration `json:"store_auto_save_interval"`
-	SessionCleanupInterval  time.Duration `json:"session_cleanup_interval"`
-	CertificateRenewBefore  time.Duration `json:"certificate_renew_before"`
-	PKIRenewCheckInterval   time.Duration `json:"pki_renew_check_interval"`
-	HTTPReadTimeout         time.Duration `json:"http_read_timeout"`
-	HTTPReadHeaderTimeout   time.Duration `json:"http_read_header_timeout"`
-	HTTPWriteTimeout        time.Duration `json:"http_write_timeout"`
-	HTTPIdleTimeout         time.Duration `json:"http_idle_timeout"`
-	EventBufferSize         int           `json:"event_buffer_size"`
-	CatalogTTLSeconds       int           `json:"catalog_ttl_seconds"`
-	AuthRateLimitWindow     time.Duration `json:"auth_rate_limit_window"`
-	AuthRateLimitMax        int           `json:"auth_rate_limit_max"`
-	OIDCAuthorizeSessionTTL time.Duration `json:"oidc_authorize_session_ttl"`
-	OIDCAuthCodeTTL         time.Duration `json:"oidc_auth_code_ttl"`
-	OIDCRefreshTokenTTL     time.Duration `json:"oidc_refresh_token_ttl"`
-	OIDCCleanupInterval     time.Duration `json:"oidc_cleanup_interval"`
-	OIDCEnrollmentTokenTTL  time.Duration `json:"oidc_enrollment_token_ttl"`
-	WebAuthnChallengeTTL    time.Duration `json:"webauthn_challenge_ttl"`
-	WebAuthnCleanupInterval time.Duration `json:"webauthn_cleanup_interval"`
-	FederationCacheTTL      time.Duration `json:"federation_cache_ttl"`
-	FederationHTTPTimeout   time.Duration `json:"federation_http_timeout"`
-	BrowserAuthSessionTTL   time.Duration `json:"browser_auth_session_ttl"`
-	CSRFCookieMaxAgeSeconds int           `json:"csrf_cookie_max_age_seconds"`
-	EnrollRateLimitWindow   time.Duration `json:"enroll_rate_limit_window"`
-	EnrollRateLimitMax      int           `json:"enroll_rate_limit_max"`
-	GatewayRevokeTimeout    time.Duration `json:"gateway_revoke_timeout"`
+	StoreAutoSaveInterval      time.Duration `json:"store_auto_save_interval"`
+	SessionCleanupInterval     time.Duration `json:"session_cleanup_interval"`
+	EnrollmentCleanupInterval  time.Duration `json:"enrollment_cleanup_interval"`
+	CertificateRenewBefore     time.Duration `json:"certificate_renew_before"`
+	PKIRenewCheckInterval      time.Duration `json:"pki_renew_check_interval"`
+	HTTPReadTimeout            time.Duration `json:"http_read_timeout"`
+	HTTPReadHeaderTimeout      time.Duration `json:"http_read_header_timeout"`
+	HTTPWriteTimeout           time.Duration `json:"http_write_timeout"`
+	HTTPIdleTimeout            time.Duration `json:"http_idle_timeout"`
+	EventBufferSize            int           `json:"event_buffer_size"`
+	CatalogTTLSeconds          int           `json:"catalog_ttl_seconds"`
+	AuthRateLimitWindow        time.Duration `json:"auth_rate_limit_window"`
+	AuthRateLimitMax           int           `json:"auth_rate_limit_max"`
+	OIDCAuthorizeSessionTTL    time.Duration `json:"oidc_authorize_session_ttl"`
+	OIDCAuthCodeTTL            time.Duration `json:"oidc_auth_code_ttl"`
+	OIDCRefreshTokenTTL        time.Duration `json:"oidc_refresh_token_ttl"`
+	OIDCCleanupInterval        time.Duration `json:"oidc_cleanup_interval"`
+	OIDCEnrollmentTokenTTL     time.Duration `json:"oidc_enrollment_token_ttl"`
+	WebAuthnChallengeTTL       time.Duration `json:"webauthn_challenge_ttl"`
+	WebAuthnCleanupInterval    time.Duration `json:"webauthn_cleanup_interval"`
+	FederationCacheTTL         time.Duration `json:"federation_cache_ttl"`
+	FederationHTTPTimeout      time.Duration `json:"federation_http_timeout"`
+	BrowserAuthSessionTTL      time.Duration `json:"browser_auth_session_ttl"`
+	CSRFCookieMaxAgeSeconds    int           `json:"csrf_cookie_max_age_seconds"`
+	EnrollRateLimitWindow      time.Duration `json:"enroll_rate_limit_window"`
+	EnrollRateLimitMax         int           `json:"enroll_rate_limit_max"`
+	GatewayRevokeTimeout       time.Duration `json:"gateway_revoke_timeout"`
+	ResourceSessionRenewBefore time.Duration `json:"resource_session_renew_before"`
 }
 
 // BootstrapAdminConfig controls optional first-admin creation.
@@ -66,6 +68,11 @@ type GatewayConfig struct {
 type EnrollmentConfig struct {
 	CertificateValidityDays int           `json:"certificate_validity_days"`
 	BrowserSessionTTL       time.Duration `json:"browser_session_ttl"`
+}
+
+// AdminAuthConfig controls authentication for the PDP administrator console.
+type AdminAuthConfig struct {
+	RequireMFA *bool `json:"require_mfa,omitempty"`
 }
 
 // GeoConfig controls external IP geolocation behavior.
@@ -108,6 +115,7 @@ type RiskConfig struct {
 	NightHoursPoints            int            `json:"night_hours_points"`
 	NewDevicePoints             int            `json:"new_device_points"`
 	NewLocationPoints           int            `json:"new_location_points"`
+	UserBaselineAnomalyPoints   int            `json:"user_baseline_anomaly_points"`
 	ProtocolPoints              map[string]int `json:"protocol_points"`
 	UnknownProtocolPoints       int            `json:"unknown_protocol_points"`
 	ImpossibleTravelPoints      int            `json:"impossible_travel_points"`
@@ -139,12 +147,13 @@ type Config struct {
 
 	// JWT settings
 	JWTExpiry           time.Duration `json:"jwt_expiry"`             // token lifetime
-	MFATokenExpiry      time.Duration `json:"mfa_token_expiry"`       // MFA temporary token lifetime
 	JWTTransitKey       string        `json:"jwt_transit_key"`        // Vault Transit key used for JWT signing key encryption
 	JWTKeyEncryptedPath string        `json:"jwt_key_encrypted_path"` // Vault Transit encrypted JWT signing key path
 
 	// TOTP settings
-	TOTPIssuer string `json:"totp_issuer"` // issuer name shown in authenticator apps
+	TOTPIssuer                string `json:"totp_issuer"`                   // issuer name shown in authenticator apps
+	MFATransitKey             string `json:"mfa_transit_key"`               // optional Vault Transit key for MFA secret wrapping
+	MFASecretKeyEncryptedPath string `json:"mfa_secret_key_encrypted_path"` // Vault Transit encrypted MFA data key path
 
 	// Session settings
 	SessionExpiry time.Duration `json:"session_expiry"` // session lifetime
@@ -171,6 +180,7 @@ type Config struct {
 	Runtime        RuntimeConfig         `json:"runtime"`
 	BootstrapAdmin BootstrapAdminConfig  `json:"bootstrap_admin"`
 	Public         PublicDashboardConfig `json:"public"`
+	AdminAuth      AdminAuthConfig       `json:"admin_auth"`
 	Gateway        GatewayConfig         `json:"gateway"`
 	Enrollment     EnrollmentConfig      `json:"enrollment"`
 	Geo            GeoConfig             `json:"geo"`
@@ -197,6 +207,12 @@ func (c *Config) PublicConfig() PublicDashboardConfig {
 	return c.Public
 }
 
+// AdminMFARequired reports whether the PDP admin console requires a second
+// factor after password authentication. Missing config keeps the secure default.
+func (c *Config) AdminMFARequired() bool {
+	return c == nil || c.AdminAuth.RequireMFA == nil || *c.AdminAuth.RequireMFA
+}
+
 // ApplyDefaults fills defensive fallback values for programmatic tests and
 // older config files. Runtime deployments should keep these values explicit in
 // config.json.
@@ -212,6 +228,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Runtime.PKIRenewCheckInterval <= 0 {
 		c.Runtime.PKIRenewCheckInterval = 6 * time.Hour
+	}
+	if c.Runtime.EnrollmentCleanupInterval <= 0 {
+		c.Runtime.EnrollmentCleanupInterval = time.Minute
 	}
 	if c.Runtime.OIDCEnrollmentTokenTTL <= 0 {
 		c.Runtime.OIDCEnrollmentTokenTTL = 5 * time.Minute
@@ -242,6 +261,26 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Runtime.GatewayRevokeTimeout <= 0 {
 		c.Runtime.GatewayRevokeTimeout = 5 * time.Second
+	}
+	if c.Runtime.ResourceSessionRenewBefore <= 0 {
+		c.Runtime.ResourceSessionRenewBefore = time.Minute
+	}
+	if c.TOTPIssuer == "" {
+		c.TOTPIssuer = "TrustCloud"
+	}
+	if c.AdminAuth.RequireMFA == nil {
+		requireMFA := true
+		c.AdminAuth.RequireMFA = &requireMFA
+	}
+	if c.MFATransitKey == "" {
+		if c.JWTTransitKey != "" {
+			c.MFATransitKey = c.JWTTransitKey
+		} else {
+			c.MFATransitKey = c.PKITransitKey
+		}
+	}
+	if c.MFASecretKeyEncryptedPath == "" && c.DataDir != "" {
+		c.MFASecretKeyEncryptedPath = c.DataDir + "/mfa_secret.key.enc"
 	}
 	if c.Gateway.CertificateValidityDays <= 0 {
 		c.Gateway.CertificateValidityDays = 7
@@ -357,6 +396,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Risk.NewLocationPoints <= 0 {
 		c.Risk.NewLocationPoints = 5
+	}
+	if c.Risk.UserBaselineAnomalyPoints <= 0 {
+		c.Risk.UserBaselineAnomalyPoints = 15
 	}
 	if len(c.Risk.ProtocolPoints) == 0 {
 		c.Risk.ProtocolPoints = map[string]int{

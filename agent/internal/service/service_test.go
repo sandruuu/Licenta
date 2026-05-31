@@ -6,11 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"agent/internal/service/enrollment"
+	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
 )
@@ -450,6 +452,230 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	}
 }
 
+func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	sessionClient := &fakeUserSessionClient{
+		start: usersession.StartSessionResponse{
+			SessionRequestID: "srq_123",
+			AuthURL:          "https://pdp.example.com/browser/session/srq_123",
+			ClaimSecret:      "claim-secret",
+			ExpiresAt:        now.Add(time.Minute),
+			PollInterval:     10 * time.Millisecond,
+		},
+		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
+		claim: usersession.ClaimSessionResponse{
+			AgentSessionID:    "sess_123",
+			AgentSessionToken: "session-token",
+			ExpiresAt:         now.Add(time.Minute),
+			DisplayName:       "user@example.com",
+			Email:             "user@example.com",
+		},
+		catalog: usersession.CatalogResponse{
+			Version: "cat_1",
+			Resources: []ipc.CatalogResource{{
+				ResourceID: "res_ssh",
+				FQDN:       "ssh.internal.example",
+				Protocol:   "ssh",
+				Port:       22,
+			}},
+			TTLSeconds:  300,
+			PolicyEpoch: "1",
+			DeviceDataPolicy: ipc.DeviceDataPolicy{
+				RequiredChecks:      []string{"Firewall"},
+				RequiredCheckStatus: ipc.DeviceDataStatusGood,
+			},
+		},
+	}
+	protectedResources := &fakeProtectedResources{}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusCritical),
+		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusGood),
+	}}
+	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
+		ProtectedResources:  protectedResources,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
+	})
+	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	})
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartUserLoginInteractive, ipc.StartUserLoginInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if response, err := service.HandleIPC(peerCtx, request); err != nil || !response.OK {
+		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
+	}
+	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	if len(protectedResources.appliedCatalogs()) != 1 {
+		t.Fatalf("initial protected resource applies = %+v", protectedResources.appliedCatalogs())
+	}
+
+	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
+		t.Fatalf("collect critical device data returned error: %v", err)
+	}
+	if protectedResources.clearCount() != 1 {
+		t.Fatalf("protected resources clear count = %d, want 1", protectedResources.clearCount())
+	}
+	if dashboard := service.dashboard(peerCtx); !strings.Contains(dashboard.UserSession.Message, "paused") {
+		t.Fatalf("dashboard message after posture failure = %+v", dashboard.UserSession)
+	}
+
+	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
+		t.Fatalf("collect recovered device data returned error: %v", err)
+	}
+	if applied := protectedResources.appliedCatalogs(); len(applied) != 2 || applied[1].Version != "cat_1" {
+		t.Fatalf("protected resources were not restored with catalog: %+v", applied)
+	}
+	if dashboard := service.dashboard(peerCtx); !strings.Contains(dashboard.UserSession.Message, "restored") {
+		t.Fatalf("dashboard message after posture recovery = %+v", dashboard.UserSession)
+	}
+}
+
+func TestServiceLogoutRevokesSessionAndClearsCatalog(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	sessionClient := &fakeUserSessionClient{
+		start: usersession.StartSessionResponse{
+			SessionRequestID: "srq_123",
+			AuthURL:          "https://pdp.example.com/browser/session/srq_123",
+			ClaimSecret:      "claim-secret",
+			ExpiresAt:        now.Add(time.Minute),
+			PollInterval:     10 * time.Millisecond,
+			Status:           usersession.StatusWaitingForUserLogin,
+		},
+		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
+		claim: usersession.ClaimSessionResponse{
+			AgentSessionID:    "sess_123",
+			AgentSessionToken: "session-token",
+			ExpiresAt:         now.Add(time.Minute),
+			DisplayName:       "user@example.com",
+			Email:             "user@example.com",
+		},
+		catalog: usersession.CatalogResponse{
+			Version: "cat_1",
+			Resources: []ipc.CatalogResource{{
+				ResourceID: "res_crm",
+				FQDN:       "crm.internal.example",
+				Protocol:   "https",
+				Port:       443,
+			}},
+			TTLSeconds:  300,
+			PolicyEpoch: "1",
+		},
+	}
+	protectedResources := &fakeProtectedResources{}
+	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:              func() time.Time { return now },
+		EnrollmentStore:    store,
+		UserSessionClient:  sessionClient,
+		ProtectedResources: protectedResources,
+		DeviceIdentity:     fakeDeviceIdentity{},
+	})
+	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	})
+	startRequest, err := ipc.NewRequest("req-start", ipc.OperationStartUserLoginInteractive, ipc.StartUserLoginInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest start returned error: %v", err)
+	}
+	if response, err := service.HandleIPC(peerCtx, startRequest); err != nil || !response.OK {
+		t.Fatalf("start response = %+v err=%v", response, err)
+	}
+	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	if dashboard := service.dashboard(peerCtx); len(dashboard.Catalog.Resources) != 1 {
+		t.Fatalf("catalog was not loaded before logout: %+v", dashboard.Catalog)
+	}
+
+	logoutRequest, err := ipc.NewRequest("req-logout", ipc.OperationLogoutUserSession, ipc.LogoutUserSessionRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest logout returned error: %v", err)
+	}
+	response, err := service.HandleIPC(peerCtx, logoutRequest)
+	if err != nil {
+		t.Fatalf("logout HandleIPC returned error: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("logout response error = %+v", response.Error)
+	}
+	var logout ipc.LogoutUserSessionResponse
+	if err := ipc.DecodeBody(response.Body, &logout); err != nil {
+		t.Fatalf("DecodeBody logout returned error: %v", err)
+	}
+	if !logout.LoggedOut || logout.State != ipc.UserSessionStateSignedOut {
+		t.Fatalf("logout = %+v", logout)
+	}
+	if revokes := sessionClient.revokeRequests(); len(revokes) != 1 || revokes[0].AgentSessionToken != "session-token" || revokes[0].SessionID != "sess_123" {
+		t.Fatalf("revoke requests = %+v", revokes)
+	}
+	if dashboard := service.dashboard(peerCtx); dashboard.UserSession.State != ipc.UserSessionStateSignedOut || len(dashboard.Catalog.Resources) != 0 {
+		t.Fatalf("dashboard after logout user session = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
+	}
+	if protectedResources.clearCount() != 1 {
+		t.Fatalf("protected resources clear count = %d, want 1", protectedResources.clearCount())
+	}
+}
+
+func TestServiceDashboardPromptsSignInWhenEnrolledAndSignedOut(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	service := New(Config{}, Dependencies{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:           func() time.Time { return now },
+		EnrollmentStore: store,
+		DeviceIdentity:  fakeDeviceIdentity{},
+	})
+	service.enrollment.Refresh(context.Background())
+	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	})
+
+	dashboard := service.dashboard(peerCtx)
+	if dashboard.UserSession.State != ipc.UserSessionStateSignedOut || !strings.Contains(dashboard.UserSession.Message, "Sign in required") || len(dashboard.Catalog.Resources) != 0 {
+		t.Fatalf("signed-out dashboard = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
+	}
+
+	service.recordAuthenticationRequired(trafficinterception.StreamRequest{ResourceID: "res_crm", FQDN: "crm.internal.example"})
+	dashboard = service.dashboard(peerCtx)
+	if !strings.Contains(dashboard.UserSession.Message, "crm.internal.example") {
+		t.Fatalf("dashboard did not include access prompt target: %+v", dashboard.UserSession)
+	}
+}
+
 func waitForUserSessionState(t *testing.T, service *Service, ctx context.Context, expected string) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -614,10 +840,12 @@ func (client *fakeEnrollmentClient) CompleteSession(context.Context, enrollment.
 func (client *fakeEnrollmentClient) Close() error { return nil }
 
 type fakeUserSessionClient struct {
+	mu       sync.Mutex
 	start    usersession.StartSessionResponse
 	statuses []usersession.SessionStatusResponse
 	claim    usersession.ClaimSessionResponse
 	catalog  usersession.CatalogResponse
+	revokes  []usersession.RevokeSessionRequest
 }
 
 func (client *fakeUserSessionClient) StartSession(context.Context, usersession.StartSessionRequest) (usersession.StartSessionResponse, error) {
@@ -641,11 +869,20 @@ func (client *fakeUserSessionClient) GetCatalog(context.Context, usersession.Get
 	return client.catalog, nil
 }
 
-func (client *fakeUserSessionClient) RevokeSession(context.Context, usersession.RevokeSessionRequest) error {
+func (client *fakeUserSessionClient) RevokeSession(_ context.Context, request usersession.RevokeSessionRequest) error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.revokes = append(client.revokes, request)
 	return nil
 }
 
 func (client *fakeUserSessionClient) Close() error { return nil }
+
+func (client *fakeUserSessionClient) revokeRequests() []usersession.RevokeSessionRequest {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return append([]usersession.RevokeSessionRequest(nil), client.revokes...)
+}
 
 type fakeProtectedResources struct {
 	mu      sync.Mutex
@@ -686,6 +923,18 @@ func (manager *fakeProtectedResources) lastApplied() ipc.CatalogInfo {
 		return ipc.CatalogInfo{}
 	}
 	return manager.applied[len(manager.applied)-1]
+}
+
+func (manager *fakeProtectedResources) appliedCatalogs() []ipc.CatalogInfo {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return append([]ipc.CatalogInfo(nil), manager.applied...)
+}
+
+func (manager *fakeProtectedResources) clearCount() int {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.cleared
 }
 
 type fakeDeviceDataSyncClient struct {

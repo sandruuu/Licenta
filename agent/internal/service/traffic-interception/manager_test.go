@@ -58,6 +58,38 @@ func TestManagerAppliesMappingsToWFP(t *testing.T) {
 	}
 }
 
+func TestRouteTableMapsApplicationProtocolsToTCP(t *testing.T) {
+	table, rules, err := newRouteTable([]ResourceMapping{
+		{ResourceID: "res-ssh", FQDN: "ssh.internal.example", Protocol: "ssh", Port: 22, SyntheticIP: "100.64.0.2"},
+		{ResourceID: "res-rdp", FQDN: "rdp.internal.example", Protocol: "rdp", Port: 3389, SyntheticIP: "100.64.0.3"},
+	})
+	if err != nil {
+		t.Fatalf("newRouteTable returned error: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("rules = %+v, want 2", rules)
+	}
+	for _, rule := range rules {
+		if rule.Protocol != "tcp" {
+			t.Fatalf("rule protocol = %q, want tcp; rule=%+v", rule.Protocol, rule)
+		}
+	}
+	rdpRoute, ok := table.Lookup("100.64.0.3", 3389, "tcp")
+	if !ok {
+		t.Fatalf("RDP route not found by TCP destination")
+	}
+	if rdpRoute.Protocol != "rdp" {
+		t.Fatalf("RDP route protocol = %q, want rdp", rdpRoute.Protocol)
+	}
+	sshRoute, ok := table.Lookup("100.64.0.2", 22, "tcp")
+	if !ok {
+		t.Fatalf("SSH route not found by TCP destination")
+	}
+	if sshRoute.Protocol != "ssh" {
+		t.Fatalf("SSH route protocol = %q, want ssh", sshRoute.Protocol)
+	}
+}
+
 func TestRouteTableRejectsInvalidSyntheticIP(t *testing.T) {
 	_, _, err := newRouteTable([]ResourceMapping{{SyntheticIP: "not-an-ip", Protocol: "tcp", Port: 443}})
 	if err == nil {
@@ -65,10 +97,59 @@ func TestRouteTableRejectsInvalidSyntheticIP(t *testing.T) {
 	}
 }
 
+func TestProxyPassesWFPProcessIdentityToConnector(t *testing.T) {
+	wfp := &fakeWFPController{destination: wfpcontrol.Destination{
+		IP:        "100.64.0.2",
+		Port:      443,
+		Protocol:  "tcp",
+		ProcessID: 1234,
+	}}
+	connector := &fakeProxyStreamConnector{}
+	server := newProxyServer(Config{ProxyListenAddress: "127.0.0.1:0"}, slog.New(slog.NewTextHandler(io.Discard, nil)), wfp, connector)
+	server.processResolver = func(_ context.Context, pid uint32) (*ProcessIdentity, error) {
+		if pid != 1234 {
+			t.Fatalf("process resolver pid = %d, want 1234", pid)
+		}
+		return &ProcessIdentity{PID: int(pid), Name: "browser.exe", SHA256: "hash"}, nil
+	}
+	table, _, err := newRouteTable([]ResourceMapping{{
+		ResourceID:  "res-web",
+		FQDN:        "web.internal.example",
+		Protocol:    "https",
+		Port:        443,
+		SyntheticIP: "100.64.0.2",
+	}})
+	if err != nil {
+		t.Fatalf("newRouteTable returned error: %v", err)
+	}
+	server.SetRoutes(table)
+
+	left, right := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		server.handle(context.Background(), right)
+		close(done)
+	}()
+	_ = left.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("proxy handle did not finish")
+	}
+	if connector.request.ResourceID != "res-web" || connector.request.Protocol != "https" {
+		t.Fatalf("stream request = %+v", connector.request)
+	}
+	if connector.request.Process == nil || connector.request.Process.PID != 1234 || connector.request.Process.Name != "browser.exe" || connector.request.Process.SHA256 != "hash" {
+		t.Fatalf("stream process = %+v", connector.request.Process)
+	}
+}
+
 type fakeWFPController struct {
-	mu       sync.Mutex
-	requests []wfpcontrol.ApplyRequest
-	cleared  int
+	mu             sync.Mutex
+	requests       []wfpcontrol.ApplyRequest
+	cleared        int
+	destination    wfpcontrol.Destination
+	destinationErr error
 }
 
 func (controller *fakeWFPController) ApplyRules(_ context.Context, request wfpcontrol.ApplyRequest) error {
@@ -86,7 +167,10 @@ func (controller *fakeWFPController) Clear(context.Context) error {
 }
 
 func (controller *fakeWFPController) ResolveOriginalDestination(context.Context, net.Conn) (wfpcontrol.Destination, error) {
-	return wfpcontrol.Destination{}, nil
+	if controller.destinationErr != nil {
+		return wfpcontrol.Destination{}, controller.destinationErr
+	}
+	return controller.destination, nil
 }
 
 func (controller *fakeWFPController) Status() wfpcontrol.Status {
@@ -100,4 +184,19 @@ func (controller *fakeWFPController) last() wfpcontrol.ApplyRequest {
 		return wfpcontrol.ApplyRequest{}
 	}
 	return controller.requests[len(controller.requests)-1]
+}
+
+type fakeProxyStreamConnector struct {
+	request StreamRequest
+	err     error
+}
+
+func (connector *fakeProxyStreamConnector) OpenResourceStream(_ context.Context, request StreamRequest) (net.Conn, error) {
+	connector.request = request
+	if connector.err != nil {
+		return nil, connector.err
+	}
+	left, right := net.Pipe()
+	_ = right.Close()
+	return left, nil
 }

@@ -29,8 +29,9 @@ const (
 
 // Gateway client for PA communication.
 type Client struct {
-	target    string
-	tlsConfig *tls.Config
+	target         string
+	publicEndpoint string
+	tlsConfig      *tls.Config
 
 	renewalTimeout time.Duration
 
@@ -52,6 +53,7 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}
 	return &Client{
 		target:         target,
+		publicEndpoint: strings.TrimSpace(cfg.PublicEndpoint),
 		tlsConfig:      tlsConfig,
 		renewalTimeout: certRenewalTimeout,
 		breaker: NewCircuitBreaker(CircuitBreakerConfig{

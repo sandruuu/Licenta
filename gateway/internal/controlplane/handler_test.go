@@ -77,6 +77,25 @@ func TestHandleProvisionSessionCommand(t *testing.T) {
 	}
 }
 
+func TestHelloMessageIncludesPublicEndpoint(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	handler, err := NewHandlerWithOptions("gw-1", &recordingHandler{}, HandlerOptions{
+		PublicEndpoint: "localhost:9443",
+		Now:            func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewHandlerWithOptions() error = %v", err)
+	}
+
+	hello := handler.helloMessage()
+	if got := structFieldString(hello, "type"); got != MessageGatewayHello {
+		t.Fatalf("hello type = %q, want %q", got, MessageGatewayHello)
+	}
+	if got := structFieldString(hello, "gateway_endpoint"); got != "localhost:9443" {
+		t.Fatalf("gateway_endpoint = %q, want localhost:9443", got)
+	}
+}
+
 func TestHandleRevokeSessionCommand(t *testing.T) {
 	sessionHandler := &recordingHandler{revokeOK: true}
 	handler, err := NewHandler("gw-1", sessionHandler, nil)

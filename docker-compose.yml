@@ -122,6 +122,38 @@ services:
       retries: 10
       start_period: 15s
 
+  keycloak-scim-sync:
+    build:
+      context: ./connectors/keycloak-scim-sync
+    container_name: trustcloud-keycloak-scim-sync
+    profiles:
+      - directory-sync
+    depends_on:
+      pdp:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    networks:
+      - public
+    environment:
+      - KEYCLOAK_BASE_URL=${KEYCLOAK_SCIM_SYNC_KEYCLOAK_BASE_URL:-http://keycloak:8080}
+      - KEYCLOAK_REALM=${KEYCLOAK_SCIM_SYNC_REALM:-trustcloud-lab}
+      - KEYCLOAK_AUTH_REALM=${KEYCLOAK_SCIM_SYNC_AUTH_REALM:-master}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_SCIM_SYNC_CLIENT_ID:-admin-cli}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_SCIM_SYNC_CLIENT_SECRET:-}
+      - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      - PDP_BASE_URL=${KEYCLOAK_SCIM_SYNC_PDP_BASE_URL:-https://pdp:8443}
+      - PDP_TENANT_ID=${KEYCLOAK_SCIM_SYNC_TENANT_ID:-}
+      - PDP_SCIM_TOKEN=${KEYCLOAK_SCIM_SYNC_SCIM_TOKEN:-}
+      - PDP_TLS_SKIP_VERIFY=${KEYCLOAK_SCIM_SYNC_PDP_TLS_SKIP_VERIFY:-true}
+      - SYNC_INTERVAL=${KEYCLOAK_SCIM_SYNC_INTERVAL:-60s}
+      - SYNC_ONCE=${KEYCLOAK_SCIM_SYNC_ONCE:-false}
+      - DISABLE_MISSING_USERS=${KEYCLOAK_SCIM_SYNC_DISABLE_MISSING_USERS:-true}
+      - DELETE_MISSING_GROUPS=${KEYCLOAK_SCIM_SYNC_DELETE_MISSING_GROUPS:-true}
+      - SKIP_SERVICE_ACCOUNTS=${KEYCLOAK_SCIM_SYNC_SKIP_SERVICE_ACCOUNTS:-true}
+    restart: unless-stopped
+
   public-dns:
     image: coredns/coredns:1.11.1
     container_name: trustcloud-public-dns
@@ -148,9 +180,9 @@ services:
     restart: unless-stopped
 
   web-app:
-    image: hashicorp/http-echo:1.0
+    build:
+      context: ./infrastructure/web-app
     container_name: trustcloud-web-app
-    command: ["-listen=:8080", "-text=TrustCloud internal web app"]
     networks:
       private:
         ipv4_address: 10.10.0.20

@@ -34,9 +34,10 @@ type ApplyRequest struct {
 }
 
 type Destination struct {
-	IP       string
-	Port     int
-	Protocol string
+	IP        string
+	Port      int
+	Protocol  string
+	ProcessID uint32
 }
 
 type Status struct {

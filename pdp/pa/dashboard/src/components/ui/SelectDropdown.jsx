@@ -38,6 +38,7 @@ export default function SelectDropdown({
   const currentValue = controlled ? value : internalValue;
   const options = useMemo(() => optionsFromChildren(children), [children]);
   const selected = options.find((option) => String(option.value) === String(currentValue));
+  const selectedText = selected?.text || placeholder;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -76,6 +77,7 @@ export default function SelectDropdown({
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={selectedText}
         onClick={() => !disabled && setOpen((next) => !next)}
         onKeyDown={handleKeyDown}
         className={`flex w-full items-center justify-between gap-3 border border-border bg-surface text-left font-bold text-text-primary shadow-sm transition-colors hover:border-text-muted focus:border-accent focus:outline-none focus:ring-[3px] focus:ring-accent-muted disabled:cursor-not-allowed disabled:opacity-50 ${buttonClassName}`}
@@ -90,7 +92,7 @@ export default function SelectDropdown({
         <div
           role="listbox"
           aria-labelledby={id}
-          className={`absolute left-0 z-40 mt-2 max-h-72 min-w-full overflow-hidden rounded-md border border-border bg-surface-card py-1 shadow-panel ${menuClassName}`}
+          className={`absolute left-0 z-40 mt-2 max-h-72 w-full min-w-full overflow-hidden rounded-md border border-border bg-surface-card py-1 shadow-panel ${menuClassName}`}
         >
           <div className="max-h-72 overflow-y-auto p-1">
             {options.map((option) => {
@@ -102,6 +104,7 @@ export default function SelectDropdown({
                   role="option"
                   aria-selected={active}
                   disabled={option.disabled}
+                  title={option.text}
                   onClick={() => choose(option)}
                   className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm font-semibold transition-colors ${
                     active

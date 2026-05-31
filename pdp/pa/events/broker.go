@@ -193,4 +193,6 @@ const (
 	TopicResourcesUpdated = "resources.updated" // payload: {resource_id?: "..."}
 	TopicSessionDeleted   = "session.deleted"   // payload: {session_id: "..."}
 	TopicHealthChanged    = "health.changed"    // payload: {device_id: "...", status: "..."}
+	TopicDeviceRevoked    = "device.revoked"    // payload: {device_id: "..."}
+	TopicGatewayRevoked   = "gateway.revoked"   // payload: {gateway_id: "..."}
 )

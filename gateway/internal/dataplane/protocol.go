@@ -56,6 +56,7 @@ const (
 	CodeOK                  = "ok"
 	CodeAuthInvalid         = "auth_invalid"
 	CodeSessionInvalid      = "session_invalid"
+	CodeSessionExpired      = "session_expired"
 	CodeResourceUnavailable = "resource_unavailable"
 	CodeInternalError       = "internal_error"
 	CodeBadRequest          = "bad_request"

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"pdp/pa"
+	"pdp/pa/enforcement"
 	"pdp/pa/events"
 	"pdp/pki"
 )
@@ -43,6 +45,8 @@ type Server struct {
 	authLimiterMu sync.Mutex
 	authLimiter   map[string]*enrollRateEntry // reuse: per-IP rate limit for login/register
 	agentSessions *agentSessionStore
+	stepUpAuth    *stepUpBrowserAuthStore
+	adminMFA      *adminMFAStore
 
 	// PA event broker for CAEP-style state-change notifications.
 	events *events.Broker
@@ -68,6 +72,8 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 		enrollLimiter:   make(map[string]*enrollRateEntry),
 		authLimiter:     make(map[string]*enrollRateEntry),
 		agentSessions:   newAgentSessionStore(),
+		stepUpAuth:      newStepUpBrowserAuthStore(policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
+		adminMFA:        newAdminMFAStore(),
 		events:          events.NewBroker(policyAdmin.Cfg.Runtime.EventBufferSize),
 	}
 
@@ -77,7 +83,14 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	if policyAdmin != nil && policyAdmin.Resources != nil {
 		policyAdmin.Resources.SetEventPublisher(s)
 	}
+	if policyAdmin != nil && policyAdmin.Enrollment != nil {
+		policyAdmin.Enrollment.SetEventPublisher(s)
+	}
+	if policyAdmin != nil && policyAdmin.Gateways != nil {
+		policyAdmin.Gateways.SetEventPublisher(s)
+	}
 	s.wireSessionDeleteSink()
+	enforcement.NewService(policyAdmin, s.events).Start(context.Background())
 
 	pool, err := loadCertPool(mtlsCAPath)
 	if err != nil {
@@ -154,8 +167,7 @@ func (s *Server) registerRoutes() {
 	// Public endpoints (no auth required)
 	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
-	s.mux.HandleFunc("/api/auth/verify-mfa", s.handleVerifyMFA)
-	s.mux.HandleFunc("/api/auth/mfa-step-up", s.handleMFAStepUp)
+	s.mux.HandleFunc("/api/auth/mfa/verify", s.handleMFAVerify)
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/config/public", s.handlePublicConfig)
 	s.mux.HandleFunc("/health", s.handleHealthCheck)
@@ -168,6 +180,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)              // Serve React access login page
 	s.mux.HandleFunc("/browser/enroll/", s.handleBrowserEnroll)        // Browser side of TrustAgent enrollment
 	s.mux.HandleFunc("/browser/session/", s.handleBrowserAgentSession) // Browser side of TrustAgent user login
+	s.mux.HandleFunc("/browser/step-up/assets/stepup.js", s.handleStepUpBrowserAsset)
+	s.mux.HandleFunc("/browser/step-up/", s.handleBrowserStepUp) // Browser side of per-resource step-up verification
 
 	// ─────────────────────────────────────────────
 	// OIDC / OAuth2 endpoints (PDP acts as IdP)
@@ -196,22 +210,20 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Authenticated user endpoints (JWT auth)
 	// ─────────────────────────────────────────────
-	s.mux.Handle("/api/auth/enroll-mfa", s.adminAuthMiddleware(http.HandlerFunc(s.handleEnrollMFA)))
-	s.mux.Handle("/api/auth/activate-mfa", s.adminAuthMiddleware(http.HandlerFunc(s.handleActivateMFA)))
 	s.mux.Handle("/api/auth/revoke-token", s.adminAuthMiddleware(http.HandlerFunc(s.handleRevokeToken)))
 
 	// WebAuthn / Passkey endpoints
-	s.mux.Handle("/api/mfa/webauthn/register/begin", s.adminAuthMiddleware(http.HandlerFunc(s.handleWebAuthnRegisterBegin)))
-	s.mux.Handle("/api/mfa/webauthn/register/finish", s.adminAuthMiddleware(http.HandlerFunc(s.handleWebAuthnRegisterFinish)))
-	s.mux.HandleFunc("/api/mfa/webauthn/authenticate/begin", s.handleWebAuthnAuthenticateBegin)
-	s.mux.HandleFunc("/api/mfa/webauthn/authenticate/finish", s.handleWebAuthnAuthenticateFinish)
+	s.mux.HandleFunc("/api/step-up/webauthn/begin", s.handleStepUpWebAuthnBegin)
+	s.mux.HandleFunc("/api/step-up/webauthn/finish", s.handleStepUpWebAuthnFinish)
+	s.mux.HandleFunc("/api/step-up/webauthn/register/begin", s.handleStepUpWebAuthnRegisterBegin)
+	s.mux.HandleFunc("/api/step-up/webauthn/register/finish", s.handleStepUpWebAuthnRegisterFinish)
 
 	// ─────────────────────────────────────────────
 	// Admin endpoints (JWT auth + admin role)
 	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminUsers)))
-	s.mux.Handle("/api/admin/tenants", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminTenants)))
-	s.mux.Handle("/api/admin/tenants/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminTenantByID)))
+	s.mux.Handle("/api/admin/organizations", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizations)))
+	s.mux.Handle("/api/admin/organizations/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizationByID)))
 	s.mux.Handle("/api/admin/sessions", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessions)))
 	s.mux.Handle("/api/admin/sessions/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSessionByID)))
 	s.mux.Handle("/api/admin/audit", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAudit)))
@@ -248,9 +260,9 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Admin Identity Provider management (per Tenant)
 	// ─────────────────────────────────────────────
-	s.mux.Handle("/api/admin/tenants/idps/discover", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdPDiscover)))
-	s.mux.Handle("/api/admin/tenants/idps", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviders)))
-	s.mux.Handle("/api/admin/tenants/idps/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviderByID)))
+	s.mux.Handle("/api/admin/organizations/idps/discover", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdPDiscover)))
+	s.mux.Handle("/api/admin/organizations/idps", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviders)))
+	s.mux.Handle("/api/admin/organizations/idps/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviderByID)))
 
 	// ─────────────────────────────────────────────
 	// Dashboard SPA (serve React build)

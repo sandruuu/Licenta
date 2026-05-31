@@ -55,59 +55,54 @@ async function apiFetch(path, options = {}) {
 
   // Unwrap APIResponse envelope: { success, data, message } -> data
   if (json !== null && typeof json === 'object' && 'data' in json) {
-    return json.data;
+    return normalizeOrganizationFields(json.data);
   }
-  return json;
+  return normalizeOrganizationFields(json);
 }
 
-// Organizations. The backend contract still uses /admin/tenants.
-
-export async function getTenants() {
-  return apiFetch('/admin/tenants');
+function normalizeOrganizationFields(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeOrganizationFields);
+  }
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+  const copy = { ...value };
+  if (copy.organization_id && !copy.tenant_id) {
+    copy.tenant_id = copy.organization_id;
+  }
+  if (copy.tenant_id && !copy.organization_id) {
+    copy.organization_id = copy.tenant_id;
+  }
+  return copy;
 }
 
-export async function createTenant(data) {
-  return apiFetch('/admin/tenants', {
+export async function getOrganizations() {
+  return apiFetch('/admin/organizations');
+}
+
+export async function createOrganization(data) {
+  return apiFetch('/admin/organizations', {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
-export async function getTenant(id) {
-  return apiFetch(`/admin/tenants/${id}`);
+export async function getOrganization(id) {
+  return apiFetch(`/admin/organizations/${id}`);
 }
 
-export async function updateTenant(id, data) {
-  return apiFetch(`/admin/tenants/${id}`, {
+export async function updateOrganization(id, data) {
+  return apiFetch(`/admin/organizations/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
-export async function deleteTenant(id) {
-  return apiFetch(`/admin/tenants/${id}`, {
+export async function deleteOrganization(id) {
+  return apiFetch(`/admin/organizations/${id}`, {
     method: 'DELETE',
   });
-}
-
-export async function getOrganizations() {
-  return getTenants();
-}
-
-export async function createOrganization(data) {
-  return createTenant(data);
-}
-
-export async function getOrganization(id) {
-  return getTenant(id);
-}
-
-export async function updateOrganization(id, data) {
-  return updateTenant(id, data);
-}
-
-export async function deleteOrganization(id) {
-  return deleteTenant(id);
 }
 
 // ─── Auth ───────────────────────────────────
@@ -121,11 +116,11 @@ export async function login(username, password) {
   return res.json();
 }
 
-export async function verifyMFA(token, code, method = 'totp') {
-  const res = await fetch(`${API_BASE}/auth/verify-mfa`, {
+export async function verifyMFA(challengeId, code) {
+  const res = await fetch(`${API_BASE}/auth/mfa/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mfa_token: token, method, totp_code: code }),
+    body: JSON.stringify({ challenge_id: challengeId, code }),
   });
   return res.json();
 }
@@ -146,6 +141,12 @@ export async function getDeviceDataReport(deviceId) {
 
 export async function getEnrollments() {
   return apiFetch('/admin/enrollments');
+}
+
+export async function revokeEnrollment(id) {
+  return apiFetch(`/admin/enrollments/${encodeURIComponent(id)}/revoke`, {
+    method: 'POST',
+  });
 }
 
 // ─── Resources ──────────────────────────────
@@ -283,17 +284,17 @@ export async function testGatewayFederation(id, issuer) {
 
 // Directory principals provisioned by organization IdPs through SCIM.
 
-export async function getDirectoryUsers(tenantId = '', idpId = '') {
+export async function getDirectoryUsers(organizationId = '', idpId = '') {
   const params = new URLSearchParams();
-  if (tenantId) params.set('tenant_id', tenantId);
+  if (organizationId) params.set('organization_id', organizationId);
   if (idpId) params.set('idp_id', idpId);
   const query = params.toString();
   return apiFetch(`/admin/directory/users${query ? `?${query}` : ''}`);
 }
 
-export async function getDirectoryGroups(tenantId = '', idpId = '') {
+export async function getDirectoryGroups(organizationId = '', idpId = '') {
   const params = new URLSearchParams();
-  if (tenantId) params.set('tenant_id', tenantId);
+  if (organizationId) params.set('organization_id', organizationId);
   if (idpId) params.set('idp_id', idpId);
   const query = params.toString();
   return apiFetch(`/admin/directory/groups${query ? `?${query}` : ''}`);
@@ -319,36 +320,36 @@ export async function getAuditLog(limit = 100) {
 
 // Identity Providers (per Organization)
 
-export async function getIdPs(tenantId) {
-  return apiFetch(`/admin/tenants/idps?tenant_id=${encodeURIComponent(tenantId)}`);
+export async function getIdPs(organizationId) {
+  return apiFetch(`/admin/organizations/idps?organization_id=${encodeURIComponent(organizationId)}`);
 }
 
-export async function createIdP(tenantId, data) {
-  return apiFetch(`/admin/tenants/idps?tenant_id=${encodeURIComponent(tenantId)}`, {
+export async function createIdP(organizationId, data) {
+  return apiFetch(`/admin/organizations/idps?organization_id=${encodeURIComponent(organizationId)}`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
 }
 
 export async function getIdP(id) {
-  return apiFetch(`/admin/tenants/idps/${id}`);
+  return apiFetch(`/admin/organizations/idps/${id}`);
 }
 
 export async function updateIdP(id, data) {
-  return apiFetch(`/admin/tenants/idps/${id}`, {
+  return apiFetch(`/admin/organizations/idps/${id}`, {
     method: 'PUT',
     body: JSON.stringify(data),
   });
 }
 
 export async function deleteIdP(id) {
-  return apiFetch(`/admin/tenants/idps/${id}`, {
+  return apiFetch(`/admin/organizations/idps/${id}`, {
     method: 'DELETE',
   });
 }
 
 export async function discoverIdP(issuer) {
-  return apiFetch(`/admin/tenants/idps/discover`, {
+  return apiFetch(`/admin/organizations/idps/discover`, {
     method: 'POST',
     body: JSON.stringify({ issuer }),
   });

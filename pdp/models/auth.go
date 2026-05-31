@@ -8,46 +8,24 @@ type LoginRequest struct {
 
 // LoginResponse is returned after primary authentication succeeds.
 type LoginResponse struct {
-	Status     string   `json:"status"`
-	Message    string   `json:"message"`
-	AuthToken  string   `json:"auth_token,omitempty"`
-	UserID     string   `json:"user_id"`
-	MFAMethods []string `json:"mfa_methods,omitempty"`
-}
-
-// MFAVerifyRequest is sent to complete the MFA step-up during resource access.
-type MFAVerifyRequest struct {
-	MFAToken string `json:"mfa_token"`
-	Method   string `json:"method"`
-	TOTPCode string `json:"totp_code,omitempty"`
-}
-
-// MFAVerifyResponse is returned after successful MFA verification.
-type MFAVerifyResponse struct {
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	AuthToken string `json:"auth_token,omitempty"`
-}
-
-// MFAStepUpRequest starts MFA for an existing auth token.
-type MFAStepUpRequest struct {
-	AuthToken     string `json:"auth_token"`
-	OIDCSessionID string `json:"oidc_session_id,omitempty"`
-}
-
-// MFAStepUpResponse tells the client which MFA methods are available.
-type MFAStepUpResponse struct {
-	Status     string   `json:"status"`
-	Message    string   `json:"message"`
-	MFAToken   string   `json:"mfa_token,omitempty"`
-	MFAMethods []string `json:"mfa_methods,omitempty"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	AuthToken   string `json:"auth_token,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
+	ChallengeID string `json:"challenge_id,omitempty"`
+	MFARequired bool   `json:"mfa_required,omitempty"`
+	MFASetup    bool   `json:"mfa_setup,omitempty"`
+	Secret      string `json:"secret,omitempty"`
+	QRCodeURL   string `json:"qr_code_url,omitempty"`
+	QRCodeImage string `json:"qr_code_image,omitempty"`
 }
 
 // MFAEnrollResponse is returned when enrolling in MFA.
 type MFAEnrollResponse struct {
-	Secret    string `json:"secret"`
-	QRCodeURL string `json:"qr_code_url"`
-	Message   string `json:"message"`
+	Secret      string `json:"secret"`
+	QRCodeURL   string `json:"qr_code_url"`
+	QRCodeImage string `json:"qr_code_image,omitempty"`
+	Message     string `json:"message"`
 }
 
 // RegisterRequest represents a new user registration.
@@ -55,4 +33,10 @@ type RegisterRequest struct {
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+}
+
+// MFAVerifyRequest completes the second login step for the PDP dashboard.
+type MFAVerifyRequest struct {
+	ChallengeID string `json:"challenge_id"`
+	Code        string `json:"code"`
 }

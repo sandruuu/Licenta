@@ -18,6 +18,7 @@ func (service *Service) collectDeviceData(ctx context.Context, deviceID string) 
 	if err != nil {
 		return ipc.DeviceDataReport{}, err
 	}
+	service.enforceLocalDevicePosture(ctx, report)
 	return report, nil
 }
 

@@ -4,14 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
+	agentevents "agent/internal/service/agent-events"
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
 	flowauthorization "agent/internal/service/flow-authorization"
 	pdpclient "agent/internal/service/pdp-client"
 	protectedresources "agent/internal/service/protected-resources"
+	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
 )
@@ -127,6 +130,21 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		PDPCAFile:     config.PDPCAFile,
 		GatewayCAFile: config.PDPCAFile,
 	}, dependencies, enrollmentManager, userSessionManager, deviceIdentity, pdpClient)
+	resourceConnector.onAuthenticationRequired = func(request trafficinterception.StreamRequest) {
+		if service != nil {
+			service.recordAuthenticationRequired(request)
+		}
+	}
+	resourceConnector.onStepUpRequired = func(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse) {
+		if service != nil {
+			service.recordStepUpRequired(request, authorization)
+		}
+	}
+	resourceConnector.onResourceAllowed = func(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse) {
+		if service != nil {
+			service.recordResourceAllowed(request, authorization)
+		}
+	}
 	protectedResources := dependencies.ProtectedResources
 	if protectedResources == nil {
 		if manager, err := protectedresources.NewManager(protectedResourcesConfig(config), protectedresources.Dependencies{
@@ -160,12 +178,31 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		protectedResources:  protectedResources,
 		deviceIdentity:      deviceIdentity,
 		deviceDataSync:      deviceDataSync,
+		agentEventsFactory:  agentEventsClientFactory(dependencies.AgentEventsClientFactory, pdpClient),
 		pdpClient:           pdpClient,
 		clock:               dependencies.Clock,
 		deviceData:          deviceDataState{Status: deviceDataStatus},
 		config:              config,
 	}
 	return service
+}
+
+func agentEventsClientFactory(custom AgentEventsClientFactory, pdpClient *pdpclient.Client) AgentEventsClientFactory {
+	if custom != nil {
+		return custom
+	}
+	if pdpClient == nil {
+		return func(context.Context, enrollment.EnrollmentRecord) (AgentEventsClient, error) {
+			return nil, fmt.Errorf("shared PDP gRPC client is required for agent events")
+		}
+	}
+	return func(ctx context.Context, record enrollment.EnrollmentRecord) (AgentEventsClient, error) {
+		connection, err := pdpClient.Connection(ctx, record)
+		if err != nil {
+			return nil, err
+		}
+		return agentevents.NewGRPCClientFromConnection(connection)
+	}
 }
 
 func pdpClientConfig(config Config) pdpclient.Config {
@@ -263,9 +300,26 @@ func enrollmentConfig(config Config) enrollment.Config {
 
 func userSessionConfig(config Config) usersession.Config {
 	return usersession.Config{
-		LoginTimeout:      config.LoginTimeout,
-		LoginPollInterval: config.LoginPollInterval,
+		LoginTimeout:       config.LoginTimeout,
+		LoginPollInterval:  config.LoginPollInterval,
+		TrustedStepUpHosts: trustedStepUpHosts(config),
 	}
+}
+
+func trustedStepUpHosts(config Config) []string {
+	var hosts []string
+	if host := strings.TrimSpace(config.PDPTLSServerName); host != "" {
+		hosts = append(hosts, host)
+	}
+	endpoint := strings.TrimSpace(config.PDPGRPCEndpoint)
+	if endpoint != "" {
+		if host, _, err := net.SplitHostPort(endpoint); err == nil && host != "" {
+			hosts = append(hosts, host, endpoint)
+		} else {
+			hosts = append(hosts, endpoint)
+		}
+	}
+	return hosts
 }
 
 func deviceDataSyncConfig(config Config) devicedatasync.Config {

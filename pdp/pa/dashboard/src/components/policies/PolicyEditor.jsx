@@ -6,11 +6,15 @@ import {
   DetailDivider,
 } from '../ui/Detail';
 import {
-  ActionSection,
+  AuthenticationPolicySection,
+  AuthorizedNetworksSection,
   DetailsSection,
   DeviceSection,
+  NewUserSection,
   PolicyConfigSection,
   PolicyNavItem,
+  RiskBasedAuthenticationSection,
+  UserLocationSection,
 } from './PolicyEditorSections';
 import {
   POLICY_GROUPS,
@@ -31,36 +35,34 @@ export default function PolicyEditor({
   onToggleSection,
   onSelectSection,
 }) {
-  const actionSection = POLICY_SECTIONS.find((section) => section.id === 'action');
-  const deviceSection = POLICY_SECTIONS.find((section) => section.id === 'device');
   const sectionByID = new Map(POLICY_SECTIONS.map((section) => [section.id, section]));
   const selectedSection = sectionByID.get(editor.activeSection) || sectionByID.get('details');
-  const deviceAdded = !!editor.enabledSections.device;
   const navGroups = [
     { label: 'Policy', sections: ['details'] },
     ...POLICY_GROUPS,
   ];
+
+  const sectionContent = {
+    newuser: <NewUserSection form={form} setForm={setForm} />,
+    stepup: <AuthenticationPolicySection form={form} setForm={setForm} />,
+    riskbasedauth: <RiskBasedAuthenticationSection form={form} setForm={setForm} />,
+    location: <UserLocationSection form={form} setForm={setForm} />,
+    devicehealth: <DeviceSection form={form} setForm={setForm} deviceCheckOptions={deviceCheckOptions} />,
+    authorizednetworks: <AuthorizedNetworksSection form={form} setForm={setForm} />,
+  };
 
   const renderSelectedSection = () => {
     if (selectedSection.id === 'details') {
       return <DetailsSection form={form} setForm={setForm} assignments={assignments} maps={maps} />;
     }
 
-    if (selectedSection.id === 'action') {
-      return (
-        <PolicyConfigSection section={actionSection} added>
-          <ActionSection form={form} setForm={setForm} />
-        </PolicyConfigSection>
-      );
-    }
-
     return (
       <PolicyConfigSection
-        section={deviceSection}
-        added={deviceAdded}
-        onToggle={(value) => onToggleSection(deviceSection.id, value)}
+        section={selectedSection}
+        added={selectedSection.required || !!editor.enabledSections[selectedSection.id]}
+        onToggle={selectedSection.required ? null : (value) => onToggleSection(selectedSection.id, value)}
       >
-        <DeviceSection form={form} setForm={setForm} deviceCheckOptions={deviceCheckOptions} />
+        {sectionContent[selectedSection.id]}
       </PolicyConfigSection>
     );
   };
@@ -119,7 +121,7 @@ export default function PolicyEditor({
                   </div>
                 ))}
               </div>
-              <div className="border-t border-border pt-3">
+              <div className="mt-4 border-t border-border pt-3">
                 <div className="flex flex-col gap-2">
                   <Button variant="secondary" className="justify-center" onClick={onBack}>Cancel</Button>
                   <Button className="justify-center" onClick={onSave} disabled={saving || !form.name.trim()}>

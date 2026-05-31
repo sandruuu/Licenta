@@ -33,6 +33,7 @@ import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
 import StatusBadge from '../components/organizations/StatusBadge';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import { usePublicConfig } from '../config/publicConfig';
+import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 const summaryItemClass = 'block w-full max-w-3xl  px-4 py-3 text-left';
 
@@ -227,7 +228,7 @@ export default function OrganizationDetail() {
     );
   }
 
-  const organizationListFilter = `tenant_id=${encodeURIComponent(organization.id)}&q=${encodeURIComponent(organization.name || organization.id)}`;
+  const organizationListFilter = `organization_id=${encodeURIComponent(organization.id)}&q=${encodeURIComponent(organization.name || organization.id)}`;
 
   return (
     <div className="space-y-7">
@@ -352,7 +353,7 @@ export default function OrganizationDetail() {
                         <span className="truncate text-base font-semibold text-text-primary hover:text-accent">
                           {resource.name || resource.id}
                         </span>
-                        <Badge variant="info">{(resource.type || '-').toUpperCase()}</Badge>
+                        <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
                       </span>
                       <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
                         <span>{gatewayByID.get(resource.gateway_id)?.name || resource.gateway_id || 'No gateway'}</span>

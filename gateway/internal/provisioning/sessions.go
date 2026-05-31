@@ -188,6 +188,21 @@ func (store *Store) Validate(check ConnectCheck) (*Session, error) {
 	return &copy, nil
 }
 
+func (store *Store) ListSessions() []Session {
+	if store == nil {
+		return nil
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	sessions := make([]Session, 0, len(store.sessions))
+	for _, session := range store.sessions {
+		copy := session
+		copy.Constraints = append([]string(nil), session.Constraints...)
+		sessions = append(sessions, copy)
+	}
+	return sessions
+}
+
 func (store *Store) Revoke(sessionID, reason string) (*Session, bool) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

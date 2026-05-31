@@ -20,13 +20,16 @@ const (
 	StatusDenied              = "DENIED"
 	StatusClaimed             = "CLAIMED"
 
-	DefaultTimeout      = 10 * time.Minute
-	DefaultPollInterval = 3 * time.Second
+	DefaultTimeout             = 10 * time.Minute
+	DefaultPollInterval        = 3 * time.Second
+	DefaultExpiryRevokeLead    = 30 * time.Second
+	DefaultExpiryRevokeTimeout = 10 * time.Second
 )
 
 type Config struct {
-	LoginTimeout      time.Duration
-	LoginPollInterval time.Duration
+	LoginTimeout       time.Duration
+	LoginPollInterval  time.Duration
+	TrustedStepUpHosts []string
 }
 
 type Dependencies struct {
@@ -108,10 +111,11 @@ type GetCatalogRequest struct {
 }
 
 type CatalogResponse struct {
-	Version     string
-	Resources   []ipc.CatalogResource
-	TTLSeconds  int
-	PolicyEpoch string
+	Version          string
+	Resources        []ipc.CatalogResource
+	TTLSeconds       int
+	PolicyEpoch      string
+	DeviceDataPolicy ipc.DeviceDataPolicy
 }
 
 type RevokeSessionRequest struct {
@@ -131,6 +135,7 @@ type AuthenticatedSession struct {
 	Email             string
 	ExpiresAt         time.Time
 	Catalog           ipc.CatalogInfo
+	Peer              ipc.PeerIdentity
 }
 
 type sessionState struct {
@@ -148,6 +153,7 @@ type sessionState struct {
 	email             string
 	message           string
 	lastError         string
+	stepUpURL         string
 	catalog           ipc.CatalogInfo
 	cancel            context.CancelFunc
 }
@@ -166,6 +172,7 @@ type Manager struct {
 	onLogout           func(context.Context, ipc.PeerIdentity) error
 	clock              func() time.Time
 	sessions           map[string]*sessionState
+	signedOutMessages  map[string]string
 }
 
 func localUserKey(peer ipc.PeerIdentity) (string, error) {

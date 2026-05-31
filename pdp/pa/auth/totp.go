@@ -3,17 +3,21 @@ package auth
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
+	"crypto/sha1"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
 	"time"
+
+	"github.com/skip2/go-qrcode"
 )
 
 // TOTP implements the Time-based One-Time Password algorithm (RFC 6238)
-// using HMAC-SHA256 with 30-second time steps and 6-digit codes.
+// using the widely supported HMAC-SHA1 default with 30-second time steps and
+// 6-digit codes.
 //
 // This is compatible with Google Authenticator, Microsoft Authenticator,
 // FreeOTP, and other standard TOTP applications.
@@ -64,31 +68,42 @@ func GenerateTOTPCode(secret string, t time.Time) (string, error) {
 
 // ValidateTOTPCode validates a TOTP code against a secret, allowing for clock skew
 func ValidateTOTPCode(secret, code string) (bool, error) {
-	if len(code) != TOTPDigits {
-		return false, nil
-	}
+	valid, _, err := ValidateTOTPCodeWithCounter(secret, code, time.Now())
+	return valid, err
+}
 
-	now := time.Now()
+func ValidateTOTPCodeWithCounter(secret, code string, now time.Time) (bool, int64, error) {
+	code = strings.TrimSpace(code)
+	if len(code) != TOTPDigits {
+		return false, 0, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
 
 	// Check current time step and adjacent steps (to handle clock drift)
+	baseCounter := now.Unix() / TOTPPeriod
 	for i := -TOTPSkew; i <= TOTPSkew; i++ {
-		t := now.Add(time.Duration(i*TOTPPeriod) * time.Second)
-		expected, err := GenerateTOTPCode(secret, t)
+		counter := baseCounter + int64(i)
+		if counter < 0 {
+			continue
+		}
+		expected, err := GenerateTOTPCode(secret, time.Unix(counter*TOTPPeriod, 0))
 		if err != nil {
-			return false, err
+			return false, 0, err
 		}
 		if hmac.Equal([]byte(expected), []byte(code)) {
-			return true, nil
+			return true, counter, nil
 		}
 	}
 
-	return false, nil
+	return false, 0, nil
 }
 
 // BuildTOTPURI constructs an otpauth:// URI for QR code generation
 // This URI can be scanned by authenticator apps to enroll the secret
 func BuildTOTPURI(secret, issuer, accountName string) string {
-	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA256&digits=%d&period=%d",
+	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=%d&period=%d",
 		urlEncode(issuer),
 		urlEncode(accountName),
 		secret,
@@ -98,13 +113,22 @@ func BuildTOTPURI(secret, issuer, accountName string) string {
 	)
 }
 
-// generateHOTP implements HOTP (RFC 4226) using HMAC-SHA256
+// BuildTOTPQRCodeImage renders an otpauth URI as an embedded PNG data URL.
+func BuildTOTPQRCodeImage(uri string) (string, error) {
+	png, err := qrcode.Encode(strings.TrimSpace(uri), qrcode.Medium, 224)
+	if err != nil {
+		return "", fmt.Errorf("generate TOTP QR code: %w", err)
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
+}
+
+// generateHOTP implements HOTP (RFC 4226) using HMAC-SHA1
 func generateHOTP(key []byte, counter uint64) int {
-	// Step 1: Generate HMAC-SHA256 value
+	// Step 1: Generate HMAC-SHA1 value
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, counter)
 
-	mac := hmac.New(sha256.New, key)
+	mac := hmac.New(sha1.New, key)
 	mac.Write(buf)
 	hash := mac.Sum(nil)
 

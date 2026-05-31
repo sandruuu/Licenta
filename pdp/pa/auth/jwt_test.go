@@ -86,7 +86,7 @@ func newTestJWTManager(t *testing.T) *JWTManager {
 	if err != nil {
 		t.Fatalf("GenerateJWTSigningKey returned error: %v", err)
 	}
-	manager, err := NewJWTManager(key, time.Hour, time.Minute)
+	manager, err := NewJWTManager(key, time.Hour)
 	if err != nil {
 		t.Fatalf("NewJWTManager returned error: %v", err)
 	}

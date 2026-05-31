@@ -4,6 +4,7 @@ import { Database } from 'lucide-react';
 const DEFAULT_ROW_COUNT = 0;
 const TABLE_HEADER_HEIGHT = 64;
 const TABLE_ROW_HEIGHT = 84;
+const SKELETON_ROW_COUNT = 3;
 
 export function TableActions({ children, className = '' }) {
   return (
@@ -33,6 +34,30 @@ export function TableIconButton({ icon, label, danger = false, className = '', o
   );
 }
 
+function TableSkeletonRows({ columns, gridTemplateColumns }) {
+  return Array.from({ length: SKELETON_ROW_COUNT }, (_, rowIndex) => (
+    <div
+      key={`skeleton-${rowIndex}`}
+      aria-hidden="true"
+      className="grid min-h-[72px] rounded-md bg-surface-hover"
+      style={{ gridTemplateColumns }}
+    >
+      {columns.map((col, colIndex) => (
+        <div
+          key={`${col.key}-skeleton`}
+          className={`flex min-w-0 items-center px-6 py-5 ${col.key === 'actions' ? 'justify-center' : 'justify-center'}`}
+        >
+          <div
+            className={`h-4 animate-pulse rounded bg-border-light ${
+              colIndex % 3 === 0 ? 'w-24' : colIndex % 3 === 1 ? 'w-32' : 'w-16'
+            }`}
+          />
+        </div>
+      ))}
+    </div>
+  ));
+}
+
 export default function DataTable({
   columns,
   data,
@@ -41,82 +66,90 @@ export default function DataTable({
   emptyIcon = Database,
   emptyTitle = 'No data',
   emptyMessage,
+  emptyVariant = 'plain',
   rowClassName,
   onRowClick,
   getRowKey = (row, index) => row.id || index,
 }) {
   const fixedTableStyle = minRows ? { minHeight: `${TABLE_HEADER_HEIGHT + (minRows * TABLE_ROW_HEIGHT)}px` } : undefined;
-
-  if (loading) {
-    return (
-      <div className="overflow-hidden rounded-md border border-border bg-surface-card shadow-surface" style={fixedTableStyle}>
-        <div className="flex h-full items-center justify-center gap-2 p-12 text-center text-sm font-semibold text-text-muted" style={fixedTableStyle}>
-          <span className="spinner" />
-          Loading...
-        </div>
-      </div>
-    );
-  }
-
-  if (!data || data.length === 0) {
-    return (
-      <div className="overflow-hidden rounded-md border border-border bg-surface-card shadow-surface" style={fixedTableStyle}>
-        <div className="flex h-full flex-col items-center justify-center p-12 text-center text-text-muted" style={fixedTableStyle}>
-          {createElement(emptyIcon, { size: 48, className: 'mx-auto mb-3 opacity-40' })}
-          <p className="text-sm font-bold text-text-primary">{emptyTitle}</p>
-          {emptyMessage && <p className="mt-1 text-xs font-medium">{emptyMessage}</p>}
-        </div>
-      </div>
-    );
-  }
-
-  const placeholderRows = Math.max(minRows - data.length, 0);
+  const rows = Array.isArray(data) ? data : [];
+  const placeholderRows = Math.max(minRows - rows.length, 0);
+  const gridTemplateColumns = columns
+    .map((col) => {
+      if (!col.width) return 'minmax(0, 1fr)';
+      return typeof col.width === 'number' ? `${col.width}px` : col.width;
+    })
+    .join(' ');
+  const alignClass = (align) => {
+    if (align === 'left') return 'justify-start text-left';
+    if (align === 'right') return 'justify-end text-right';
+    return 'justify-center text-center';
+  };
+  const emptyState = emptyVariant === 'card' ? (
+    <div className="py-12 text-center text-text-muted">
+      {createElement(emptyIcon, { size: 40, className: 'mx-auto mb-3 opacity-35' })}
+      <p className="text-sm font-bold text-text-muted">{emptyTitle}</p>
+      {emptyMessage && <p className="mt-1 text-xs font-medium">{emptyMessage}</p>}
+    </div>
+  ) : (
+    <div className="py-12 text-center">
+      <p className="text-sm font-bold text-text-muted">{emptyTitle}</p>
+      {emptyMessage && <p className="mt-1 text-xs font-medium text-text-muted">{emptyMessage}</p>}
+    </div>
+  );
 
   return (
     <div className="relative rounded-md" style={fixedTableStyle}>
       <div className="overflow-x-auto px-4">
-        <table className="w-full min-w-[820px] border-separate border-spacing-y-3">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th
-                  key={col.key}
-                  className={`relative whitespace-nowrap px-6 py-4 text-center text-[11px] font-bold uppercase tracking-[0.14em] text-text-muted before:absolute before:bottom-0 before:left-0 before:right-0 before:h-[2px] before:bg-border before:content-[''] after:absolute after:bottom-0 after:right-0 after:h-5 after:w-[2px] after:bg-border after:content-[''] first:before:left-4 last:before:right-4 last:after:hidden ${col.className || ''}`}
-                  style={col.width ? { width: col.width } : undefined}
-                >
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, i) => (
-              <tr
+        <div className="min-w-[820px]">
+          <div className="grid" style={{ gridTemplateColumns }}>
+            {columns.map((col) => (
+              <div
+                key={col.key}
+                className={`relative flex min-w-0 items-center px-6 py-4 text-center text-[11px] font-bold uppercase tracking-[0.14em] text-text-muted before:absolute before:bottom-0 before:left-0 before:right-0 before:h-[2px] before:bg-border before:content-[''] after:absolute after:bottom-0 after:right-0 after:h-5 after:w-[2px] after:bg-border after:content-[''] first:before:left-4 last:before:right-4 last:after:hidden ${alignClass(col.headerAlign || 'center')} ${col.className || ''}`}
+              >
+                {col.label}
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-3 pt-3">
+            {loading ? (
+              <TableSkeletonRows columns={columns} gridTemplateColumns={gridTemplateColumns} />
+            ) : rows.length === 0 ? (
+              emptyState
+            ) : rows.map((row, i) => (
+              <div
                 key={getRowKey(row, i)}
+                role={onRowClick ? 'button' : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
-                className={`group h-[72px] shadow-surface transition-colors ${
+                onKeyDown={onRowClick ? (event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onRowClick(row);
+                  }
+                } : undefined}
+                className={`group grid min-h-[72px] rounded-md bg-surface-hover ring-1 ring-transparent transition-colors hover:ring-accent ${
                   onRowClick ? 'cursor-pointer' : ''
                 } ${typeof rowClassName === 'function' ? rowClassName(row) : rowClassName || ''}`}
+                style={{ gridTemplateColumns }}
               >
                 {columns.map((col) => (
-                  <td
+                  <div
                     key={col.key}
-                    className={`bg-surface-card px-6 py-5 text-center align-middle text-sm font-semibold text-text-secondary transition-colors first:rounded-l-md last:rounded-r-md ${onRowClick ? 'group-hover:bg-surface-hover/60' : ''} ${col.cellClassName || ''}`}
+                    className={`flex min-w-0 items-center px-6 py-5 text-sm font-semibold text-text-secondary ${alignClass(col.key === 'actions' ? 'center' : col.align)} ${col.cellClassName || ''}`}
                   >
                     {col.render ? col.render(row[col.key], row) : row[col.key]}
-                  </td>
+                  </div>
                 ))}
-              </tr>
+              </div>
             ))}
-            {Array.from({ length: placeholderRows }, (_, index) => (
-              <tr key={`placeholder-${index}`} aria-hidden="true" className="h-[72px]">
-                <td colSpan={columns.length} className="px-6 py-5">
-                  &nbsp;
-                </td>
-              </tr>
+            {!loading && rows.length > 0 && Array.from({ length: placeholderRows }, (_, index) => (
+              <div key={`placeholder-${index}`} aria-hidden="true" className="h-[72px]" />
             ))}
-          </tbody>
-        </table>
+          </div>
+        </div>
       </div>
     </div>
   );

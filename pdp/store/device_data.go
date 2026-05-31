@@ -15,10 +15,10 @@ import (
 
 func (s *Store) SaveDeviceHealth(report *models.DeviceHealthReport) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO device_health
-		(device_id, hostname, os, checks_json, overall_score, reported_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		(device_id, hostname, os, checks_json, overall_score, reported_at, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		report.DeviceID, report.Hostname, report.OS, toJSON(report.Checks),
-		report.OverallScore, fmtTime(report.ReportedAt))
+		report.OverallScore, fmtTime(report.ReportedAt), report.TenantID)
 	if err != nil {
 		log.Printf("[STORE] Failed to save device health for %s: %v", report.DeviceID, err)
 	}
@@ -53,13 +53,13 @@ func (s *Store) TouchDeviceData(deviceID string, ts time.Time) bool {
 }
 
 func (s *Store) GetDeviceHealth(deviceID string) (*models.DeviceHealthReport, bool) {
-	row := s.db.QueryRow(`SELECT device_id, hostname, os, checks_json, overall_score, reported_at
+	row := s.db.QueryRow(`SELECT device_id, hostname, os, checks_json, overall_score, reported_at, tenant_id
 		FROM device_health WHERE device_id = ?`, deviceID)
 
 	r := &models.DeviceHealthReport{}
 	var checksJSON, reportedAt string
 
-	err := row.Scan(&r.DeviceID, &r.Hostname, &r.OS, &checksJSON, &r.OverallScore, &reportedAt)
+	err := row.Scan(&r.DeviceID, &r.Hostname, &r.OS, &checksJSON, &r.OverallScore, &reportedAt, &r.TenantID)
 	if err != nil {
 		return nil, false
 	}
@@ -70,7 +70,7 @@ func (s *Store) GetDeviceHealth(deviceID string) (*models.DeviceHealthReport, bo
 }
 
 func (s *Store) ListDeviceHealth() []*models.DeviceHealthReport {
-	rows, err := s.db.Query("SELECT device_id, hostname, os, checks_json, overall_score, reported_at FROM device_health")
+	rows, err := s.db.Query("SELECT device_id, hostname, os, checks_json, overall_score, reported_at, tenant_id FROM device_health")
 	if err != nil {
 		return nil
 	}
@@ -81,7 +81,7 @@ func (s *Store) ListDeviceHealth() []*models.DeviceHealthReport {
 		r := &models.DeviceHealthReport{}
 		var checksJSON, reportedAt string
 
-		if err := rows.Scan(&r.DeviceID, &r.Hostname, &r.OS, &checksJSON, &r.OverallScore, &reportedAt); err != nil {
+		if err := rows.Scan(&r.DeviceID, &r.Hostname, &r.OS, &checksJSON, &r.OverallScore, &reportedAt, &r.TenantID); err != nil {
 			continue
 		}
 
@@ -94,22 +94,22 @@ func (s *Store) ListDeviceHealth() []*models.DeviceHealthReport {
 
 func (s *Store) SaveDeviceData(report *models.DeviceDataReport) {
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO device_data
-		(device_id, hostname, os, checks_json, collected_at, reported_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		(device_id, hostname, os, checks_json, collected_at, reported_at, tenant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		report.DeviceID, report.Hostname, report.OS, toJSON(report.Checks),
-		fmtTime(report.CollectedAt), fmtTime(report.ReportedAt))
+		fmtTime(report.CollectedAt), fmtTime(report.ReportedAt), report.TenantID)
 	if err != nil {
 		log.Printf("[STORE] Failed to save device data for %s: %v", report.DeviceID, err)
 	}
 }
 
 func (s *Store) GetDeviceData(deviceID string) (*models.DeviceDataReport, bool) {
-	row := s.db.QueryRow(`SELECT device_id, hostname, os, checks_json, collected_at, reported_at
+	row := s.db.QueryRow(`SELECT device_id, hostname, os, checks_json, collected_at, reported_at, tenant_id
 		FROM device_data WHERE device_id = ?`, deviceID)
 
 	report := &models.DeviceDataReport{}
 	var checksJSON, collectedAt, reportedAt string
-	if err := row.Scan(&report.DeviceID, &report.Hostname, &report.OS, &checksJSON, &collectedAt, &reportedAt); err != nil {
+	if err := row.Scan(&report.DeviceID, &report.Hostname, &report.OS, &checksJSON, &collectedAt, &reportedAt, &report.TenantID); err != nil {
 		return nil, false
 	}
 	report.Checks = fromJSON[[]models.HealthCheck](checksJSON)
@@ -119,7 +119,7 @@ func (s *Store) GetDeviceData(deviceID string) (*models.DeviceDataReport, bool) 
 }
 
 func (s *Store) ListDeviceData() []*models.DeviceDataReport {
-	rows, err := s.db.Query("SELECT device_id, hostname, os, checks_json, collected_at, reported_at FROM device_data")
+	rows, err := s.db.Query("SELECT device_id, hostname, os, checks_json, collected_at, reported_at, tenant_id FROM device_data")
 	if err != nil {
 		return nil
 	}
@@ -129,7 +129,7 @@ func (s *Store) ListDeviceData() []*models.DeviceDataReport {
 	for rows.Next() {
 		report := &models.DeviceDataReport{}
 		var checksJSON, collectedAt, reportedAt string
-		if err := rows.Scan(&report.DeviceID, &report.Hostname, &report.OS, &checksJSON, &collectedAt, &reportedAt); err != nil {
+		if err := rows.Scan(&report.DeviceID, &report.Hostname, &report.OS, &checksJSON, &collectedAt, &reportedAt, &report.TenantID); err != nil {
 			continue
 		}
 		report.Checks = fromJSON[[]models.HealthCheck](checksJSON)

@@ -19,7 +19,7 @@ func (client *Client) RunControlStream(ctx context.Context, gatewayID string, se
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	protocol, err := NewHandler(gatewayID, sessionHandler, nil)
+	protocol, err := NewHandlerWithOptions(gatewayID, sessionHandler, HandlerOptions{PublicEndpoint: client.publicEndpoint})
 	if err != nil {
 		return err
 	}

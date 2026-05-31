@@ -142,6 +142,9 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	if s.handleAgentSessionFederatedCallback(w, r, code, state) {
 		return
 	}
+	if s.handleStepUpFederatedCallback(w, r, code, state) {
+		return
+	}
 
 	// Retrieve the federation session (one-time use)
 	fedSession, ok := s.pa.Auth.OIDC.GetFederationSession(state)

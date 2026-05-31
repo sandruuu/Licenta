@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	agentevents "agent/internal/service/agent-events"
 	devicedata "agent/internal/service/device-data"
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
@@ -56,6 +57,7 @@ type Dependencies struct {
 	DeviceDataWatcher           DeviceDataWatcher
 	EnrollmentClient            enrollment.Client
 	DeviceDataSyncClientFactory DeviceDataSyncClientFactory
+	AgentEventsClientFactory    AgentEventsClientFactory
 	ProtectedResources          ProtectedResourcesManager
 	DeviceIdentity              enrollment.DeviceIdentity
 	EnrollmentStore             enrollment.Store
@@ -70,6 +72,8 @@ type DeviceDataCollector = devicedata.Collector
 type DeviceDataWatcher = devicedata.Watcher
 type DeviceDataSyncClient = devicedatasync.Client
 type DeviceDataSyncClientFactory = devicedatasync.ClientFactory
+type AgentEventsClient = agentevents.Client
+type AgentEventsClientFactory func(context.Context, enrollment.EnrollmentRecord) (AgentEventsClient, error)
 type gatewayTunnel interface {
 	OpenResourceStream(context.Context, gatewaytunnel.ResourceStreamRequest) (net.Conn, error)
 	Status() gatewaytunnel.Status
@@ -92,9 +96,12 @@ type Service struct {
 	protectedResources  ProtectedResourcesManager
 	deviceIdentity      enrollment.DeviceIdentity
 	deviceDataSync      *devicedatasync.Runner
+	agentEventsFactory  AgentEventsClientFactory
 	pdpClient           *pdpclient.Client
 	clock               func() time.Time
 	deviceData          deviceDataState
+	accessPrompt        accessPromptState
+	localAccess         localAccessState
 	config              Config
 }
 
@@ -103,6 +110,19 @@ type deviceDataState struct {
 	Status          string
 	LastError       string
 	LastCollectedAt time.Time
+}
+
+type accessPromptState struct {
+	Message    string
+	ResourceID string
+	FQDN       string
+	ReportedAt time.Time
+}
+
+type localAccessState struct {
+	Suspended bool
+	Reason    string
+	UpdatedAt time.Time
 }
 
 const (

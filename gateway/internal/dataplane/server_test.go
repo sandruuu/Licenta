@@ -88,6 +88,90 @@ func TestRevokeProvisionedSessionDeniesConnect(t *testing.T) {
 	}
 }
 
+func TestRevokeProvisionedSessionTerminatesActiveRelays(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	gateway := &Gateway{provisioned: provisioning.NewStoreWithClock(func() time.Time { return now })}
+	if err := gateway.ProvisionSession(provisioning.Session{
+		ID:           "sess-1",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-ssh",
+		InternalHost: "10.10.0.10",
+		InternalPort: 22,
+		Protocol:     "ssh",
+		ExpiresAt:    now.Add(time.Hour),
+	}, "session-secret"); err != nil {
+		t.Fatalf("ProvisionSession() error = %v", err)
+	}
+
+	revoked := make(chan string, 1)
+	gateway.activeRelays.Store("relay-1", &activeRelay{
+		id:        "relay-1",
+		sessionID: "sess-1",
+		cancel: func(reason string) {
+			revoked <- reason
+		},
+	})
+	untouched := make(chan string, 1)
+	gateway.activeRelays.Store("relay-2", &activeRelay{
+		id:        "relay-2",
+		sessionID: "other-session",
+		cancel: func(reason string) {
+			untouched <- reason
+		},
+	})
+
+	if !gateway.RevokeProvisionedSession("sess-1", "agent_logout") {
+		t.Fatal("RevokeProvisionedSession() = false")
+	}
+	select {
+	case reason := <-revoked:
+		if reason != "session.revoked" {
+			t.Fatalf("relay close reason = %q, want session.revoked", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active relay for revoked session was not terminated")
+	}
+	select {
+	case reason := <-untouched:
+		t.Fatalf("unrelated relay was terminated with reason %q", reason)
+	default:
+	}
+}
+
+func TestProvisionSessionRenewsActiveRelays(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	gateway := &Gateway{provisioned: provisioning.NewStoreWithClock(func() time.Time { return now })}
+	renewed := make(chan time.Time, 1)
+	gateway.activeRelays.Store("relay-1", &activeRelay{
+		id:        "relay-1",
+		sessionID: "sess-1",
+		renew:     renewed,
+		cancel:    func(string) {},
+	})
+	nextExpiry := now.Add(30 * time.Minute)
+	if err := gateway.ProvisionSession(provisioning.Session{
+		ID:           "sess-1",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-ssh",
+		InternalHost: "10.10.0.10",
+		InternalPort: 22,
+		Protocol:     "ssh",
+		ExpiresAt:    nextExpiry,
+	}, "rotated-session-secret"); err != nil {
+		t.Fatalf("ProvisionSession() error = %v", err)
+	}
+	select {
+	case got := <-renewed:
+		if !got.Equal(nextExpiry) {
+			t.Fatalf("renewed expiry = %s, want %s", got, nextExpiry)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("active relay did not receive renewed expiry")
+	}
+}
+
 func TestDNSResolveIsNotAcceptedByStrictGateway(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()

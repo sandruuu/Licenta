@@ -3,6 +3,9 @@ package tray
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,5 +35,41 @@ func TestWailsAppOptionsUsesWindowConfig(t *testing.T) {
 	}
 	if wailsOptions.AssetServer == nil || wailsOptions.BackgroundColour == nil {
 		t.Fatalf("wails options missing asset server/background: %+v", wailsOptions)
+	}
+}
+
+func TestAgentUIDoesNotUseWindowsNotifications(t *testing.T) {
+	forbidden := []string{
+		"InitializeNotifications",
+		"SendNotification",
+		"SendNotificationWithActions",
+		"RequestNotificationAuthorization",
+		"CheckNotificationAuthorization",
+	}
+	paths := []string{"gui.go"}
+	err := filepath.WalkDir(filepath.Join("frontend", "src"), func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk frontend source: %v", err)
+	}
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		source := string(content)
+		for _, token := range forbidden {
+			if strings.Contains(source, token) {
+				t.Fatalf("%s uses Windows notification API %q; Agent events must stay inside the Agent UI", path, token)
+			}
+		}
 	}
 }

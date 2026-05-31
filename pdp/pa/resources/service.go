@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +63,9 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	if !validResourceType(resource.Type) {
 		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
 	}
+	if err := normalizeWebResource(&resource); err != nil {
+		return nil, err
+	}
 	if err := service.validateResourceScope(&resource); err != nil {
 		return nil, err
 	}
@@ -78,10 +83,9 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	resource.ClientID = ""
 	resource.ClientSecret = ""
 	resource.AllowedRoles = nil
-	resource.RequireMFA = false
 
 	service.store.SaveResource(&resource)
-	service.publishResourceEvent(resource.ID, "created", "resource_created")
+	service.publishResourceEvent(&resource, "created", "resource_created", false)
 	return &resource, nil
 }
 
@@ -113,12 +117,16 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	if !validResourceType(updated.Type) {
 		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
 	}
+	if err := normalizeWebResource(&updated); err != nil {
+		return nil, err
+	}
 	if err := service.validateResourceScope(&updated); err != nil {
 		return nil, err
 	}
 
+	revokesSessions := resourceUpdateRevokesSessions(existing, &updated)
 	service.store.SaveResource(&updated)
-	service.publishResourceEvent(updated.ID, "updated", "resource_updated")
+	service.publishResourceEvent(&updated, "updated", "resource_updated", revokesSessions)
 	return &updated, nil
 }
 
@@ -130,10 +138,14 @@ func (service *Service) DeleteResource(id string) error {
 	if id == "" {
 		return fmt.Errorf("%w: resource ID required", ErrInvalidRequest)
 	}
+	existing, _ := service.store.GetResource(id)
 	if !service.store.DeleteResource(id) {
 		return ErrResourceNotFound
 	}
-	service.publishResourceEvent(id, "deleted", "resource_deleted")
+	if existing == nil {
+		existing = &models.Resource{ID: id}
+	}
+	service.publishResourceEvent(existing, "deleted", "resource_deleted", true)
 	return nil
 }
 
@@ -167,16 +179,37 @@ func (service *Service) clock() time.Time {
 	return time.Now()
 }
 
-func (service *Service) publishResourceEvent(resourceID, action, reason string) {
+func (service *Service) publishResourceEvent(resource *models.Resource, action, reason string, revokesSessions bool) {
 	if service == nil || service.publisher == nil {
 		return
 	}
+	if resource == nil {
+		return
+	}
 	service.publisher.PublishCAEPEvent(events.TopicResourcesUpdated, map[string]string{
-		"resource_id": resourceID,
-		"app_id":      resourceID,
-		"action":      action,
-		"reason":      reason,
+		"resource_id":      resource.ID,
+		"app_id":           resource.ID,
+		"tenant_id":        resource.TenantID,
+		"gateway_id":       resource.GatewayID,
+		"action":           action,
+		"reason":           reason,
+		"revokes_sessions": strconv.FormatBool(revokesSessions),
 	})
+}
+
+func resourceUpdateRevokesSessions(existing, updated *models.Resource) bool {
+	if existing == nil || updated == nil {
+		return true
+	}
+	if existing.Enabled && !updated.Enabled {
+		return true
+	}
+	return strings.TrimSpace(existing.Type) != strings.TrimSpace(updated.Type) ||
+		strings.TrimSpace(existing.Host) != strings.TrimSpace(updated.Host) ||
+		existing.Port != updated.Port ||
+		strings.TrimSpace(existing.ExternalURL) != strings.TrimSpace(updated.ExternalURL) ||
+		strings.TrimSpace(existing.TenantID) != strings.TrimSpace(updated.TenantID) ||
+		strings.TrimSpace(existing.GatewayID) != strings.TrimSpace(updated.GatewayID)
 }
 
 func (service *Service) validateResourceScope(resource *models.Resource) error {
@@ -186,21 +219,21 @@ func (service *Service) validateResourceScope(resource *models.Resource) error {
 	tenantID := strings.TrimSpace(resource.TenantID)
 	gatewayID := strings.TrimSpace(resource.GatewayID)
 	if tenantID == "" {
-		return fmt.Errorf("%w: tenant_id is required", ErrInvalidRequest)
+		return fmt.Errorf("%w: organization_id is required", ErrInvalidRequest)
 	}
 	if gatewayID == "" {
 		return fmt.Errorf("%w: gateway_id is required", ErrInvalidRequest)
 	}
 	tenant, ok := service.store.GetTenant(tenantID)
 	if !ok || tenant == nil || !tenant.Enabled {
-		return fmt.Errorf("%w: tenant not found or disabled", ErrInvalidRequest)
+		return fmt.Errorf("%w: organization not found or disabled", ErrInvalidRequest)
 	}
 	gateway, ok := service.store.GetGateway(gatewayID)
 	if !ok || gateway == nil {
 		return fmt.Errorf("%w: gateway not found", ErrInvalidRequest)
 	}
 	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, tenantID) {
-		return fmt.Errorf("%w: gateway does not belong to tenant", ErrInvalidRequest)
+		return fmt.Errorf("%w: gateway does not belong to organization", ErrInvalidRequest)
 	}
 	resource.TenantID = tenantID
 	resource.GatewayID = gatewayID
@@ -218,6 +251,27 @@ func validResourceType(resourceType string) bool {
 
 func normalizeResourceType(resourceType string) string {
 	return strings.ToLower(strings.TrimSpace(resourceType))
+}
+
+func normalizeWebResource(resource *models.Resource) error {
+	if resource == nil || normalizeResourceType(resource.Type) != "web" {
+		return nil
+	}
+	if resource.Port <= 0 {
+		resource.Port = 443
+	}
+	externalURL := strings.TrimSpace(resource.ExternalURL)
+	if externalURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(externalURL)
+	if err != nil || strings.TrimSpace(parsed.Scheme) == "" {
+		return fmt.Errorf("%w: web external_url must be a valid HTTPS URL", ErrInvalidRequest)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("%w: web resources must use HTTPS external_url", ErrInvalidRequest)
+	}
+	return nil
 }
 
 func clearResourceClientFields(resources ...*models.Resource) {

@@ -31,7 +31,6 @@ type JWTManager struct {
 	publicKey             *ecdsa.PublicKey
 	keyID                 string // kid for JWKS
 	tokenExpiry           time.Duration
-	mfaTokenExpiry        time.Duration
 	enrollmentTokenExpiry time.Duration
 	issuer                string
 }
@@ -82,18 +81,6 @@ type AgentSessionTokenRequest struct {
 	AMR                         []string
 }
 
-// MFAClaims is a temporary token issued for MFA step-up verification.
-// It carries the user's available MFA methods so the login page can present
-// the correct verification UI without an additional API call.
-type MFAClaims struct {
-	jwt.RegisteredClaims
-	UserID     string   `json:"user_id"`
-	Username   string   `json:"username"`
-	Role       string   `json:"role"`
-	MFAMethods []string `json:"mfa_methods"` // configured methods: "totp", "webauthn"
-	Purpose    string   `json:"purpose"`     // always "mfa_verification"
-}
-
 // JWK represents a JSON Web Key for the JWKS endpoint
 type JWK struct {
 	Kty string `json:"kty"`
@@ -113,7 +100,7 @@ type JWKS struct {
 }
 
 // NewJWTManager creates a new JWT manager with an in-memory ES256 signing key.
-func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry, mfaTokenExpiry time.Duration, enrollmentTokenExpiry ...time.Duration) (*JWTManager, error) {
+func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry time.Duration, enrollmentTokenExpiry ...time.Duration) (*JWTManager, error) {
 	if privKey == nil {
 		return nil, fmt.Errorf("JWT signing key is nil")
 	}
@@ -134,7 +121,6 @@ func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry, mfaTokenExpiry time.D
 		publicKey:             &privKey.PublicKey,
 		keyID:                 kid,
 		tokenExpiry:           tokenExpiry,
-		mfaTokenExpiry:        mfaTokenExpiry,
 		enrollmentTokenExpiry: enrollmentTTL,
 		issuer:                "trustcloud",
 	}, nil
@@ -214,7 +200,7 @@ func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (st
 	}
 	scopes := req.Scopes
 	if len(scopes) == 0 {
-		scopes = []string{"catalog:read", "device-data:write", "flow:authorize", "session:renew", "session:revoke"}
+		scopes = []string{"catalog:read", "device-data:write", "events:read", "flow:authorize", "session:renew", "session:revoke"}
 	}
 	acr := strings.TrimSpace(req.ACR)
 	if acr == "" {
@@ -354,40 +340,9 @@ func (j *JWTManager) ParseEnrollmentToken(tokenString string) (*CustomClaims, er
 	return claims, nil
 }
 
-// GenerateMFAToken creates a temporary token for the MFA step-up verification.
-// The token carries the user's role and configured MFA methods so the
-// downstream verification step can enforce method validity.
-func (j *JWTManager) GenerateMFAToken(userID, username, role string, mfaMethods []string) (string, error) {
-	now := time.Now()
-	jti, err := generateJTI()
-	if err != nil {
-		return "", fmt.Errorf("generate JTI: %w", err)
-	}
-
-	claims := MFAClaims{
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    j.issuer,
-			Subject:   userID,
-			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(j.mfaTokenExpiry)),
-			NotBefore: jwt.NewNumericDate(now),
-			ID:        jti,
-		},
-		UserID:     userID,
-		Username:   username,
-		Role:       role,
-		MFAMethods: mfaMethods,
-		Purpose:    "mfa_verification",
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
-	token.Header["kid"] = j.keyID
-	return token.SignedString(j.privateKey)
-}
-
 // ParseAuthToken validates the JWT signature and expiry but does NOT check
 // audience or MFADone.
-// Use this for endpoints that accept tokens before MFA completion (e.g. MFA step-up).
+// Use this for endpoints that must inspect freshly issued tokens before full API auth.
 func (j *JWTManager) ParseAuthToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
@@ -418,31 +373,6 @@ func (j *JWTManager) ValidateAuthToken(tokenString string) (*CustomClaims, error
 
 	if !claims.MFADone {
 		return nil, fmt.Errorf("MFA not completed")
-	}
-
-	return claims, nil
-}
-
-// ValidateMFAToken validates and parses a temporary MFA token
-func (j *JWTManager) ValidateMFAToken(tokenString string) (*MFAClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &MFAClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return j.publicKey, nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("parse MFA token: %w", err)
-	}
-
-	claims, ok := token.Claims.(*MFAClaims)
-	if !ok || !token.Valid {
-		return nil, fmt.Errorf("invalid MFA token claims")
-	}
-
-	if claims.Purpose != "mfa_verification" {
-		return nil, fmt.Errorf("token is not an MFA token")
 	}
 
 	return claims, nil

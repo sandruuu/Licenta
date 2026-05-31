@@ -49,11 +49,11 @@ func (s *Service) readyStore() error {
 func (s *Service) validateTenant(tenantID string) (string, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
-		return "", fmt.Errorf("%w: tenant_id is required", ErrInvalidRequest)
+		return "", fmt.Errorf("%w: organization_id is required", ErrInvalidRequest)
 	}
 	tenant, found := s.store.GetTenant(tenantID)
 	if !found || tenant == nil || !tenant.Enabled {
-		return "", fmt.Errorf("%w: tenant not found or disabled", ErrInvalidRequest)
+		return "", fmt.Errorf("%w: organization not found or disabled", ErrInvalidRequest)
 	}
 	return tenantID, nil
 }
@@ -70,10 +70,19 @@ func (s *Service) validateAssignedResourcesTenant(tenantID string, resourceIDs [
 			return fmt.Errorf("%w: assigned resource %s not found", ErrInvalidRequest, resourceID)
 		}
 		if strings.TrimSpace(resource.TenantID) != "" && !strings.EqualFold(resource.TenantID, tenantID) {
-			return fmt.Errorf("%w: assigned resource %s belongs to a different tenant", ErrInvalidRequest, resourceID)
+			return fmt.Errorf("%w: assigned resource %s belongs to a different organization", ErrInvalidRequest, resourceID)
 		}
 	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Service) clock() time.Time {

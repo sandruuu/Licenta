@@ -33,7 +33,6 @@ function App() {
           <Route path="organizations" element={<Organizations />} />
           <Route path="organizations/:organizationId" element={<OrganizationDetail />} />
           <Route path="organizations/:organizationId/idps/:idpId" element={<IdPDetail />} />
-          <Route path="tenants" element={<Navigate to="/dashboard/organizations" replace />} />
           <Route path="resources" element={<Resources />} />
           <Route path="resources/:resourceId" element={<ResourceDetail />} />
           <Route path="policies" element={<Policies />} />

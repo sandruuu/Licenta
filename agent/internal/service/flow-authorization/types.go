@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	DecisionAllow       = "allow"
-	DecisionDeny        = "deny"
-	DecisionMFARequired = "mfa_required"
+	DecisionAllow          = "allow"
+	DecisionDeny           = "deny"
+	DecisionStepUpRequired = "step_up_required"
 )
 
 type Client interface {
@@ -35,19 +35,25 @@ type ProcessIdentity struct {
 }
 
 type AuthorizeResponse struct {
-	Decision        string
-	Reason          string
-	RiskScore       int
-	MatchedRule     string
-	Policies        []string
-	SessionID       string
-	SessionToken    string
-	GatewayID       string
-	GatewayEndpoint string
-	ResourceID      string
-	Protocol        string
-	Port            int
-	ExpiresAt       time.Time
+	Decision          string
+	Reason            string
+	RiskScore         int
+	MatchedRule       string
+	Policies          []string
+	SessionID         string
+	SessionToken      string
+	GatewayID         string
+	GatewayEndpoint   string
+	GatewayServerName string
+	ResourceID        string
+	Protocol          string
+	Port              int
+	ExpiresAt         time.Time
+	StepUpChallengeID string
+	StepUpURL         string
+	StepUpMethods     []string
+	StepUpRequiredACR string
+	StepUpExpiresAt   time.Time
 }
 
 type EnrollmentProvider interface {

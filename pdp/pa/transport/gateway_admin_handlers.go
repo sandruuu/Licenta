@@ -56,12 +56,22 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 			s.writeGatewayAdminError(w, err)
 			return
 		}
+		items = filterGatewayItemsByOrganization(items, s.allowedOrganizationIDs(r))
 		writeJSON(w, http.StatusOK, items)
 
 	case http.MethodPost:
-		var req pagateway.CreateGatewayRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var req pagateway.CreateGatewayRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		applyOrganizationAliasToGatewayCreate(body, &req)
+		if !s.requireOrganizationAccess(w, r, req.TenantID) {
 			return
 		}
 		result, err := s.pa.Gateways.CreateGateway(req)
@@ -74,7 +84,7 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"id":               result.Gateway.ID,
-			"tenant_id":        result.Gateway.TenantID,
+			"organization_id":  result.Gateway.TenantID,
 			"name":             result.Gateway.Name,
 			"auth_mode":        result.Gateway.AuthMode,
 			"enrollment_token": result.EnrollmentToken,
@@ -111,12 +121,32 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			s.writeGatewayAdminError(w, err)
 			return
 		}
+		if !s.requireOrganizationAccess(w, r, gw.TenantID) {
+			return
+		}
 		writeJSON(w, http.StatusOK, gw)
 
 	case http.MethodPut:
-		var req pagateway.UpdateGatewayRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		existing, err := s.pa.Gateways.GetGatewayForAdmin(id)
+		if err != nil {
+			s.writeGatewayAdminError(w, err)
+			return
+		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var req pagateway.UpdateGatewayRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		applyOrganizationAliasToGatewayUpdate(body, &req)
+		if strings.TrimSpace(req.TenantID) != "" && !s.requireOrganizationAccess(w, r, req.TenantID) {
 			return
 		}
 		if _, err := s.pa.Gateways.UpdateGateway(id, req); err != nil {
@@ -127,6 +157,14 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 
 	case http.MethodDelete:
+		existing, err := s.pa.Gateways.GetGatewayForAdmin(id)
+		if err != nil {
+			s.writeGatewayAdminError(w, err)
+			return
+		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			return
+		}
 		gw, err := s.pa.Gateways.DeleteGateway(id)
 		if err != nil {
 			s.writeGatewayAdminError(w, err)
@@ -141,6 +179,14 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 	case http.MethodPost:
 		// POST with action suffix
 		if action == "regenerate-token" {
+			existing, err := s.pa.Gateways.GetGatewayForAdmin(id)
+			if err != nil {
+				s.writeGatewayAdminError(w, err)
+				return
+			}
+			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+				return
+			}
 			result, err := s.pa.Gateways.RegenerateEnrollmentToken(id)
 			if err != nil {
 				s.writeGatewayAdminError(w, err)
@@ -151,12 +197,20 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"id":               result.Gateway.ID,
-				"tenant_id":        result.Gateway.TenantID,
+				"organization_id":  result.Gateway.TenantID,
 				"enrollment_token": result.EnrollmentToken,
 				"token_expires_at": result.TokenExpiresAt,
 				"message":          "New enrollment token generated (1-hour expiry).",
 			})
 		} else if action == "revoke" {
+			existing, err := s.pa.Gateways.GetGatewayForAdmin(id)
+			if err != nil {
+				s.writeGatewayAdminError(w, err)
+				return
+			}
+			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+				return
+			}
 			gw, err := s.pa.Gateways.RevokeGateway(id)
 			if err != nil {
 				s.writeGatewayAdminError(w, err)
@@ -170,8 +224,12 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			// to validate the issuer is reachable and exposes the required
 			// OIDC endpoints. Used by the dashboard "Test connection" button
 			// before saving a tenant identity provider configuration.
-			if _, found := s.pa.Store.GetGateway(id); !found {
+			existing, found := s.pa.Store.GetGateway(id)
+			if !found {
 				writeJSON(w, http.StatusNotFound, map[string]string{"error": "gateway not found"})
+				return
+			}
+			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
 				return
 			}
 			var req struct {
@@ -206,5 +264,41 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func filterGatewayItemsByOrganization(items []pagateway.GatewayListItem, allowed map[string]bool) []pagateway.GatewayListItem {
+	filtered := make([]pagateway.GatewayListItem, 0, len(items))
+	for _, item := range items {
+		if organizationAllowed(allowed, item.TenantID) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func applyOrganizationAliasToGatewayCreate(body []byte, req *pagateway.CreateGatewayRequest) {
+	if req == nil || len(body) == 0 || strings.TrimSpace(req.TenantID) != "" {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return
+	}
+	if value, ok := raw["organization_id"]; ok {
+		_ = json.Unmarshal(value, &req.TenantID)
+	}
+}
+
+func applyOrganizationAliasToGatewayUpdate(body []byte, req *pagateway.UpdateGatewayRequest) {
+	if req == nil || len(body) == 0 || strings.TrimSpace(req.TenantID) != "" {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return
+	}
+	if value, ok := raw["organization_id"]; ok {
+		_ = json.Unmarshal(value, &req.TenantID)
 	}
 }

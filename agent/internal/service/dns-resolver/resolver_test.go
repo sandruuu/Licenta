@@ -95,6 +95,41 @@ func TestResolverReusesAndPurgesMappings(t *testing.T) {
 	}
 }
 
+func TestResolverKeepsSyntheticIPStableAfterTTLWhileResourceIsActive(t *testing.T) {
+	now := time.Unix(2500, 0).UTC()
+	resolver, err := New(Options{Clock: func() time.Time { return now }, DefaultTTL: time.Minute})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	if err := resolver.ApplyPolicy(Policy{TTLSeconds: 60, Resources: []Resource{{FQDN: "rdp.example.test", ResourceID: "res-rdp", Protocol: "rdp", Port: 3389}}}); err != nil {
+		t.Fatalf("ApplyPolicy returned error: %v", err)
+	}
+	first, err := resolver.Resolve("rdp.example.test")
+	if err != nil {
+		t.Fatalf("first Resolve returned error: %v", err)
+	}
+
+	now = now.Add(2 * time.Minute)
+	status := resolver.Status()
+	if status.ActiveMappingCount != 1 {
+		t.Fatalf("expired active mapping was removed by Status: %+v", status)
+	}
+	lookup, ok := resolver.Lookup(first.SyntheticIP)
+	if !ok || lookup.SyntheticIP != first.SyntheticIP {
+		t.Fatalf("Lookup after TTL = %+v, %t", lookup, ok)
+	}
+	second, err := resolver.Resolve("rdp.example.test")
+	if err != nil {
+		t.Fatalf("second Resolve returned error: %v", err)
+	}
+	if second.SyntheticIP != first.SyntheticIP {
+		t.Fatalf("synthetic IP changed after TTL: first=%s second=%s", first.SyntheticIP, second.SyntheticIP)
+	}
+	if !second.ExpiresAt.After(first.ExpiresAt) {
+		t.Fatalf("mapping expiry was not refreshed: first=%s second=%s", first.ExpiresAt, second.ExpiresAt)
+	}
+}
+
 func TestResolverEnsuresMappingsForCatalogResources(t *testing.T) {
 	now := time.Unix(3000, 0).UTC()
 	resolver, err := New(Options{Clock: func() time.Time { return now }})

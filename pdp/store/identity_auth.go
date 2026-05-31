@@ -10,15 +10,13 @@ import (
 
 // GetUserByExternalSubject finds a federated user by their external IdP subject+source.
 func (s *Store) GetUserByExternalSubject(externalSubject, authSource string) (*models.User, bool) {
-	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+`
 		FROM users WHERE external_subject = ? AND auth_source = ?`, externalSubject, authSource)
 	return s.scanUser(row)
 }
 
 func (s *Store) GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID string) (*models.User, bool) {
-	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+`
 		FROM users WHERE external_subject = ? AND auth_source = ? AND tenant_id = ?`,
 		externalSubject, authSource, tenantID)
 	return s.scanUser(row)
@@ -31,10 +29,19 @@ func (s *Store) GetUserByExternalSubjectForTenant(externalSubject, authSource, t
 // SaveLoginLocation stores a geolocation record for a user login event.
 // Keeps at most 50 records per user; older entries are pruned automatically.
 func (s *Store) SaveLoginLocation(userID, sourceIP string, lat, lon float64, city, country string) error {
+	return s.SaveLoginLocationAt(userID, sourceIP, lat, lon, city, country, time.Now().UTC())
+}
+
+// SaveLoginLocationAt stores a geolocation record at a specific timestamp.
+// It is primarily useful for deterministic baseline and geo-velocity tests.
+func (s *Store) SaveLoginLocationAt(userID, sourceIP string, lat, lon float64, city, country string, timestamp time.Time) error {
+	if timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO login_locations (user_id, source_ip, latitude, longitude, city, country, timestamp)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		userID, sourceIP, lat, lon, city, country, time.Now().UTC().Format(time.RFC3339),
+		userID, sourceIP, lat, lon, city, country, timestamp.UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return err
@@ -163,4 +170,24 @@ func (s *Store) GetUserDevices(userID string) []string {
 		}
 	}
 	return devices
+}
+
+// GetDeviceUserBinding returns the earliest known binding between a user and a
+// device. The oldest binding is used to decide whether a device is still new.
+func (s *Store) GetDeviceUserBinding(userID, deviceID string) (*models.DeviceUser, bool) {
+	row := s.db.QueryRow(
+		`SELECT device_id, user_id, username, role, bound_at
+		 FROM device_users
+		 WHERE user_id = ? AND device_id = ?
+		 ORDER BY bound_at ASC
+		 LIMIT 1`, userID, deviceID,
+	)
+
+	binding := &models.DeviceUser{}
+	var boundAt string
+	if err := row.Scan(&binding.DeviceID, &binding.UserID, &binding.Username, &binding.Role, &boundAt); err != nil {
+		return nil, false
+	}
+	binding.BoundAt = parseTime(boundAt)
+	return binding, true
 }

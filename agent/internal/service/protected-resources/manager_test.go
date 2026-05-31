@@ -94,6 +94,55 @@ func TestManagerClearsCatalogAndNRPT(t *testing.T) {
 	}
 }
 
+func TestManagerAppliesCatalogAfterUnknownDNSLookup(t *testing.T) {
+	nrpt := &fakeDNSControl{}
+	manager, err := NewManager(Config{
+		DNSListenAddress: "127.0.0.1:0",
+		ReadyTimeout:     2 * time.Second,
+	}, Dependencies{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DNSControl: nrpt,
+	})
+	if err != nil {
+		t.Fatalf("NewManager returned error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- manager.Run(ctx) }()
+	waitForManagerDNS(t, manager)
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+	}()
+
+	response := exchangeDNS(t, manager.LocalDNSAddress(), "missing.internal.example.")
+	if response.Rcode != dns.RcodeNameError {
+		t.Fatalf("DNS response rcode=%s, want NXDOMAIN", dns.RcodeToString[response.Rcode])
+	}
+	if status := manager.Status(); status.LastError == "" {
+		t.Fatalf("manager status did not retain resolver error after unknown lookup: %+v", status)
+	}
+
+	if err := manager.ApplyCatalog(context.Background(), ipc.CatalogInfo{
+		Version: "cat-after-miss",
+		Resources: []ipc.CatalogResource{{
+			ResourceID: "res-1",
+			FQDN:       "app.internal.example",
+			Protocol:   "https",
+			Port:       443,
+		}},
+		TTLSeconds: 60,
+	}); err != nil {
+		t.Fatalf("ApplyCatalog returned error after stale resolver error: %v", err)
+	}
+	if applied := nrpt.last(); len(applied.DNSNames) != 1 || applied.DNSNames[0] != "app.internal.example" {
+		t.Fatalf("NRPT config = %+v", applied)
+	}
+}
+
 func TestManagerClearsStaleRulesOnRun(t *testing.T) {
 	nrpt := &fakeDNSControl{}
 	traffic := &fakeTrafficInterceptor{}

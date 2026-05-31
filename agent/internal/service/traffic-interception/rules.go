@@ -10,11 +10,12 @@ import (
 )
 
 type route struct {
-	ResourceID  string
-	FQDN        string
-	Protocol    string
-	Port        int
-	SyntheticIP string
+	ResourceID        string
+	FQDN              string
+	Protocol          string
+	TransportProtocol string
+	Port              int
+	SyntheticIP       string
 }
 
 type routeTable struct {
@@ -30,10 +31,10 @@ func newRouteTable(mappings []ResourceMapping) (routeTable, []wfpcontrol.Rule, e
 		if err != nil {
 			return routeTable{}, nil, err
 		}
-		if normalized.Protocol != "tcp" {
+		if normalized.TransportProtocol != "tcp" {
 			continue
 		}
-		key := routeKey(normalized.SyntheticIP, normalized.Port, normalized.Protocol)
+		key := routeKey(normalized.SyntheticIP, normalized.Port, normalized.TransportProtocol)
 		seen[key] = normalized
 	}
 	for _, value := range seen {
@@ -48,11 +49,11 @@ func newRouteTable(mappings []ResourceMapping) (routeTable, []wfpcontrol.Rule, e
 	table := routeTable{byDestination: make(map[string]route, len(routes)), routes: routes}
 	rules := make([]wfpcontrol.Rule, 0, len(routes))
 	for _, item := range routes {
-		table.byDestination[routeKey(item.SyntheticIP, item.Port, item.Protocol)] = item
+		table.byDestination[routeKey(item.SyntheticIP, item.Port, item.TransportProtocol)] = item
 		rules = append(rules, wfpcontrol.Rule{
 			SyntheticIP: item.SyntheticIP,
 			Port:        item.Port,
-			Protocol:    item.Protocol,
+			Protocol:    item.TransportProtocol,
 		})
 	}
 	return table, rules, nil
@@ -83,20 +84,25 @@ func normalizeRoute(mapping ResourceMapping) (route, error) {
 		return route{}, fmt.Errorf("resource %q port %d is outside TCP/UDP range", mapping.ResourceID, mapping.Port)
 	}
 	protocol := strings.ToLower(strings.TrimSpace(mapping.Protocol))
+	transportProtocol := protocol
 	switch protocol {
-	case "", "http", "https", "tcp":
+	case "":
 		protocol = "tcp"
+		transportProtocol = "tcp"
+	case "http", "https", "rdp", "ssh", "tcp":
+		transportProtocol = "tcp"
 	case "udp":
-		protocol = "udp"
+		transportProtocol = "udp"
 	default:
 		return route{}, fmt.Errorf("resource %q uses unsupported interception protocol %q", mapping.ResourceID, mapping.Protocol)
 	}
 	return route{
-		ResourceID:  strings.TrimSpace(mapping.ResourceID),
-		FQDN:        strings.ToLower(strings.TrimSuffix(strings.TrimSpace(mapping.FQDN), ".")),
-		Protocol:    protocol,
-		Port:        port,
-		SyntheticIP: ip.String(),
+		ResourceID:        strings.TrimSpace(mapping.ResourceID),
+		FQDN:              strings.ToLower(strings.TrimSuffix(strings.TrimSpace(mapping.FQDN), ".")),
+		Protocol:          protocol,
+		TransportProtocol: transportProtocol,
+		Port:              port,
+		SyntheticIP:       ip.String(),
 	}, nil
 }
 

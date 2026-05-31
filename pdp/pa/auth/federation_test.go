@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,41 @@ func TestFederationDiscoverRejectsIssuerMismatch(t *testing.T) {
 	_, err := fp.Discover(server.URL)
 	if err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
 		t.Fatalf("Discover() error = %v, want issuer mismatch", err)
+	}
+}
+
+func TestGenerateExternalAuthURLIncludesPromptWhenConfigured(t *testing.T) {
+	var issuer string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/openid-configuration" {
+			http.NotFound(w, r)
+			return
+		}
+		writeTestJSON(t, w, map[string]string{
+			"issuer":                 issuer,
+			"authorization_endpoint": issuer + "/auth",
+			"token_endpoint":         issuer + "/token",
+		})
+	}))
+	defer server.Close()
+	issuer = server.URL
+
+	fp := NewFederationProvider("openid profile email", nil, time.Minute, time.Second)
+	authURL, err := fp.GenerateExternalAuthURL(&models.FederationConfig{
+		Issuer:       issuer,
+		ClientID:     "trustcloud",
+		Prompt:       "login",
+		ClaimMapping: map[string]string{},
+	}, "https://pdp.example.test/callback", "state-1", "nonce-1", "challenge-1")
+	if err != nil {
+		t.Fatalf("GenerateExternalAuthURL() error = %v", err)
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("Parse auth URL: %v", err)
+	}
+	if got := parsed.Query().Get("prompt"); got != "login" {
+		t.Fatalf("prompt = %q, want login; url=%s", got, authURL)
 	}
 }
 

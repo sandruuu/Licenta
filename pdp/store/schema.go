@@ -17,7 +17,8 @@ func (s *Store) createTables() error {
 			password_hash TEXT NOT NULL,
 			totp_secret TEXT DEFAULT '',
 			mfa_methods_json TEXT DEFAULT '[]',
-			role TEXT DEFAULT 'user',
+			last_totp_counter INTEGER DEFAULT -1,
+			role TEXT DEFAULT 'platform_admin',
 			disabled INTEGER DEFAULT 0,
 			tenant_id TEXT DEFAULT '',
 			external_subject TEXT DEFAULT '',
@@ -35,6 +36,15 @@ func (s *Store) createTables() error {
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS organization_memberships (
+			user_id TEXT NOT NULL,
+			organization_id TEXT NOT NULL,
+			role TEXT DEFAULT 'platform_admin',
+			created_at TEXT DEFAULT '',
+			PRIMARY KEY (user_id, organization_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_organization_memberships_user ON organization_memberships(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_organization_memberships_org ON organization_memberships(organization_id)`,
 		`CREATE TABLE IF NOT EXISTS schema_meta (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
@@ -43,7 +53,6 @@ func (s *Store) createTables() error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			description TEXT DEFAULT '',
-			priority INTEGER NOT NULL DEFAULT 0,
 			enabled INTEGER DEFAULT 1,
 			tenant_id TEXT DEFAULT '',
 			scope TEXT DEFAULT 'global',
@@ -63,7 +72,7 @@ func (s *Store) createTables() error {
 			resource_id TEXT DEFAULT '',
 			group_id TEXT DEFAULT '',
 			group_name TEXT DEFAULT '',
-			priority INTEGER NOT NULL DEFAULT 100,
+			order_index INTEGER DEFAULT 0,
 			enabled INTEGER DEFAULT 1,
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
@@ -82,9 +91,15 @@ func (s *Store) createTables() error {
 			protocol TEXT DEFAULT '',
 			risk_score INTEGER DEFAULT 0,
 			tenant_id TEXT DEFAULT '',
+			policy_id TEXT DEFAULT '',
 			created_at TEXT DEFAULT '',
 			expires_at TEXT DEFAULT '',
 			last_activity TEXT DEFAULT '',
+			revalidate_after TEXT DEFAULT '',
+			session_max_age_seconds INTEGER DEFAULT 0,
+			revalidate_every_seconds INTEGER DEFAULT 0,
+			revoke_on_posture_change INTEGER DEFAULT 0,
+			revoke_on_risk_increase INTEGER DEFAULT 0,
 			revoked INTEGER DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS resources (
@@ -103,7 +118,6 @@ func (s *Store) createTables() error {
 			client_id TEXT DEFAULT '',
 			client_secret TEXT DEFAULT '',
 			allowed_roles_json TEXT DEFAULT '[]',
-			require_mfa INTEGER DEFAULT 0,
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
@@ -224,6 +238,7 @@ func (s *Store) createTables() error {
 			created_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_credential_id ON webauthn_credentials(credential_id)`,
 		`CREATE TABLE IF NOT EXISTS rate_limits (
 			ip TEXT NOT NULL,
 			window_start TEXT NOT NULL,
@@ -311,6 +326,7 @@ func (s *Store) createTables() error {
 		`ALTER TABLE resources ADD COLUMN client_id TEXT DEFAULT ''`,
 		`ALTER TABLE resources ADD COLUMN client_secret TEXT DEFAULT ''`,
 		`ALTER TABLE users ADD COLUMN mfa_methods_json TEXT DEFAULT '[]'`,
+		`ALTER TABLE users ADD COLUMN last_totp_counter INTEGER DEFAULT -1`,
 		// S4.2 — tamper-evident audit log hash chain
 		`ALTER TABLE audit_log ADD COLUMN prev_hash TEXT DEFAULT ''`,
 		`ALTER TABLE audit_log ADD COLUMN entry_hash TEXT DEFAULT ''`,
@@ -323,9 +339,15 @@ func (s *Store) createTables() error {
 		`ALTER TABLE policy_assignments ADD COLUMN level TEXT DEFAULT 'organization'`,
 		`ALTER TABLE policy_assignments ADD COLUMN group_id TEXT DEFAULT ''`,
 		`ALTER TABLE policy_assignments ADD COLUMN group_name TEXT DEFAULT ''`,
-		`ALTER TABLE policy_assignments ADD COLUMN priority INTEGER NOT NULL DEFAULT 100`,
+		`ALTER TABLE policy_assignments ADD COLUMN order_index INTEGER DEFAULT 0`,
 		`ALTER TABLE sessions ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN gateway_id TEXT DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN policy_id TEXT DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN revalidate_after TEXT DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN session_max_age_seconds INTEGER DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN revalidate_every_seconds INTEGER DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN revoke_on_posture_change INTEGER DEFAULT 0`,
+		`ALTER TABLE sessions ADD COLUMN revoke_on_risk_increase INTEGER DEFAULT 0`,
 		`ALTER TABLE resources ADD COLUMN tenant_id TEXT DEFAULT ''`,
 		`ALTER TABLE resources ADD COLUMN gateway_id TEXT DEFAULT ''`,
 		`ALTER TABLE audit_log ADD COLUMN tenant_id TEXT DEFAULT ''`,
@@ -343,6 +365,17 @@ func (s *Store) createTables() error {
 	}
 	for _, m := range migrations {
 		s.db.Exec(m) // ignore "duplicate column" errors
+	}
+
+	if _, err := s.db.Exec(`UPDATE users
+		SET role = 'platform_admin'
+		WHERE (auth_source IS NULL OR trim(auth_source) = '')
+		  AND (role IS NULL OR trim(role) = '' OR role IN ('admin', 'user'))`); err != nil {
+		return fmt.Errorf("normalize local administrator roles: %w", err)
+	}
+
+	if err := s.dropLegacyPolicyPriorityColumns(); err != nil {
+		return err
 	}
 
 	if err := s.migrateDeviceDataFromOldTable(); err != nil {
@@ -368,7 +401,7 @@ func (s *Store) createTables() error {
 			resource_id TEXT DEFAULT '',
 			group_id TEXT DEFAULT '',
 			group_name TEXT DEFAULT '',
-			priority INTEGER NOT NULL DEFAULT 100,
+			order_index INTEGER DEFAULT 0,
 			enabled INTEGER DEFAULT 1,
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
@@ -378,6 +411,7 @@ func (s *Store) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_tenant ON policy_assignments(tenant_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_group ON policy_assignments(group_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_order ON policy_assignments(tenant_id, level, order_index)`,
 	}
 	for _, stmt := range postMigrationIndexes {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -388,7 +422,29 @@ func (s *Store) createTables() error {
 	if err := s.cleanupLegacyPolicyDataOnce(); err != nil {
 		return err
 	}
+	if err := s.resetPolicyDataForDuoModelOnce(); err != nil {
+		return err
+	}
+	if err := s.enforceCanonicalPolicyActions(); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (s *Store) dropLegacyPolicyPriorityColumns() error {
+	for _, tableName := range []string{"policy_rules", "policy_assignments"} {
+		hasPriority, err := s.tableHasColumn(tableName, "priority")
+		if err != nil {
+			return err
+		}
+		if !hasPriority {
+			continue
+		}
+		if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN priority`, tableName)); err != nil {
+			return fmt.Errorf("drop legacy policy priority column from %s: %w", tableName, err)
+		}
+	}
 	return nil
 }
 
@@ -484,6 +540,38 @@ func (s *Store) cleanupLegacyPolicyDataOnce() error {
 	}
 
 	log.Printf("[STORE] Removed legacy policy rules and assignments")
+	return nil
+}
+
+func (s *Store) resetPolicyDataForDuoModelOnce() error {
+	const marker = "duo_policy_model_reset_v1"
+
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, marker).Scan(&value)
+	if err == nil && value == "done" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("query Duo policy reset marker: %w", err)
+	}
+
+	if _, err := s.db.Exec(`INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, 'done')`, marker); err != nil {
+		return fmt.Errorf("write Duo policy reset marker: %w", err)
+	}
+
+	log.Printf("[STORE] Marked Duo-style policy model migration complete")
+	return nil
+}
+
+func (s *Store) enforceCanonicalPolicyActions() error {
+	if _, err := s.db.Exec(`UPDATE policy_rules SET action = lower(trim(action))`); err != nil {
+		return fmt.Errorf("normalize policy action casing: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE policy_rules
+		SET action = 'deny', enabled = 0
+		WHERE action NOT IN ('allow', 'deny', 'step_up_required')`); err != nil {
+		return fmt.Errorf("disable non-canonical policy actions: %w", err)
+	}
 	return nil
 }
 

@@ -52,6 +52,7 @@ func (service *deviceDataGRPCService) ReportDeviceData(ctx context.Context, requ
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	report.TenantID = enrollment.TenantID
 	report, err = service.server.pa.Devices.AcceptDeviceDataReport(enrollment.DeviceID, report)
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCodeForDeviceDataError(err)), err.Error())

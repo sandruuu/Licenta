@@ -17,20 +17,73 @@ import {
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import PageHeader from '../components/ui/PageHeader';
 import Pagination from '../components/ui/Pagination';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import PolicyApplyModal from '../components/policies/PolicyApplyModal';
 import PolicyEditor from '../components/policies/PolicyEditor';
 import PolicyList from '../components/policies/PolicyList';
+import PolicyUnassignModal from '../components/policies/PolicyUnassignModal';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import {
   EMPTY_ASSIGNMENT_FORM,
   EMPTY_POLICY_FORM,
   LAYERS,
+  actionFromAuthenticationPolicy,
   conditionSummary,
   conditionsFromForm,
+  createUserLocationRule,
   deviceCheckOptionsFromReports,
   inferEnabledSections,
   policyFormFromRule,
 } from '../components/policies/policyModel';
+
+function formAfterSectionToggle(form, sectionID, enabled) {
+  if (enabled) {
+    if (sectionID === 'newuser') {
+      return { ...form, new_user_policy: form.new_user_policy || 'require_enrollment' };
+    }
+    if (sectionID === 'riskbasedauth') {
+      return { ...form, risk_auth_enabled: true };
+    }
+    if (sectionID === 'devicehealth') {
+      return { ...form, required_check_status: form.required_check_status || 'good' };
+    }
+    return form;
+  }
+
+  switch (sectionID) {
+    case 'newuser':
+      return { ...form, new_user_policy: '' };
+    case 'riskbasedauth':
+      return { ...form, risk_auth_enabled: false };
+    case 'location':
+      return {
+        ...form,
+        user_location_rules: [createUserLocationRule()],
+        user_location_default_action: 'allow',
+        user_location_unknown_action: 'allow',
+        user_location_check_mode: 'access_device_only',
+        access_new_location: false,
+        access_impossible_travel: false,
+      };
+    case 'devicehealth':
+      return {
+        ...form,
+        required_checks: '',
+        required_check_status: 'good',
+      };
+    case 'authorizednetworks':
+      return {
+        ...form,
+        network_allowed_cidrs: [],
+        network_skip_mfa_cidrs: [],
+        network_require_mfa_cidrs: [],
+        network_blocked_cidrs: [],
+        network_deny_other: false,
+      };
+    default:
+      return form;
+  }
+}
 
 export default function Policies() {
   const [searchParams] = useSearchParams();
@@ -48,6 +101,8 @@ export default function Policies() {
   const [levelFilter, setLevelFilter] = useState('all');
   const [editor, setEditor] = useState(null);
   const [assignmentModal, setAssignmentModal] = useState(null);
+  const [deletePolicyTarget, setDeletePolicyTarget] = useState(null);
+  const [unassignPolicyTarget, setUnassignPolicyTarget] = useState(null);
   const [policyForm, setPolicyForm] = useState(EMPTY_POLICY_FORM);
   const [assignmentForm, setAssignmentForm] = useState(EMPTY_ASSIGNMENT_FORM);
 
@@ -134,6 +189,7 @@ export default function Policies() {
   };
 
   const toggleEditorSection = (sectionID, value) => {
+    setPolicyForm((current) => formAfterSectionToggle(current, sectionID, !!value));
     setEditor((current) => ({
       ...current,
       enabledSections: {
@@ -149,10 +205,9 @@ export default function Policies() {
     const payload = {
       name: policyForm.name.trim(),
       description: policyForm.description.trim(),
-      priority: 100,
       enabled: policyForm.enabled !== false,
-      action: policyForm.action,
-      conditions: conditionsFromForm(policyForm, editor?.enabledSections),
+      action: actionFromAuthenticationPolicy(policyForm.authentication_policy || 'enforce_mfa'),
+      conditions: conditionsFromForm(policyForm),
     };
     try {
       if (editor?.mode === 'edit') {
@@ -175,7 +230,6 @@ export default function Policies() {
       await createPolicy({
         name: `${policy.name} copy`,
         description: policy.description || '',
-        priority: 100,
         enabled: false,
         action: policy.action || 'allow',
         conditions: policy.conditions || {},
@@ -228,12 +282,12 @@ export default function Policies() {
 
     const makePayload = ({ resourceID = '', groupID = '', groupName = '' } = {}) => ({
       policy_id: assignmentForm.policy_id,
-      tenant_id: assignmentForm.tenant_id,
+      organization_id: assignmentForm.tenant_id,
       level: assignmentForm.level,
       resource_id: ['resource', 'resource_group'].includes(assignmentForm.level) ? resourceID : '',
       group_id: ['group', 'resource_group'].includes(assignmentForm.level) ? groupID : '',
       group_name: ['group', 'resource_group'].includes(assignmentForm.level) ? groupName : '',
-      priority: parseInt(assignmentForm.priority, 10) || 100,
+      order_placement: '',
       enabled: assignmentForm.enabled !== false,
     });
 
@@ -259,27 +313,32 @@ export default function Policies() {
     }
   };
 
-  const handleDeletePolicy = async (policy) => {
-    if (!confirm(`Delete policy "${policy.name}" and its assignments?`)) return;
+  const confirmDeletePolicy = async () => {
+    if (!deletePolicyTarget) return;
     setError('');
+    setSaving(true);
     try {
-      await deletePolicy(policy.id);
+      await deletePolicy(deletePolicyTarget.id);
+      setDeletePolicyTarget(null);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to delete policy');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleUnassignPolicy = async (policy) => {
-    const policyAssignments = assignmentsForPolicy(policy.id);
-    if (!policyAssignments.length) return;
-    if (!confirm(`Unassign "${policy.name}" from ${policyAssignments.length} target${policyAssignments.length === 1 ? '' : 's'}?`)) return;
+  const handleUnassignAssignment = async (assignment) => {
+    if (!assignment) return;
     setError('');
+    setSaving(true);
     try {
-      await Promise.all(policyAssignments.map((assignment) => deletePolicyAssignment(assignment.id)));
+      await deletePolicyAssignment(assignment.id);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to unassign policy');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -354,8 +413,8 @@ export default function Policies() {
         onEdit={(policy) => openPolicyEditor('edit', policy)}
         onApply={openAssignmentCreate}
         onDuplicate={handleDuplicatePolicy}
-        onUnassign={handleUnassignPolicy}
-        onDelete={handleDeletePolicy}
+        onUnassign={setUnassignPolicyTarget}
+        onDelete={setDeletePolicyTarget}
       />
 
       {/* <div className="pt-2">
@@ -380,6 +439,26 @@ export default function Policies() {
         saving={saving}
         onClose={() => setAssignmentModal(null)}
         onSave={handleSaveAssignment}
+      />
+
+      <PolicyUnassignModal
+        open={!!unassignPolicyTarget}
+        policy={unassignPolicyTarget}
+        assignments={unassignPolicyTarget ? assignmentsForPolicy(unassignPolicyTarget.id) : []}
+        maps={maps}
+        saving={saving}
+        onClose={() => setUnassignPolicyTarget(null)}
+        onUnassign={handleUnassignAssignment}
+      />
+
+      <ConfirmDialog
+        open={!!deletePolicyTarget}
+        onClose={() => setDeletePolicyTarget(null)}
+        onConfirm={confirmDeletePolicy}
+        title="Delete policy"
+        message={deletePolicyTarget ? `Delete "${deletePolicyTarget.name}" and all of its assignments? This cannot be undone.` : ''}
+        confirmLabel="Delete policy"
+        loading={saving}
       />
     </div>
   );

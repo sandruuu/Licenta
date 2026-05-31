@@ -165,7 +165,7 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 		CertificateThumbprintSHA256: session.DeviceCertThumbprint,
 		DeviceDataRevision:          session.DeviceDataRevision,
 		PolicyEpoch:                 session.PolicyEpoch,
-		ACR:                         "urn:trustcloud:loa:2",
+		ACR:                         "urn:trustcloud:loa:1",
 		AMR:                         []string{"idp"},
 	})
 	if err != nil {
@@ -229,10 +229,24 @@ func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, reque
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
+	sessionID := strings.TrimSpace(structFieldString(request, "session_id"))
+	if sessionID != "" && strings.TrimSpace(claims.SessionID) != "" && sessionID != strings.TrimSpace(claims.SessionID) {
+		return nil, status.Error(codes.PermissionDenied, "session_id does not match agent session token")
+	}
 	if claims.ID != "" && claims.ExpiresAt != nil {
 		service.server.pa.Store.RevokeToken(claims.ID, claims.ExpiresAt.Time)
 	}
-	return structpb.NewStruct(map[string]interface{}{"revoked": true})
+	if strings.TrimSpace(claims.SessionID) != "" {
+		service.server.agentSessions.deleteByAgentSessionID(claims.SessionID)
+	}
+	revokedResourceSessions := 0
+	if service.server.pa.Sessions != nil {
+		revokedResourceSessions = service.server.pa.Sessions.RevokeSessionsForDeviceUser(claims.UserID, claims.DeviceID, claims.TenantID, "agent_logout")
+	}
+	return structpb.NewStruct(map[string]interface{}{
+		"revoked":                   true,
+		"revoked_resource_sessions": float64(revokedResourceSessions),
+	})
 }
 
 func (service *agentSessionGRPCService) authenticatedAgentDevice(ctx context.Context) (deviceEnrollment, string, error) {
@@ -296,11 +310,19 @@ func catalogSnapshotStruct(snapshot catalog.Snapshot) (*structpb.Struct, error) 
 			"access_mode":  resource.Protocol,
 		})
 	}
+	deviceDataChecks := make([]interface{}, 0, len(snapshot.DeviceDataPolicy.RequiredChecks))
+	for _, check := range snapshot.DeviceDataPolicy.RequiredChecks {
+		deviceDataChecks = append(deviceDataChecks, check)
+	}
 	return structpb.NewStruct(map[string]interface{}{
 		"version":      snapshot.Version,
 		"resources":    resourceValues,
 		"ttl_seconds":  float64(snapshot.TTLSeconds),
 		"policy_epoch": snapshot.PolicyEpoch,
+		"device_data_policy": map[string]interface{}{
+			"required_checks":       deviceDataChecks,
+			"required_check_status": snapshot.DeviceDataPolicy.RequiredCheckStatus,
+		},
 	})
 }
 

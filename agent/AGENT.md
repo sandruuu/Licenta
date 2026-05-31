@@ -33,7 +33,9 @@ Entry point:
 
 Service:
 
-- `internal/service/runtime.go`: porneste listener-ul IPC si device-data sync runner-ul.
+- `internal/service/runtime.go`: porneste listener-ul IPC, device-data sync runner-ul si watcher-ele de evenimente Agent.
+- `internal/service/agent_events.go`: porneste stream-uri de evenimente pentru sesiunile de user autentificate si reactioneaza la revocari/invalidari de catalog.
+- `internal/service/access_prompt.go`: tine mesajele locale pentru sign-in required si step-up required afisate in Tray.
 - `internal/service/service.go`: defineste configuratia, dependintele si starea serviciului.
 - `internal/service/constructor.go`: construieste enrollment manager, user-session manager, protected resources si device-data sync runner-ul.
 - `internal/service/ipc_handlers.go`: implementeaza operatiile IPC expuse catre Tray.
@@ -50,6 +52,7 @@ Service:
 - `internal/service/traffic-interception/*`: proxy local TCP si managerul regulilor de interceptare pentru IP-urile sintetice.
 - `internal/service/wfp-control/*`: clientul user-mode care trimite regulile catre driverul WFP prin IOCTL.
 - `internal/service/flow-authorization/*`: client gRPC/mTLS catre PDP pentru decizia per flow si sesiunea provisionata de Gateway.
+- `internal/service/agent-events/*`: client gRPC/mTLS catre PDP pentru `trustagent.events.AgentEventsService/Watch`.
 - `internal/service/gateway-tunnel/*`: client mTLS + yamux catre Gateway, cu handshake `hello` si stream-uri `connect`.
 - `internal/service/protected-resources/*`: orchestreaza catalog -> resolver DNS local -> WFP -> NRPT.
 - `internal/service/enrollment/*`: enrollment device, cheie privata, CSR, certificate store, client gRPC.
@@ -86,6 +89,9 @@ Serviciul LocalSystem:
 - returneaza IP-uri sintetice din `100.64.0.0/10` pentru FQDN-urile resurselor protejate;
 - poate prealoca mapping-urile IP sintetic -> resursa si instala reguli WFP pentru redirectarea conexiunilor catre proxy-ul local;
 - are clientul de autorizare per flow catre PDP si clientul de tunnel mTLS/yamux catre Gateway;
+- afiseaza prompt local cand utilizatorul incearca accesul fara sesiune activa;
+- cand PDP returneaza `step_up_required`, salveaza mesajul si URL-ul de step-up in starea sesiunii, iar Tray-ul il deschide in browser daca URL-ul este HTTPS si apartine PDP-ului configurat;
+- urmareste stream-ul `trustagent.events.AgentEventsService/Watch` pentru sesiunile autentificate si reactioneaza la `access.revoked` si `catalog.invalidated`;
 - pastreaza `agent_session_token` in memoria serviciului, per user local;
 - sterge sesiunea userului la logout, curata regulile NRPT si nu sterge enrollment-ul device-ului.
 - colecteaza device-data pentru 6 controale Windows;
@@ -97,10 +103,18 @@ Tray-ul:
 - este UI-only;
 - vorbeste doar cu serviciul prin named pipe;
 - afiseaza starea de enrollment, login si catalog;
+- afiseaza mesajele de acces refuzat, sign-in required si step-up required;
+- deschide automat URL-ul de step-up primit de la serviciu cand acesta este
+  valid si apartine PDP-ului configurat;
 - primeste doar `auth_url` pentru browser;
 - nu primeste CSR, private key, poll secret, claim secret, certificate PEM sau tokenuri.
 
 Proxy-ul local este legat de autorizarea per flow si de tunnel-ul Gateway prin `resourceStreamConnector`: pentru fiecare conexiune redirectionata de WFP, service-ul identifica resursa din catalog, cere decizia PDP prin `flow-authorization`, iar pentru decizia `allow` deschide un stream mTLS/yamux catre Gateway folosind materialul de sesiune provisionat de PDP.
+
+Pentru decizia `step_up_required`, service-ul nu deschide stream catre Gateway.
+In schimb, inregistreaza URL-ul browser primit de la PDP, Tray-ul il deschide
+pentru utilizator, iar dupa finalizarea MFA urmatoarea incercare de acces
+declanseaza o noua autorizare per flow.
 
 ## IPC Security
 
@@ -352,7 +366,7 @@ Claim si catalog:
 6. Tokenul are:
    - audience `trustagent-api`;
    - purpose `trustagent.session`;
-   - scope-uri precum `catalog:read`, `flow:authorize`, `session:revoke`;
+   - scope-uri precum `catalog:read`, `flow:authorize`, `session:revoke`, `events:read`;
    - binding la certificatul device prin `cnf.x5t#S256`.
 7. Serviciul cere catalogul prin gRPC mTLS + `agent_session_token`.
 8. PDP verifica tokenul, scope-ul `catalog:read` si binding-ul certificatului.
@@ -363,7 +377,16 @@ Claim si catalog:
    - directioneaza aceste FQDN-uri protejate catre `local_dns_server`;
    - blocheaza finalizarea autentificarii locale daca aplicarea catalogului esueaza.
 10. Serviciul salveaza catalogul per sesiune locala.
-11. Tray afiseaza userul autentificat si resursele.
+11. Serviciul porneste watcher-ul de evenimente PDP pentru sesiunea autentificata.
+12. Tray afiseaza userul autentificat si resursele.
+
+Evenimente remote:
+
+- `access.revoked`: serviciul revoca sesiunea locala sau afiseaza mesajul de
+  revocare; pentru `device_posture_changed`, opreste accesul la resurse pana la
+  autentificare/reevaluare.
+- `catalog.invalidated`: serviciul cere din nou catalogul prin sesiunea curenta
+  si reaplica DNS/NRPT/WFP.
 
 Logout:
 

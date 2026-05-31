@@ -99,7 +99,7 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	case err := <-errorCh:
 		t.Fatalf("AuthorizeResource returned error: %v", err)
 	case response := <-responseCh:
-		if structFieldString(response, "decision") != "allow" || structFieldString(response, "session_token") == "" || structFieldString(response, "gateway_endpoint") != "gateway.example.test:9443" {
+		if structFieldString(response, "decision") != "allow" || structFieldString(response, "session_token") == "" || structFieldString(response, "gateway_endpoint") != "gateway.example.test:9443" || structFieldString(response, "gateway_server_name") != "gateway.example.test" {
 			t.Fatalf("authorization response = %+v", response.AsMap())
 		}
 	case <-time.After(time.Second):
@@ -111,6 +111,87 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	case <-streamDone:
 	case <-time.After(time.Second):
 		t.Fatal("gateway stream did not stop")
+	}
+}
+
+func TestAgentAuthorizationGRPCReturnsStepUpChallengeWithoutGatewaySession(t *testing.T) {
+	server, gatewayCert := newGatewayControlTestServer(t, "gw-1", "gateway.example.test")
+	_ = gatewayCert
+	store := server.pa.Store
+	now := time.Now()
+	store.SavePolicyRule(&models.PolicyRule{
+		ID:      "policy-step-up",
+		Name:    "Step-up for users",
+		Enabled: true,
+		Action:  models.DecisionStepUpRequired,
+		Conditions: models.RuleConditions{
+			AllowedRoles: []string{"user"},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyEnforceMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	store.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:        "assign-step-up",
+		PolicyID:  "policy-step-up",
+		TenantID:  transportTestTenantID,
+		Level:     "organization",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	store.SaveResource(&models.Resource{
+		ID:        "res-web",
+		TenantID:  transportTestTenantID,
+		GatewayID: "gw-1",
+		Name:      "Web App",
+		Type:      "web",
+		Host:      "web-app",
+		Port:      443,
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	deviceCertPEM, deviceCert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
+	enrollment := &models.DeviceEnrollment{
+		ID:              "enroll-1",
+		DeviceID:        "device-1",
+		Component:       "endpoint",
+		Status:          "approved",
+		CertPEM:         string(deviceCertPEM),
+		CertFingerprint: clientCertificateFingerprint(deviceCert),
+		EnrolledAt:      time.Now().Add(-time.Minute),
+		ExpiresAt:       time.Now().Add(time.Hour),
+	}
+	store.SaveDeviceEnrollment(enrollment)
+	accessToken := newDeviceCatalogAccessToken(t, server, store, "device-1", "user", clientCertificateFingerprint(deviceCert))
+	request, err := structpb.NewStruct(map[string]interface{}{
+		"access_token": accessToken,
+		"resource_id":  "res-web",
+		"protocol":     "https",
+		"port":         float64(443),
+	})
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	serviceCtx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: *deviceTLSState(deviceCert)}})
+	serviceCtx = context.WithValue(serviceCtx, deviceEnrollmentContextKey, enrollment)
+
+	response, err := (&agentAuthorizationGRPCService{server: server}).AuthorizeResource(serviceCtx, request)
+	if err != nil {
+		t.Fatalf("AuthorizeResource returned error: %v", err)
+	}
+	if got := structFieldString(response, "decision"); got != models.DecisionStepUpRequired {
+		t.Fatalf("decision = %q, want step_up_required response=%+v", got, response.AsMap())
+	}
+	if structFieldString(response, "session_token") != "" {
+		t.Fatalf("step-up response should not include gateway session material: %+v", response.AsMap())
+	}
+	if structFieldString(response, "step_up_url") == "" || structFieldString(response, "step_up_challenge_id") == "" {
+		t.Fatalf("step-up metadata missing: %+v", response.AsMap())
 	}
 }
 

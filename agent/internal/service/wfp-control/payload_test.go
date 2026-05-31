@@ -1,6 +1,9 @@
 package wfpcontrol
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestEncodeApplyRequestValidatesProxyAndRules(t *testing.T) {
 	payload, err := encodeApplyRequest(ApplyRequest{
@@ -42,5 +45,23 @@ func TestEncodeApplyRequestRequiresProxyPID(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("encodeApplyRequest returned nil error without proxy PID")
+	}
+}
+
+func TestDecodeDestinationPayloadIncludesProcessIDWhenPresent(t *testing.T) {
+	payload := make([]byte, 20)
+	binary.LittleEndian.PutUint32(payload[0:4], payloadMagic)
+	binary.LittleEndian.PutUint16(payload[4:6], payloadVersion)
+	binary.LittleEndian.PutUint32(payload[8:12], binary.BigEndian.Uint32([]byte{100, 64, 0, 5}))
+	binary.LittleEndian.PutUint16(payload[12:14], 443)
+	payload[14] = protocolTCP
+	binary.LittleEndian.PutUint32(payload[16:20], 4242)
+
+	destination, err := decodeDestinationPayload(payload)
+	if err != nil {
+		t.Fatalf("decodeDestinationPayload returned error: %v", err)
+	}
+	if destination.IP != "100.64.0.5" || destination.Port != 443 || destination.Protocol != "tcp" || destination.ProcessID != 4242 {
+		t.Fatalf("destination = %+v", destination)
 	}
 }

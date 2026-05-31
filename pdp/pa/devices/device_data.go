@@ -95,6 +95,7 @@ func (service *Service) AcceptHealthReport(certDeviceID string, report models.De
 	service.RecordHealth(&report)
 	service.publish(events.TopicHealthChanged, map[string]string{
 		"device_id": report.DeviceID,
+		"tenant_id": report.TenantID,
 		"reason":    "device_health_reported",
 		"score":     strconv.Itoa(report.OverallScore),
 	})
@@ -123,6 +124,7 @@ func (service *Service) AcceptDeviceDataReport(certDeviceID string, report model
 	service.RecordDeviceData(&report)
 	service.publish(events.TopicHealthChanged, map[string]string{
 		"device_id": report.DeviceID,
+		"tenant_id": report.TenantID,
 		"reason":    "device_data_reported",
 	})
 	return report, nil

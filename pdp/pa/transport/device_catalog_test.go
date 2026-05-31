@@ -45,14 +45,15 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		UpdatedAt:   time.Now(),
 	})
 	dataStore.SavePolicyRule(&models.PolicyRule{
-		ID:       "policy-device-data-1",
-		Name:     "Require managed endpoint device data",
-		Priority: 1,
-		Enabled:  true,
+		ID:      "policy-device-data-1",
+		Name:    "Require managed endpoint device data",
+		Enabled: true,
 		Conditions: models.RuleConditions{
-			AllowedRoles:        []string{"admin"},
-			RequiredChecks:      []string{"Firewall", "Disk Encryption"},
-			RequiredCheckStatus: "good",
+			AllowedRoles: []string{"admin"},
+			DevicePosture: models.DevicePosturePolicyConditions{
+				RequiredChecks: []string{"Firewall", "Disk Encryption"},
+				RequiredStatus: "good",
+			},
 		},
 		Action:    "allow",
 		CreatedAt: time.Now(),
@@ -63,7 +64,6 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		PolicyID:  "policy-device-data-1",
 		TenantID:  transportTestTenantID,
 		Level:     "organization",
-		Priority:  1,
 		Enabled:   true,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

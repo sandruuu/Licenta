@@ -13,19 +13,23 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// UserManager handles user registration, authentication, and MFA enrollment
+// UserManager handles user registration, authentication, and MFA enrollment.
 type UserManager struct {
-	store *store.Store
+	store     *store.Store
+	protector *SecretProtector
 }
 
-// NewUserManager creates a new UserManager
-func NewUserManager(s *store.Store) *UserManager {
-	return &UserManager{store: s}
+// NewUserManager creates a new UserManager.
+func NewUserManager(s *store.Store, protectors ...*SecretProtector) *UserManager {
+	var protector *SecretProtector
+	if len(protectors) > 0 {
+		protector = protectors[0]
+	}
+	return &UserManager{store: s, protector: protector}
 }
 
-// Register creates a new user with a hashed password
+// Register creates a new user with a hashed password.
 func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error) {
-	// Validate input
 	if strings.TrimSpace(req.Username) == "" {
 		return nil, fmt.Errorf("username is required")
 	}
@@ -36,32 +40,31 @@ func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error
 		return nil, fmt.Errorf("email is required")
 	}
 
-	// Check if username already exists
 	if _, exists := um.store.GetUserByUsername(req.Username); exists {
 		return nil, fmt.Errorf("username already exists")
 	}
 
-	// Hash the password with bcrypt
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
-	// Generate unique user ID
 	userID, err := util.GenerateID("usr")
 	if err != nil {
 		return nil, fmt.Errorf("generate user ID: %w", err)
 	}
 
+	now := time.Now()
 	user := &models.User{
-		ID:           userID,
-		Username:     req.Username,
-		Email:        req.Email,
-		PasswordHash: string(hashedPassword),
-		MFAMethods:   []string{},
-		Role:         "user",
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:              userID,
+		Username:        req.Username,
+		Email:           req.Email,
+		PasswordHash:    string(hashedPassword),
+		MFAMethods:      []string{},
+		Role:            "platform_admin",
+		LastTOTPCounter: -1,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	um.store.SaveUser(user)
@@ -69,129 +72,141 @@ func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error
 	return user, nil
 }
 
-// Authenticate validates the user's password (primary authentication factor)
+// Authenticate validates the user's password.
 func (um *UserManager) Authenticate(username, password string) (*models.User, error) {
 	user, exists := um.store.GetUserByUsername(username)
 	if !exists {
 		return nil, fmt.Errorf("invalid credentials")
 	}
-
 	if user.Disabled {
 		return nil, fmt.Errorf("account is disabled")
 	}
-
-	// Compare the provided password with the stored hash
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		return nil, fmt.Errorf("invalid credentials")
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
-	// Update last login time
 	user.LastLoginAt = time.Now()
 	um.store.SaveUser(user)
-
 	return user, nil
 }
 
-// EnrollMFA generates a new TOTP secret for the user and returns the enrollment data
+// EnrollMFA generates a TOTP secret for legacy callers. Browser step-up keeps
+// pending enrollment secrets in the step-up challenge instead.
 func (um *UserManager) EnrollMFA(userID, issuer string) (*models.MFAEnrollResponse, error) {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
 		return nil, fmt.Errorf("user not found")
 	}
 
-	// Generate new TOTP secret
-	secret, err := GenerateTOTPSecret()
+	secret, err := um.unprotectMFAValue(user.TOTPSecret)
 	if err != nil {
-		return nil, fmt.Errorf("generate TOTP secret: %w", err)
+		return nil, fmt.Errorf("read TOTP secret: %w", err)
+	}
+	if secret == "" || containsMethod(user.MFAMethods, "totp") {
+		secret, err = GenerateTOTPSecret()
+		if err != nil {
+			return nil, fmt.Errorf("generate TOTP secret: %w", err)
+		}
 	}
 
-	// Save the secret to the user (MFA is not yet enabled — needs verification)
-	user.TOTPSecret = secret
-	user.UpdatedAt = time.Now()
-	um.store.SaveUser(user)
+	existingSecret, _ := um.unprotectMFAValue(user.TOTPSecret)
+	if existingSecret != secret {
+		protectedSecret, err := um.protectMFAValue(secret)
+		if err != nil {
+			return nil, fmt.Errorf("protect TOTP secret: %w", err)
+		}
+		user.TOTPSecret = protectedSecret
+		user.UpdatedAt = time.Now()
+		um.store.SaveUser(user)
+	}
 
-	// Build the otpauth URI for QR code scanning
 	qrURI := BuildTOTPURI(secret, issuer, user.Username)
-
+	qrImage, _ := BuildTOTPQRCodeImage(qrURI)
 	log.Printf("[AUTH] MFA enrollment initiated for user: %s", user.Username)
-
 	return &models.MFAEnrollResponse{
-		Secret:    secret,
-		QRCodeURL: qrURI,
-		Message:   "Scan the QR code with your authenticator app, then verify with a code to complete enrollment",
+		Secret:      secret,
+		QRCodeURL:   qrURI,
+		QRCodeImage: qrImage,
+		Message:     "Scan the QR code with your authenticator app, then verify with a code to complete enrollment",
 	}, nil
 }
 
-// ActivateMFA verifies a TOTP code and enables MFA for the user
+// ActivateMFA verifies a pending TOTP code and enables TOTP for the user.
 func (um *UserManager) ActivateMFA(userID, code string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
 		return fmt.Errorf("user not found")
 	}
-
-	if user.TOTPSecret == "" {
-		return fmt.Errorf("MFA enrollment not initiated — call EnrollMFA first")
+	if strings.TrimSpace(user.TOTPSecret) == "" {
+		return fmt.Errorf("MFA enrollment not initiated")
 	}
-
-	// Validate the TOTP code against the stored secret
-	valid, err := ValidateTOTPCode(user.TOTPSecret, code)
+	secret, err := um.unprotectMFAValue(user.TOTPSecret)
 	if err != nil {
-		return fmt.Errorf("validate TOTP: %w", err)
+		return fmt.Errorf("read TOTP secret: %w", err)
 	}
-	if !valid {
-		return fmt.Errorf("invalid TOTP code")
-	}
-
-	// Enable MFA — add "totp" to methods if not already present
-	if !containsMethod(user.MFAMethods, "totp") {
-		user.MFAMethods = append(user.MFAMethods, "totp")
-	}
-	user.UpdatedAt = time.Now()
-	um.store.SaveUser(user)
-
-	log.Printf("[AUTH] MFA activated for user: %s", user.Username)
-	return nil
+	return um.activateTOTPForUser(user, secret, code)
 }
 
-// VerifyMFA validates a TOTP code for an MFA-enabled user
+// ActivateTOTPSecret verifies and stores a freshly generated TOTP secret.
+func (um *UserManager) ActivateTOTPSecret(userID, secret, code string) error {
+	user, exists := um.store.GetUser(userID)
+	if !exists {
+		return fmt.Errorf("user not found")
+	}
+	return um.activateTOTPForUser(user, secret, code)
+}
+
+// VerifyMFA validates a TOTP code for a user with TOTP configured.
 func (um *UserManager) VerifyMFA(userID, code string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
 		return fmt.Errorf("user not found")
 	}
-
-	if !user.MFAEnabled() || user.TOTPSecret == "" {
+	if !containsMethod(user.MFAMethods, "totp") || strings.TrimSpace(user.TOTPSecret) == "" {
 		return fmt.Errorf("MFA is not enabled for this user")
 	}
 
-	valid, err := ValidateTOTPCode(user.TOTPSecret, code)
+	secret, err := um.unprotectMFAValue(user.TOTPSecret)
+	if err != nil {
+		return fmt.Errorf("read TOTP secret: %w", err)
+	}
+	valid, counter, err := ValidateTOTPCodeWithCounter(secret, code, time.Now())
 	if err != nil {
 		return fmt.Errorf("validate TOTP: %w", err)
 	}
 	if !valid {
 		return fmt.Errorf("invalid TOTP code")
 	}
+	if counter <= user.LastTOTPCounter {
+		return fmt.Errorf("TOTP code has already been used")
+	}
+	user.LastTOTPCounter = counter
+	user.UpdatedAt = time.Now()
+	um.store.SaveUser(user)
 
 	log.Printf("[AUTH] MFA verified for user: %s", user.Username)
 	return nil
 }
 
-// GetUser returns a user by ID
+// GetUser returns a user by ID.
 func (um *UserManager) GetUser(id string) (*models.User, bool) {
 	return um.store.GetUser(id)
 }
 
-// GetUserByUsername returns a user by username
+// GetUserByUsername returns a user by username.
 func (um *UserManager) GetUserByUsername(username string) (*models.User, bool) {
 	return um.store.GetUserByUsername(username)
 }
 
-// ListUsers returns all users
+// ListUsers returns all users.
 func (um *UserManager) ListUsers() []*models.User {
 	return um.store.ListUsers()
 }
 
-// SetUserRole updates a user's role
+// SetUserRole updates a user's role.
 func (um *UserManager) SetUserRole(userID, role string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -205,7 +220,7 @@ func (um *UserManager) SetUserRole(userID, role string) error {
 
 func containsMethod(methods []string, m string) bool {
 	for _, v := range methods {
-		if v == m {
+		if strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(m)) {
 			return true
 		}
 	}
@@ -227,18 +242,61 @@ func (um *UserManager) AddMFAMethod(userID, method string) {
 	log.Printf("[AUTH] MFA method '%s' added for user %s", method, user.Username)
 }
 
-// FindOrCreateFederatedUser looks up a user by external subject + auth source.
-// If found, it updates the last login time and role (roles may change based on
-// group membership re-evaluation at each login). If not found, it provisions a
-// new user with no password (federated users authenticate via external IdP only).
-// The role parameter is determined by group-to-role mapping in MapGroupsToRole.
+func (um *UserManager) ProtectMFAValue(value string) (string, error) {
+	return um.protectMFAValue(value)
+}
+
+func (um *UserManager) UnprotectMFAValue(value string) (string, error) {
+	return um.unprotectMFAValue(value)
+}
+
+func (um *UserManager) activateTOTPForUser(user *models.User, secret, code string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("MFA enrollment not initiated")
+	}
+	valid, counter, err := ValidateTOTPCodeWithCounter(secret, code, time.Now())
+	if err != nil {
+		return fmt.Errorf("validate TOTP: %w", err)
+	}
+	if !valid {
+		return fmt.Errorf("invalid TOTP code")
+	}
+	protectedSecret, err := um.protectMFAValue(secret)
+	if err != nil {
+		return fmt.Errorf("protect TOTP secret: %w", err)
+	}
+	user.TOTPSecret = protectedSecret
+	if !containsMethod(user.MFAMethods, "totp") {
+		user.MFAMethods = append(user.MFAMethods, "totp")
+	}
+	user.LastTOTPCounter = counter
+	user.UpdatedAt = time.Now()
+	um.store.SaveUser(user)
+	log.Printf("[AUTH] MFA activated for user: %s", user.Username)
+	return nil
+}
+
+func (um *UserManager) protectMFAValue(value string) (string, error) {
+	if um == nil || um.protector == nil {
+		return strings.TrimSpace(value), nil
+	}
+	return um.protector.Protect(value)
+}
+
+func (um *UserManager) unprotectMFAValue(value string) (string, error) {
+	if um == nil || um.protector == nil {
+		return strings.TrimSpace(value), nil
+	}
+	return um.protector.Unprotect(value)
+}
+
+// FindOrCreateFederatedUser looks up a user by external subject and auth source.
 func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, username, email, role, tenantID string) (*models.User, error) {
-	// Normalize role — default to "user" if empty or invalid
 	if role == "" {
-		role = "user"
+		role = "platform_admin"
 	}
 
-	// Look up by externalSubject + authSource
 	user, exists := um.store.GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID)
 	if exists {
 		if user.TenantID == "" {
@@ -251,9 +309,8 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		if email != "" && user.Email != email {
 			user.Email = email
 		}
-		// Re-evaluate role at each login — group membership may have changed
 		if role != user.Role {
-			log.Printf("[AUTH] Federated user role changed: %s %s → %s (source=%s)", user.Username, user.Role, role, authSource)
+			log.Printf("[AUTH] Federated user role changed: %s %s -> %s (source=%s)", user.Username, user.Role, role, authSource)
 			user.Role = role
 		}
 		user.UpdatedAt = time.Now()
@@ -262,13 +319,10 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		return user, nil
 	}
 
-	// Also check by username to avoid conflicts
 	if existing, found := um.store.GetUserByUsername(username); found {
-		// Username exists but with different auth source — conflict
 		if existing.ExternalSubject != externalSubject || existing.AuthSource != authSource {
 			return nil, fmt.Errorf("username '%s' already exists with different auth source", username)
 		}
-		// Same user, update
 		existing.LastLoginAt = time.Now()
 		existing.UpdatedAt = time.Now()
 		if role != existing.Role {
@@ -278,7 +332,6 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		return existing, nil
 	}
 
-	// Auto-provision new federated user
 	userID, err := util.GenerateID("usr")
 	if err != nil {
 		return nil, fmt.Errorf("generate user ID: %w", err)
@@ -289,12 +342,13 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		ID:              userID,
 		Username:        username,
 		Email:           email,
-		PasswordHash:    "", // no password for federated users
+		PasswordHash:    "",
 		MFAMethods:      []string{},
 		Role:            role,
 		TenantID:        tenantID,
 		ExternalSubject: externalSubject,
 		AuthSource:      authSource,
+		LastTOTPCounter: -1,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 		LastLoginAt:     now,

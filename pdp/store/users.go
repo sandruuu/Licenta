@@ -14,15 +14,16 @@ import (
 // User operations
 // ─────────────────────────────────────────────
 
+const userSelectColumns = `id, username, email, password_hash, totp_secret, mfa_methods_json,
+		last_totp_counter, role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at`
+
 func (s *Store) GetUser(id string) (*models.User, bool) {
-	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE id = ?`, id)
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE id = ?`, id)
 	return s.scanUser(row)
 }
 
 func (s *Store) GetUserByUsername(username string) (*models.User, bool) {
-	row := s.db.QueryRow(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users WHERE username = ?`, username)
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE username = ?`, username)
 	return s.scanUser(row)
 }
 
@@ -32,7 +33,7 @@ func (s *Store) scanUser(row *sql.Row) (*models.User, bool) {
 	var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-		&mfaMethodsJSON, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
+		&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
 	if err != nil {
 		return nil, false
 	}
@@ -54,11 +55,11 @@ func (s *Store) SaveUser(user *models.User) {
 		methods = []string{}
 	}
 	_, err := s.db.Exec(`INSERT OR REPLACE INTO users
-		(id, username, email, password_hash, totp_secret, mfa_methods_json, role, disabled,
+		(id, username, email, password_hash, totp_secret, mfa_methods_json, last_totp_counter, role, disabled,
 		 tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		user.ID, user.Username, user.Email, user.PasswordHash, user.TOTPSecret,
-		toJSON(methods), user.Role, b2i(user.Disabled),
+		toJSON(methods), user.LastTOTPCounter, user.Role, b2i(user.Disabled),
 		user.TenantID, user.ExternalSubject, user.AuthSource,
 		fmtTime(user.CreatedAt), fmtTime(user.UpdatedAt), fmtTime(user.LastLoginAt))
 	if err != nil {
@@ -67,8 +68,7 @@ func (s *Store) SaveUser(user *models.User) {
 }
 
 func (s *Store) ListUsers() []*models.User {
-	rows, err := s.db.Query(`SELECT id, username, email, password_hash, totp_secret, mfa_methods_json,
-		role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at FROM users`)
+	rows, err := s.db.Query(`SELECT ` + userSelectColumns + ` FROM users`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list users: %v", err)
 		return nil
@@ -82,7 +82,7 @@ func (s *Store) ListUsers() []*models.User {
 		var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-			&mfaMethodsJSON, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
+			&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
 			continue
 		}
 

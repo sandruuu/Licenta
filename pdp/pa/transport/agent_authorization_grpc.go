@@ -112,6 +112,9 @@ func agentAuthorizeResponseToStruct(response agentAuthorizeResponse) (*structpb.
 	if response.GatewayEndpoint != "" {
 		payload["gateway_endpoint"] = response.GatewayEndpoint
 	}
+	if response.GatewayServerName != "" {
+		payload["gateway_server_name"] = response.GatewayServerName
+	}
 	if response.ResourceID != "" {
 		payload["resource_id"] = response.ResourceID
 	}
@@ -123,6 +126,25 @@ func agentAuthorizeResponseToStruct(response agentAuthorizeResponse) (*structpb.
 	}
 	if response.ExpiresAt != "" {
 		payload["expires_at"] = response.ExpiresAt
+	}
+	if response.StepUpChallengeID != "" {
+		payload["step_up_challenge_id"] = response.StepUpChallengeID
+	}
+	if response.StepUpURL != "" {
+		payload["step_up_url"] = response.StepUpURL
+	}
+	if len(response.StepUpMethods) > 0 {
+		methods := make([]interface{}, 0, len(response.StepUpMethods))
+		for _, method := range response.StepUpMethods {
+			methods = append(methods, method)
+		}
+		payload["step_up_methods"] = methods
+	}
+	if response.StepUpRequiredACR != "" {
+		payload["step_up_required_acr"] = response.StepUpRequiredACR
+	}
+	if response.StepUpExpiresAt != "" {
+		payload["step_up_expires_at"] = response.StepUpExpiresAt
 	}
 	return structpb.NewStruct(payload)
 }

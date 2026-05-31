@@ -113,3 +113,31 @@ func TestStoreRejectsExpiredAndRevokedSessions(t *testing.T) {
 		t.Fatal("Provision() accepted expired session")
 	}
 }
+
+func TestStoreListSessionsReturnsCopies(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	store := NewStoreWithClock(func() time.Time { return now })
+	if err := store.Provision(Session{
+		ID:           "sess-1",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-ssh",
+		InternalHost: "10.10.0.10",
+		InternalPort: 22,
+		Protocol:     "ssh",
+		ExpiresAt:    now.Add(time.Hour),
+		Constraints:  []string{"policy:one"},
+	}, "session-secret"); err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+
+	sessions := store.ListSessions()
+	if len(sessions) != 1 || sessions[0].ID != "sess-1" {
+		t.Fatalf("ListSessions() = %+v", sessions)
+	}
+	sessions[0].Constraints[0] = "mutated"
+	again := store.ListSessions()
+	if again[0].Constraints[0] != "policy:one" {
+		t.Fatalf("ListSessions() leaked mutable constraints: %+v", again[0].Constraints)
+	}
+}

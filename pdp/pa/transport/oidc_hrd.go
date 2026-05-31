@@ -13,30 +13,30 @@ import (
 // Home Realm Discovery (HRD) — Identity Provider Resolution
 // ──────────────────────────────────────────────────────────────────────
 
-// resolveIdentityProvider determines which tenant-level IdP should authenticate
-// the user. Priority: explicit idp_id, login_hint domain, explicit tenant_id,
-// then legacy gateway client_id only as tenant context.
+// resolveIdentityProvider determines which organization IdP should authenticate
+// the user. Priority: explicit idp_id, login_hint domain, explicit organization_id,
+// then legacy gateway client_id only as organization context.
 func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Tenant, error) {
 	gw, _ := s.pa.Store.GetGatewayByOIDCClientID(clientID)
-	queryTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	queryOrganizationID := strings.TrimSpace(r.URL.Query().Get("organization_id"))
 
 	// Step 1 — explicit IdP selection.
 	if idpID := r.URL.Query().Get("idp_id"); idpID != "" {
 		if idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(idpID); ok && idpCfg.Enabled {
-			if queryTenantID != "" && !strings.EqualFold(queryTenantID, idpCfg.TenantID) {
-				return nil, nil, fmt.Errorf("selected identity provider does not belong to tenant")
+			if queryOrganizationID != "" && !strings.EqualFold(queryOrganizationID, idpCfg.TenantID) {
+				return nil, nil, fmt.Errorf("selected identity provider does not belong to organization")
 			}
 			if gw != nil {
 				tenantID := resolveTenantFromGateway(gw)
 				if tenantID != "" && !strings.EqualFold(tenantID, idpCfg.TenantID) {
-					return nil, nil, fmt.Errorf("selected identity provider does not belong to gateway tenant")
+					return nil, nil, fmt.Errorf("selected identity provider does not belong to gateway organization")
 				}
 			}
 			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
 			if tenant == nil || !tenant.Enabled {
-				return nil, nil, fmt.Errorf("identity provider tenant not found or disabled")
+				return nil, nil, fmt.Errorf("identity provider organization not found or disabled")
 			}
-			log.Printf("[HRD] Direct IdP selection: idp=%s tenant=%s", idpCfg.Name, idpCfg.TenantID)
+			log.Printf("[HRD] Direct IdP selection: idp=%s organization=%s", idpCfg.Name, idpCfg.TenantID)
 			return idpCfg, tenant, nil
 		}
 		return nil, nil, fmt.Errorf("selected identity provider not found or disabled")
@@ -46,55 +46,55 @@ func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*mod
 	if loginHint := r.URL.Query().Get("login_hint"); loginHint != "" {
 		domain := extractDomainFromHint(loginHint)
 		if idpCfg, ok := s.pa.Store.FindIdentityProviderByDomain(domain); ok && idpCfg.Enabled {
-			if queryTenantID != "" && !strings.EqualFold(queryTenantID, idpCfg.TenantID) {
-				return nil, nil, fmt.Errorf("login_hint domain resolves to a different tenant")
+			if queryOrganizationID != "" && !strings.EqualFold(queryOrganizationID, idpCfg.TenantID) {
+				return nil, nil, fmt.Errorf("login_hint domain resolves to a different organization")
 			}
 			tenant, _ := s.pa.Store.GetTenant(idpCfg.TenantID)
 			if tenant == nil || !tenant.Enabled {
-				return nil, nil, fmt.Errorf("identity provider tenant not found or disabled")
+				return nil, nil, fmt.Errorf("identity provider organization not found or disabled")
 			}
-			log.Printf("[HRD] Domain-based discovery: domain=%s → idp=%s tenant=%s", domain, idpCfg.Name, idpCfg.TenantID)
+			log.Printf("[HRD] Domain-based discovery: domain=%s → idp=%s organization=%s", domain, idpCfg.Name, idpCfg.TenantID)
 			return idpCfg, tenant, nil
 		}
 		if tenant, ok := s.pa.Store.FindTenantByDomain(domain); ok {
-			if queryTenantID != "" && !strings.EqualFold(queryTenantID, tenant.ID) {
-				return nil, nil, fmt.Errorf("login_hint domain resolves to a different tenant")
+			if queryOrganizationID != "" && !strings.EqualFold(queryOrganizationID, tenant.ID) {
+				return nil, nil, fmt.Errorf("login_hint domain resolves to a different organization")
 			}
 			if !tenant.Enabled {
-				return nil, nil, fmt.Errorf("identity provider tenant not found or disabled")
+				return nil, nil, fmt.Errorf("identity provider organization not found or disabled")
 			}
 			if idpCfg, resolvedTenant, ok := s.defaultIdentityProviderForTenant(tenant.ID); ok {
-				log.Printf("[HRD] Tenant domain discovery: domain=%s -> tenant=%s -> idp=%s", domain, tenant.ID, idpCfg.Name)
+				log.Printf("[HRD] Organization domain discovery: domain=%s -> organization=%s -> idp=%s", domain, tenant.ID, idpCfg.Name)
 				return idpCfg, resolvedTenant, nil
 			}
-			return nil, nil, fmt.Errorf("tenant has no enabled default identity provider")
+			return nil, nil, fmt.Errorf("organization has no enabled default identity provider")
 		}
 		log.Printf("[HRD] No IdP found for domain=%s", domain)
 	}
 
-	// Step 3 — explicit tenant context from the native client.
-	if queryTenantID != "" {
-		if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(queryTenantID); ok {
-			log.Printf("[HRD] Tenant context: tenant=%s → idp=%s", queryTenantID, idpCfg.Name)
+	// Step 3 — explicit organization context from the native client.
+	if queryOrganizationID != "" {
+		if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(queryOrganizationID); ok {
+			log.Printf("[HRD] Organization context: organization=%s → idp=%s", queryOrganizationID, idpCfg.Name)
 			return idpCfg, tenant, nil
 		}
-		return nil, nil, fmt.Errorf("tenant has no enabled default identity provider")
+		return nil, nil, fmt.Errorf("organization has no enabled default identity provider")
 	}
 
-	// Step 4 — legacy gateway client_id as tenant context only.
+	// Step 4 — legacy gateway client_id as organization context only.
 	if gw != nil {
 		tenantID := resolveTenantFromGateway(gw)
 		if tenantID != "" {
 			if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(tenantID); ok {
-				log.Printf("[HRD] Gateway tenant context: gateway=%s → tenant=%s → idp=%s", gw.Name, tenantID, idpCfg.Name)
+				log.Printf("[HRD] Gateway organization context: gateway=%s → organization=%s → idp=%s", gw.Name, tenantID, idpCfg.Name)
 				return idpCfg, tenant, nil
 			}
 		}
 	}
 
-	// Step 5 — single-tenant deployment fallback.
+	// Step 5 — single-organization deployment fallback.
 	if idpCfg, tenant, ok := s.singleTenantIdentityProvider(); ok {
-		log.Printf("[HRD] Single-tenant fallback: tenant=%s → idp=%s", tenant.ID, idpCfg.Name)
+		log.Printf("[HRD] Single-organization fallback: organization=%s → idp=%s", tenant.ID, idpCfg.Name)
 		return idpCfg, tenant, nil
 	}
 

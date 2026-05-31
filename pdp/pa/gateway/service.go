@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pdp/models"
+	"pdp/pa/events"
 	"pdp/store"
 )
 
@@ -45,6 +46,10 @@ type CertificateSigner func(csrPEM []byte, validDays int, role string, profile C
 
 type CertificateRevoker func(serial, certPEM, subjectID string, expiresOn time.Time)
 
+type EventPublisher interface {
+	PublishCAEPEvent(eventType string, fields map[string]string)
+}
+
 type Config struct {
 	CertificateValidityDays int
 	EnrollmentTokenTTL      time.Duration
@@ -57,6 +62,7 @@ type Service struct {
 	enrollmentTokenTTL      time.Duration
 	signer                  CertificateSigner
 	revoker                 CertificateRevoker
+	publisher               EventPublisher
 	now                     func() time.Time
 }
 
@@ -72,6 +78,7 @@ type RenewalResult struct {
 
 type CreateGatewayRequest struct {
 	TenantID          string                   `json:"tenant_id"`
+	OrganizationID    string                   `json:"organization_id,omitempty"`
 	Name              string                   `json:"name"`
 	FQDN              string                   `json:"fqdn,omitempty"`
 	AssignedResources []string                 `json:"assigned_resources,omitempty"`
@@ -86,6 +93,7 @@ type CreateGatewayResult struct {
 
 type UpdateGatewayRequest struct {
 	TenantID          string                   `json:"tenant_id,omitempty"`
+	OrganizationID    string                   `json:"organization_id,omitempty"`
 	Name              string                   `json:"name,omitempty"`
 	FQDN              string                   `json:"fqdn,omitempty"`
 	AssignedResources []string                 `json:"assigned_resources,omitempty"`
@@ -101,7 +109,7 @@ type RegenerateTokenResult struct {
 
 type GatewayListItem struct {
 	ID                string                   `json:"id"`
-	TenantID          string                   `json:"tenant_id"`
+	TenantID          string                   `json:"organization_id"`
 	Name              string                   `json:"name"`
 	FQDN              string                   `json:"fqdn"`
 	Status            string                   `json:"status"`
@@ -149,6 +157,13 @@ func (s *Service) SetCertificateAuthority(signer CertificateSigner, revoker Cert
 	s.revoker = revoker
 }
 
+func (s *Service) SetEventPublisher(publisher EventPublisher) {
+	if s == nil {
+		return
+	}
+	s.publisher = publisher
+}
+
 func (s *Service) ListGatewaySummaries() ([]GatewayListItem, error) {
 	if err := s.readyStore(); err != nil {
 		return nil, err
@@ -175,7 +190,7 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	if name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidRequest)
 	}
-	tenantID, err := s.validateTenant(req.TenantID)
+	tenantID, err := s.validateTenant(firstNonEmpty(req.TenantID, req.OrganizationID))
 	if err != nil {
 		return nil, err
 	}
@@ -245,11 +260,12 @@ func (s *Service) UpdateGateway(id string, req UpdateGatewayRequest) (*models.Ga
 		gateway.FQDN = req.FQDN
 	}
 	targetTenantID := gateway.TenantID
-	if strings.TrimSpace(req.TenantID) != "" && !strings.EqualFold(req.TenantID, gateway.TenantID) {
+	requestedTenantID := firstNonEmpty(req.TenantID, req.OrganizationID)
+	if strings.TrimSpace(requestedTenantID) != "" && !strings.EqualFold(requestedTenantID, gateway.TenantID) {
 		if gateway.Status == "enrolled" {
-			return nil, fmt.Errorf("%w: enrolled gateways cannot be moved between tenants", ErrInvalidRequest)
+			return nil, fmt.Errorf("%w: enrolled gateways cannot be moved between organizations", ErrInvalidRequest)
 		}
-		tenantID, err := s.validateTenant(req.TenantID)
+		tenantID, err := s.validateTenant(requestedTenantID)
 		if err != nil {
 			return nil, err
 		}
@@ -296,6 +312,7 @@ func (s *Service) DeleteGateway(id string) (*models.Gateway, error) {
 	if !s.store.DeleteGateway(gateway.ID) {
 		return nil, fmt.Errorf("%w: delete gateway", ErrGatewayPersistence)
 	}
+	s.publishGatewayRevoked(gateway, "gateway_deleted")
 	return gateway, nil
 }
 
@@ -324,13 +341,32 @@ func (s *Service) RevokeGateway(id string) (*models.Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
+	revokedSerial := gateway.CertSerial
+	revokedCertPEM := gateway.CertPEM
 	gateway.Status = "revoked"
 	gateway.EnrollmentToken = ""
+	gateway.TokenExpiresAt = ""
 	gateway.UpdatedAt = s.clock()
-	s.store.SaveGateway(gateway)
 
-	if gateway.CertSerial != "" && s.revoker != nil {
-		s.revoker(gateway.CertSerial, gateway.CertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(s.certificateValidity()))
+	if revokedSerial != "" && s.revoker != nil {
+		s.revoker(revokedSerial, revokedCertPEM, gatewaySubjectID(gateway.ID), s.clock().Add(s.certificateValidity()))
 	}
+	gateway.CertPEM = ""
+	gateway.CertFingerprint = ""
+	gateway.CertSerial = ""
+	gateway.CertExpiresAt = ""
+	s.store.SaveGateway(gateway)
+	s.publishGatewayRevoked(gateway, "gateway_revoked")
 	return gateway, nil
+}
+
+func (s *Service) publishGatewayRevoked(gateway *models.Gateway, reason string) {
+	if s == nil || s.publisher == nil || gateway == nil {
+		return
+	}
+	s.publisher.PublishCAEPEvent(events.TopicGatewayRevoked, map[string]string{
+		"gateway_id": gateway.ID,
+		"tenant_id":  gateway.TenantID,
+		"reason":     reason,
+	})
 }

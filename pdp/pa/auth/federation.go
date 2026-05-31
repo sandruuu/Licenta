@@ -187,6 +187,9 @@ func (fp *FederationProvider) GenerateExternalAuthURL(fedCfg *models.FederationC
 		"code_challenge":        {codeChallenge},
 		"code_challenge_method": {"S256"},
 	}
+	if prompt := strings.TrimSpace(fedCfg.Prompt); prompt != "" {
+		params.Set("prompt", prompt)
+	}
 
 	return disc.AuthorizationEndpoint + "?" + params.Encode(), nil
 }

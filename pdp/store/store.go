@@ -76,6 +76,7 @@ func (s *Store) InitDB() error {
 	if err := s.createTables(); err != nil {
 		return fmt.Errorf("create tables: %w", err)
 	}
+	s.EnsureDefaultGlobalPoliciesForTenants()
 
 	log.Printf("[STORE] SQLite database initialized: %s", dbPath)
 	return nil

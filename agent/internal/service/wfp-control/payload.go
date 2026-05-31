@@ -112,7 +112,11 @@ func decodeDestinationPayload(payload []byte) (Destination, error) {
 	if protocol == "" {
 		return Destination{}, fmt.Errorf("unsupported WFP destination protocol %d", payload[14])
 	}
-	return Destination{IP: ip.String(), Port: port, Protocol: protocol}, nil
+	destination := Destination{IP: ip.String(), Port: port, Protocol: protocol}
+	if len(payload) >= 20 {
+		destination.ProcessID = binary.LittleEndian.Uint32(payload[16:20])
+	}
+	return destination, nil
 }
 
 func protocolNumber(value string) (uint8, error) {

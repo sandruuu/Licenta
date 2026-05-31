@@ -3,18 +3,25 @@ import {
   CheckCircle2,
   FileText,
   Layers3,
+  LockKeyhole,
+  Network,
   Server,
-  SlidersHorizontal,
   Users,
   XCircle,
   ShieldAlert,
+  MapPinned,
   LaptopMinimalCheck,
+  UserPlus,
 } from 'lucide-react';
 
 export const sectionIcons = {
   details: FileText,
-  action: SlidersHorizontal,
-  device: LaptopMinimalCheck,
+  newuser: UserPlus,
+  stepup: LockKeyhole,
+  riskbasedauth: ShieldAlert,
+  location: MapPinned,
+  devicehealth: LaptopMinimalCheck,
+  authorizednetworks: Network,
 };
 
 export const layerIcons = {
@@ -26,6 +33,6 @@ export const layerIcons = {
 
 export const actionIcons = {
   allow: CheckCircle2,
-  mfa_required: ShieldAlert,
+  step_up_required: ShieldAlert,
   deny: XCircle,
 };

@@ -12,6 +12,7 @@ import (
 	"pdp/config"
 	"pdp/models"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
@@ -61,7 +62,7 @@ type WebAuthnProvider struct {
 	wa *webauthn.WebAuthn
 
 	mu       sync.Mutex
-	sessions map[string]*challengeSession // key = userID + ceremony type
+	sessions map[string]*challengeSession // key = userID + ceremony + step-up challenge
 
 	challengeTTL    time.Duration
 	cleanupInterval time.Duration
@@ -93,6 +94,9 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 		RPID:          cfg.WebAuthnRPID,
 		RPDisplayName: rpName,
 		RPOrigins:     origins,
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			UserVerification: protocol.VerificationRequired,
+		},
 	})
 	if err != nil {
 		log.Printf("[MFA] WebAuthn init failed: %v", err)
@@ -119,15 +123,17 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 
 // BeginRegistration starts the WebAuthn credential registration ceremony.
 // Returns the options JSON to send to the browser (navigator.credentials.create).
-func (p *WebAuthnProvider) BeginRegistration(user *models.User, existingCreds []webauthn.Credential) (json.RawMessage, error) {
+func (p *WebAuthnProvider) BeginRegistration(user *models.User, existingCreds []webauthn.Credential, contextID string) (json.RawMessage, error) {
 	wUser := &WebAuthnUser{User: user, Credentials: existingCreds}
 
-	creation, session, err := p.wa.BeginRegistration(wUser)
+	creation, session, err := p.wa.BeginRegistration(wUser, webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
+		UserVerification: protocol.VerificationRequired,
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("begin registration: %w", err)
 	}
 
-	p.storeSession(user.ID, "register", session)
+	p.storeSession(user.ID, "register", contextID, session)
 
 	opts, err := json.Marshal(creation)
 	if err != nil {
@@ -141,12 +147,12 @@ func (p *WebAuthnProvider) BeginRegistration(user *models.User, existingCreds []
 // FinishRegistration completes the registration ceremony.
 // The request must be the raw HTTP request forwarding the browser's response.
 // Returns the new Credential to be persisted.
-func (p *WebAuthnProvider) FinishRegistration(user *models.User, existingCreds []webauthn.Credential, r *http.Request) (*webauthn.Credential, error) {
-	session, ok := p.loadSession(user.ID, "register")
+func (p *WebAuthnProvider) FinishRegistration(user *models.User, existingCreds []webauthn.Credential, contextID string, r *http.Request) (*webauthn.Credential, error) {
+	session, ok := p.loadSession(user.ID, "register", contextID)
 	if !ok {
 		return nil, fmt.Errorf("no pending registration session")
 	}
-	p.deleteSession(user.ID, "register")
+	p.deleteSession(user.ID, "register", contextID)
 
 	wUser := &WebAuthnUser{User: user, Credentials: existingCreds}
 
@@ -165,19 +171,19 @@ func (p *WebAuthnProvider) FinishRegistration(user *models.User, existingCreds [
 
 // BeginAuthentication starts the WebAuthn authentication ceremony.
 // Returns the assertion options JSON to send to the browser (navigator.credentials.get).
-func (p *WebAuthnProvider) BeginAuthentication(user *models.User, creds []webauthn.Credential) (json.RawMessage, error) {
+func (p *WebAuthnProvider) BeginAuthentication(user *models.User, creds []webauthn.Credential, contextID string) (json.RawMessage, error) {
 	if len(creds) == 0 {
 		return nil, fmt.Errorf("user has no WebAuthn credentials")
 	}
 
 	wUser := &WebAuthnUser{User: user, Credentials: creds}
 
-	assertion, session, err := p.wa.BeginLogin(wUser)
+	assertion, session, err := p.wa.BeginLogin(wUser, webauthn.WithUserVerification(protocol.VerificationRequired))
 	if err != nil {
 		return nil, fmt.Errorf("begin login: %w", err)
 	}
 
-	p.storeSession(user.ID, "authenticate", session)
+	p.storeSession(user.ID, "authenticate", contextID, session)
 
 	opts, err := json.Marshal(assertion)
 	if err != nil {
@@ -190,12 +196,12 @@ func (p *WebAuthnProvider) BeginAuthentication(user *models.User, creds []webaut
 
 // FinishAuthentication completes the authentication ceremony.
 // Returns the matched Credential (with updated sign count).
-func (p *WebAuthnProvider) FinishAuthentication(user *models.User, creds []webauthn.Credential, r *http.Request) (*webauthn.Credential, error) {
-	session, ok := p.loadSession(user.ID, "authenticate")
+func (p *WebAuthnProvider) FinishAuthentication(user *models.User, creds []webauthn.Credential, contextID string, r *http.Request) (*webauthn.Credential, error) {
+	session, ok := p.loadSession(user.ID, "authenticate", contextID)
 	if !ok {
 		return nil, fmt.Errorf("no pending authentication session")
 	}
-	p.deleteSession(user.ID, "authenticate")
+	p.deleteSession(user.ID, "authenticate", contextID)
 
 	wUser := &WebAuthnUser{User: user, Credentials: creds}
 
@@ -212,33 +218,37 @@ func (p *WebAuthnProvider) FinishAuthentication(user *models.User, creds []webau
 // Session Management
 // ─────────────────────────────────────────────
 
-func sessionKey(userID, ceremony string) string {
-	return userID + ":" + ceremony
+func sessionKey(userID, ceremony, contextID string) string {
+	return userID + ":" + ceremony + ":" + strings.TrimSpace(contextID)
 }
 
-func (p *WebAuthnProvider) storeSession(userID, ceremony string, data *webauthn.SessionData) {
+func (p *WebAuthnProvider) storeSession(userID, ceremony, contextID string, data *webauthn.SessionData) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.sessions[sessionKey(userID, ceremony)] = &challengeSession{
+	p.sessions[sessionKey(userID, ceremony, contextID)] = &challengeSession{
 		Data:      data,
 		CreatedAt: time.Now(),
 	}
 }
 
-func (p *WebAuthnProvider) loadSession(userID, ceremony string) (*webauthn.SessionData, bool) {
+func (p *WebAuthnProvider) loadSession(userID, ceremony, contextID string) (*webauthn.SessionData, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	s, ok := p.sessions[sessionKey(userID, ceremony)]
-	if !ok || time.Since(s.CreatedAt) > p.challengeTTL {
+	s, ok := p.sessions[sessionKey(userID, ceremony, contextID)]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(s.CreatedAt) > p.challengeTTL {
+		delete(p.sessions, sessionKey(userID, ceremony, contextID))
 		return nil, false
 	}
 	return s.Data, true
 }
 
-func (p *WebAuthnProvider) deleteSession(userID, ceremony string) {
+func (p *WebAuthnProvider) deleteSession(userID, ceremony, contextID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.sessions, sessionKey(userID, ceremony))
+	delete(p.sessions, sessionKey(userID, ceremony, contextID))
 }
 
 func (p *WebAuthnProvider) cleanupLoop() {

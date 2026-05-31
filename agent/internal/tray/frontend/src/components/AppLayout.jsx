@@ -7,8 +7,9 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  BrowserOpenURL,
   WindowMinimise,
 } from '../../wailsjs/runtime/runtime';
 import {
@@ -89,9 +90,35 @@ function EnrolledScreen({
 }) {
   const userSession = dashboard?.user_session || {};
   const displayError = loginError || userSession.last_error || error;
+  const stepUpURL = userSession.step_up_url || '';
+  const stepUpMessage = stepUpURL ? (userSession.message || 'Additional verification is required.') : '';
+  const openedStepUpURLRef = useRef('');
+
+  useEffect(() => {
+    if (!stepUpURL) {
+      openedStepUpURLRef.current = '';
+      return;
+    }
+    if (openedStepUpURLRef.current === stepUpURL) {
+      return;
+    }
+    openedStepUpURLRef.current = stepUpURL;
+    if (stepUpURL.startsWith('https://') && window?.runtime?.BrowserOpenURL) {
+      BrowserOpenURL(stepUpURL);
+    }
+  }, [stepUpURL]);
 
   return (
     <main className="h-full min-w-0 overflow-hidden bg-[#f9faf9] text-[var(--text-primary)]">
+      {stepUpMessage ? (
+        <div className="ml-[76px] px-5 pt-4">
+          <div className="flex gap-2 rounded-md border border-[color-mix(in_srgb,var(--accent)_28%,transparent)] bg-[var(--accent-muted)] px-3 py-2 text-sm font-semibold text-[var(--accent)]">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span className="min-w-0 break-words leading-5">{stepUpMessage}</span>
+          </div>
+        </div>
+      ) : null}
+
       {displayError ? (
         <div className="ml-[76px] px-5 pt-4">
           <div className="flex gap-2 rounded-md border border-[color-mix(in_srgb,var(--danger)_28%,transparent)] bg-[var(--danger-muted)] px-3 py-2 text-sm font-semibold text-[var(--danger)]">
@@ -169,12 +196,13 @@ function EnrolledSignInScreen({
   const state = String(userSession.state || 'SIGNED_OUT').toUpperCase();
   const authenticating = state === 'AUTHENTICATING' || loginLoading;
   const displayError = loginError || userSession.last_error || error;
+  const message = userSession.message || 'Sign in required to access protected resources.';
 
   return (
     <section className="grid h-full place-items-center bg-[#f9faf9] px-8 py-8 text-[var(--text-primary)]">
       <div className="flex w-full max-w-[340px] flex-col items-center text-center">
         <h1 className="text-xl font-semibold leading-tight text-[var(--text-primary)]">Device enrolled</h1>
-        <p className="mt-3 text-base font-medium leading-6 text-[var(--text-primary)]">Authenticate</p>
+        <p className="mt-3 text-base font-medium leading-6 text-[var(--text-primary)]">{message}</p>
 
         <button
           type="button"

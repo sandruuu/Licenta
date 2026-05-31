@@ -38,14 +38,16 @@ type UserSessionInfo struct {
 	Message     string    `json:"message,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`
+	StepUpURL   string    `json:"step_up_url,omitempty"`
 }
 
 type CatalogInfo struct {
-	Version     string            `json:"version,omitempty"`
-	Resources   []CatalogResource `json:"resources,omitempty"`
-	TTLSeconds  int               `json:"ttl_seconds,omitempty"`
-	PolicyEpoch string            `json:"policy_epoch,omitempty"`
-	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
+	Version          string            `json:"version,omitempty"`
+	Resources        []CatalogResource `json:"resources,omitempty"`
+	TTLSeconds       int               `json:"ttl_seconds,omitempty"`
+	PolicyEpoch      string            `json:"policy_epoch,omitempty"`
+	DeviceDataPolicy DeviceDataPolicy  `json:"device_data_policy,omitempty"`
+	UpdatedAt        time.Time         `json:"updated_at,omitempty"`
 }
 
 type CatalogResource struct {
@@ -55,4 +57,9 @@ type CatalogResource struct {
 	Protocol    string `json:"protocol,omitempty"`
 	Port        int    `json:"port,omitempty"`
 	AccessMode  string `json:"access_mode,omitempty"`
+}
+
+type DeviceDataPolicy struct {
+	RequiredChecks      []string `json:"required_checks,omitempty"`
+	RequiredCheckStatus string   `json:"required_check_status,omitempty"`
 }

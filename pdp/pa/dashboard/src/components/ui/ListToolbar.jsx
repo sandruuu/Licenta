@@ -16,7 +16,7 @@ export default function ListToolbar({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder={placeholder}
-          className="h-11 w-full rounded-md border border-border bg-surface-secondary pl-10 pr-4 text-sm font-semibold text-text-primary placeholder:text-text-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-muted"
+          className="h-11 w-full rounded-md border border-border bg-surface pl-10 pr-4 text-sm font-bold text-text-primary shadow-sm placeholder:text-text-muted transition-colors hover:border-text-muted focus:border-accent focus:outline-none focus:ring-[3px] focus:ring-accent-muted"
         />
       </div>
       {(summary || children) && (
@@ -38,7 +38,7 @@ export function ListToolbarSelect({ value, onChange, children, className = '' })
     <SelectDropdown
       value={value}
       onChange={(event) => onChange(event.target.value)}
-      className={`min-w-[176px] ${className}`}
+      className={`w-full sm:w-[176px] ${className}`}
       buttonClassName="h-11 rounded-md px-4 text-sm"
     >
       {children}

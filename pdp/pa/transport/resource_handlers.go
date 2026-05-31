@@ -50,12 +50,22 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 			writeResourceAdminError(w, err)
 			return
 		}
+		resources = filterResourcesByOrganization(resources, s.allowedOrganizationIDs(r))
 		writeJSON(w, http.StatusOK, resources)
 
 	case http.MethodPost:
-		var res models.Resource
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&res); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		var res models.Resource
+		if err := json.Unmarshal(body, &res); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+			return
+		}
+		applyOrganizationAliasToResource(body, &res)
+		if !s.requireOrganizationAccess(w, r, res.TenantID) {
 			return
 		}
 		created, err := s.pa.Resources.CreateResource(res)
@@ -87,14 +97,33 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 			writeResourceAdminError(w, err)
 			return
 		}
+		if !s.requireOrganizationAccess(w, r, res.TenantID) {
+			return
+		}
 		writeJSON(w, http.StatusOK, res)
 
 	case http.MethodPut:
+		existing, err := s.pa.Resources.GetResource(id)
+		if err != nil {
+			writeResourceAdminError(w, err)
+			return
+		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			return
+		}
 		// Decode into a map to detect which fields were actually sent (PATCH semantics)
 		var fields map[string]json.RawMessage
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&fields); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
+		}
+		applyOrganizationAliasToFields(fields)
+		if raw, ok := fields["tenant_id"]; ok {
+			var targetOrganizationID string
+			_ = json.Unmarshal(raw, &targetOrganizationID)
+			if strings.TrimSpace(targetOrganizationID) != "" && !s.requireOrganizationAccess(w, r, targetOrganizationID) {
+				return
+			}
 		}
 		updated, err := s.pa.Resources.UpdateResource(id, fields)
 		if err != nil {
@@ -105,6 +134,14 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusOK, updated)
 
 	case http.MethodDelete:
+		existing, err := s.pa.Resources.GetResource(id)
+		if err != nil {
+			writeResourceAdminError(w, err)
+			return
+		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			return
+		}
 		if err := s.pa.Resources.DeleteResource(id); err != nil {
 			writeResourceAdminError(w, err)
 			return
@@ -123,7 +160,7 @@ func (s *Server) handleAdminDeviceData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reports := s.pa.Store.ListDeviceData()
+	reports := filterDeviceDataByOrganization(s.pa.Store.ListDeviceData(), s.allowedOrganizationIDs(r))
 	if reports == nil {
 		reports = []*models.DeviceDataReport{}
 	}
@@ -151,6 +188,9 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
 		return
 	}
+	if !s.requireOrganizationAccess(w, r, report.TenantID) {
+		return
+	}
 
 	writeJSON(w, http.StatusOK, report)
 }
@@ -165,10 +205,11 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	allowed := s.allowedOrganizationIDs(r)
 	users := s.pa.Store.ListUsers()
-	sessions := s.pa.Store.ListSessions()
-	resources := s.pa.Store.ListResources()
-	audit := s.pa.Store.GetAuditLog(50)
+	sessions := filterSessionsByOrganization(s.pa.Store.ListSessions(), allowed)
+	resources := filterResourcesByOrganization(s.pa.Store.ListResources(), allowed)
+	audit := filterAuditByOrganization(s.pa.Store.GetAuditLog(50), allowed)
 
 	activeSessions := 0
 	for _, sess := range sessions {
@@ -186,7 +227,7 @@ func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 
 	deviceDataCount := 0
 	healthyDevices := 0
-	allDeviceData := s.pa.Store.ListDeviceData()
+	allDeviceData := filterDeviceDataByOrganization(s.pa.Store.ListDeviceData(), allowed)
 	for _, report := range allDeviceData {
 		deviceDataCount++
 		if deviceDataIsHealthy(report) {
@@ -219,6 +260,28 @@ func deviceDataIsHealthy(report *models.DeviceDataReport) bool {
 		}
 	}
 	return true
+}
+
+func applyOrganizationAliasToResource(body []byte, resource *models.Resource) {
+	if resource == nil || len(body) == 0 {
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return
+	}
+	if value, ok := raw["organization_id"]; ok && strings.TrimSpace(resource.TenantID) == "" {
+		_ = json.Unmarshal(value, &resource.TenantID)
+	}
+}
+
+func applyOrganizationAliasToFields(fields map[string]json.RawMessage) {
+	if fields == nil {
+		return
+	}
+	if value, ok := fields["organization_id"]; ok {
+		fields["tenant_id"] = value
+	}
 }
 
 // ─────────────────────────────────────────────

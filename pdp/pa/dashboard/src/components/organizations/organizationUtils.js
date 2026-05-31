@@ -20,6 +20,10 @@ export function organizationDomain(organization) {
 
 export function gatewayFQDN(name, organization) {
   const label = gatewayLabelFromName(name);
+  return gatewayFQDNFromLabel(label, organization);
+}
+
+export function gatewayFQDNFromLabel(label, organization) {
   const domain = organizationDomain(organization);
   return label && domain ? `${label}.${domain}` : '';
 }

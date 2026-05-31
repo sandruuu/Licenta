@@ -30,7 +30,6 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 		AllowedRoles: []string{
 			"admin",
 		},
-		RequireMFA: true,
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
@@ -47,9 +46,6 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 	if len(resource.AllowedRoles) != 0 {
 		t.Fatalf("resource creation should not persist allowed_roles: %+v", resource.AllowedRoles)
 	}
-	if resource.RequireMFA {
-		t.Fatalf("resource creation should not persist require_mfa")
-	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "created" || publisher.events[0].fields["resource_id"] != resource.ID {
 		t.Fatalf("resource created event mismatch: %+v", publisher.events)
 	}
@@ -59,9 +55,6 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 	}
 	if len(saved.AllowedRoles) != 0 {
 		t.Fatalf("saved resource should not contain allowed_roles: %+v", saved.AllowedRoles)
-	}
-	if saved.RequireMFA {
-		t.Fatalf("saved resource should not contain require_mfa")
 	}
 }
 
@@ -83,6 +76,39 @@ func TestServiceCreateResourceValidatesRequest(t *testing.T) {
 	_, err = service.CreateResource(models.Resource{Name: "No Scope", Type: "ssh"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("missing scope error = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestServiceCreateResourceRequiresHTTPSForWebResources(t *testing.T) {
+	dataStore := newResourceTestStore(t)
+	seedResourceScope(dataStore)
+	service := NewService(dataStore)
+
+	_, err := service.CreateResource(models.Resource{
+		TenantID:    testTenantID,
+		GatewayID:   testGatewayID,
+		Name:        "Portal",
+		Type:        "web",
+		Host:        "web-app",
+		ExternalURL: "http://web-app.trustcloud.test",
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("http web resource error = %v, want ErrInvalidRequest", err)
+	}
+
+	resource, err := service.CreateResource(models.Resource{
+		TenantID:    testTenantID,
+		GatewayID:   testGatewayID,
+		Name:        "Portal",
+		Type:        "web",
+		Host:        "web-app",
+		ExternalURL: "https://web-app.trustcloud.test",
+	})
+	if err != nil {
+		t.Fatalf("CreateResource returned error: %v", err)
+	}
+	if resource.Port != 443 {
+		t.Fatalf("default web resource port = %d, want 443", resource.Port)
 	}
 }
 
@@ -127,7 +153,6 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 		"tags":          json.RawMessage(`["prod","ssh"]`),
 		"metadata":      json.RawMessage(`{"owner":"ops"}`),
 		"allowed_roles": json.RawMessage(`["admin"]`),
-		"require_mfa":   json.RawMessage(`true`),
 	}
 	updated, err := service.UpdateResource("res-1", fields)
 	if err != nil {
@@ -136,7 +161,7 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	if updated.Name != "New" || updated.Port != 2222 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" {
 		t.Fatalf("resource fields not patched correctly: %+v", updated)
 	}
-	if len(updated.AllowedRoles) != 0 || updated.RequireMFA {
+	if len(updated.AllowedRoles) != 0 {
 		t.Fatalf("legacy access fields should be ignored: %+v", updated)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "updated" {

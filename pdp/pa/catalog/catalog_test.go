@@ -29,7 +29,6 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:        "policy-allow",
 		Name:      "Allow catalog",
-		Priority:  1,
 		Enabled:   true,
 		Action:    "allow",
 		CreatedAt: now,
@@ -41,7 +40,6 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 		TenantID:   "tenant-1",
 		Level:      "resource",
 		ResourceID: "res-1",
-		Priority:   1,
 		Enabled:    true,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -79,16 +77,16 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 		dataStore.SaveResource(resource)
 	}
 	for _, rule := range []*models.PolicyRule{
-		{ID: "policy-users", Name: "Users", Priority: 10, Enabled: true, Action: "allow", CreatedAt: now, UpdatedAt: now},
-		{ID: "policy-all", Name: "All", Priority: 20, Enabled: true, Action: "mfa_required", CreatedAt: now, UpdatedAt: now},
-		{ID: "policy-deny", Name: "Deny", Priority: 1, Enabled: true, Action: "deny", CreatedAt: now, UpdatedAt: now},
+		{ID: "policy-users", Name: "Users", Enabled: true, Action: "allow", CreatedAt: now, UpdatedAt: now},
+		{ID: "policy-all", Name: "All", Enabled: true, Action: "step_up_required", CreatedAt: now, UpdatedAt: now},
+		{ID: "policy-deny", Name: "Deny", Enabled: true, Action: "deny", CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SavePolicyRule(rule)
 	}
 	for _, assignment := range []*models.PolicyAssignment{
-		{ID: "assign-users", PolicyID: "policy-users", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "TrustCloud-Users", Priority: 10, Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "assign-all", PolicyID: "policy-all", TenantID: "tenant-1", Level: "resource", ResourceID: "res-all", Priority: 20, Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "assign-deny", PolicyID: "policy-deny", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "TrustCloud-Users", Priority: 1, Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-users", PolicyID: "policy-users", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-all", PolicyID: "policy-all", TenantID: "tenant-1", Level: "resource", ResourceID: "res-all", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-deny", PolicyID: "policy-deny", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SavePolicyAssignment(assignment)
 	}

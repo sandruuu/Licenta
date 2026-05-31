@@ -76,6 +76,9 @@ func CalculateRiskScore(ctx models.RiskContext, cfgs ...config.RiskConfig) int {
 	if ctx.IsNewLocation {
 		score += cfg.NewLocationPoints
 	}
+	if ctx.IsUserBaselineAnomaly {
+		score += cfg.UserBaselineAnomalyPoints
+	}
 
 	protocol := strings.ToLower(strings.TrimSpace(ctx.Protocol))
 	if points, ok := cfg.ProtocolPoints[protocol]; ok {
@@ -103,8 +106,8 @@ func CalculateRiskScore(ctx models.RiskContext, cfgs ...config.RiskConfig) int {
 		score = cfg.MaxScore
 	}
 
-	log.Printf("[RISK] Score calculated: %d (device_health=%v, failed_attempts=%d, business_hours=%v, protocol=%s, geo_velocity=%.0f km/h, impossible=%v, anomaly_alerts=%d)",
-		score, ctx.DeviceHealth != nil, ctx.FailedAttempts, isBusinessHours, ctx.Protocol, ctx.GeoVelocity, ctx.IsImpossibleTravel, len(ctx.AnomalyAlerts))
+	log.Printf("[RISK] Score calculated: %d (device_health=%v, failed_attempts=%d, business_hours=%v, protocol=%s, geo_velocity=%.0f km/h, impossible=%v, baseline_anomaly=%v, anomaly_alerts=%d)",
+		score, ctx.DeviceHealth != nil, ctx.FailedAttempts, isBusinessHours, ctx.Protocol, ctx.GeoVelocity, ctx.IsImpossibleTravel, ctx.IsUserBaselineAnomaly, len(ctx.AnomalyAlerts))
 
 	return score
 }

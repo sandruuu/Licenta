@@ -5,6 +5,7 @@ import OrganizationFormModal from '../components/organizations/OrganizationFormM
 import OrganizationTable from '../components/organizations/OrganizationTable';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import useOrganizationDirectory from '../components/organizations/useOrganizationDirectory';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ListToolbar from '../components/ui/ListToolbar';
 import PageHeader from '../components/ui/PageHeader';
 import Pagination from '../components/ui/Pagination';
@@ -15,6 +16,9 @@ export default function Organizations() {
   const organizationDirectory = useOrganizationDirectory();
   const gatewayCreate = useGatewayCreate(organizationDirectory.load);
   const [query, setQuery] = useState('');
+  const [deleteOrganizationTarget, setDeleteOrganizationTarget] = useState(null);
+  const [revokeOrganizationTarget, setRevokeOrganizationTarget] = useState(null);
+  const [reactivateOrganizationTarget, setReactivateOrganizationTarget] = useState(null);
 
   const openOrganization = (organization) => {
     if (organization?.id) navigate(`/dashboard/organizations/${encodeURIComponent(organization.id)}`);
@@ -41,6 +45,21 @@ export default function Organizations() {
     organizationPagination.resetPage();
   };
 
+  const confirmDeleteOrganization = async () => {
+    await organizationDirectory.handleDelete(deleteOrganizationTarget);
+    setDeleteOrganizationTarget(null);
+  };
+
+  const confirmRevokeOrganization = async () => {
+    await organizationDirectory.handleRevoke(revokeOrganizationTarget);
+    setRevokeOrganizationTarget(null);
+  };
+
+  const confirmReactivateOrganization = async () => {
+    await organizationDirectory.handleReactivate(reactivateOrganizationTarget);
+    setReactivateOrganizationTarget(null);
+  };
+
   return (
     <div className="pb-8">
       <PageHeader
@@ -63,7 +82,9 @@ export default function Organizations() {
         onCreateGateway={gatewayCreate.openGatewayCreate}
         onOpen={openOrganization}
         onEdit={organizationDirectory.openEdit}
-        onDelete={organizationDirectory.handleDelete}
+        onRevoke={setRevokeOrganizationTarget}
+        onReactivate={setReactivateOrganizationTarget}
+        onDelete={setDeleteOrganizationTarget}
         emptyTitle={hasFilters ? 'No organizations match filters' : 'No organizations yet'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find organizations.' : 'Create the first organization to start managing gateways and resources.'}
       />
@@ -83,6 +104,51 @@ export default function Organizations() {
         saving={organizationDirectory.saving}
         onClose={organizationDirectory.closeModal}
         onSave={organizationDirectory.handleSave}
+      />
+
+      <ConfirmDialog
+        open={!!revokeOrganizationTarget}
+        onClose={() => setRevokeOrganizationTarget(null)}
+        onConfirm={confirmRevokeOrganization}
+        title="Revoke organization"
+        message={
+          revokeOrganizationTarget
+            ? `Revoke "${revokeOrganizationTarget.name}"? New access through this organization will be disabled, while the organization record remains available for review.`
+            : ''
+        }
+        confirmLabel="Revoke organization"
+        loadingLabel="Revoking..."
+        loading={organizationDirectory.revoking}
+      />
+
+      <ConfirmDialog
+        open={!!reactivateOrganizationTarget}
+        onClose={() => setReactivateOrganizationTarget(null)}
+        onConfirm={confirmReactivateOrganization}
+        title="Reactivate organization"
+        message={
+          reactivateOrganizationTarget
+            ? `Reactivate "${reactivateOrganizationTarget.name}"? Access policies and resources under this organization can become available again.`
+            : ''
+        }
+        confirmLabel="Reactivate organization"
+        confirmVariant="primary"
+        loadingLabel="Reactivating..."
+        loading={organizationDirectory.reactivating}
+      />
+
+      <ConfirmDialog
+        open={!!deleteOrganizationTarget}
+        onClose={() => setDeleteOrganizationTarget(null)}
+        onConfirm={confirmDeleteOrganization}
+        title="Delete organization"
+        message={
+          deleteOrganizationTarget
+            ? `Delete "${deleteOrganizationTarget.name}"? All associated gateways and resources will be orphaned.`
+            : ''
+        }
+        confirmLabel="Delete organization"
+        loading={organizationDirectory.deleting}
       />
 
       {gatewayCreate.open ? (

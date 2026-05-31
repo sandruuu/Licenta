@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createGateway as createGatewayRequest } from '../../api';
-import { gatewayFQDN, gatewayLabelFromName, organizationDomain } from './organizationUtils';
+import { gatewayFQDNFromLabel, gatewayLabelFromName, organizationDomain } from './organizationUtils';
 
 function useGatewayCreate(onChanged) {
   const [organization, setOrganization] = useState(null);
@@ -12,16 +12,22 @@ function useGatewayCreate(onChanged) {
 
   const openGatewayCreate = (selectedOrganization) => {
     setOrganization(selectedOrganization);
-    setForm({ name: '' });
+    setForm({ name: '', fqdn_label: '' });
     setError('');
     setEnrollment(null);
     setOpen(true);
   };
 
+  const setGatewayOrganization = (selectedOrganization) => {
+    setOrganization(selectedOrganization);
+    setError('');
+    setEnrollment(null);
+  };
+
   const closeGatewayCreate = () => {
     setOpen(false);
     setOrganization(null);
-    setForm({ name: '' });
+    setForm({ name: '', fqdn_label: '' });
     setError('');
     setEnrollment(null);
   };
@@ -29,7 +35,8 @@ function useGatewayCreate(onChanged) {
   const handleGatewayCreate = async () => {
     setError('');
     setEnrollment(null);
-    const fqdn = gatewayFQDN(form.name, organization);
+    const fqdnLabel = gatewayLabelFromName(form.fqdn_label);
+    const fqdn = gatewayFQDNFromLabel(fqdnLabel, organization);
     if (!organization?.id) {
       setError('Organization is required');
       return;
@@ -38,15 +45,19 @@ function useGatewayCreate(onChanged) {
       setError('Set a primary domain for this organization before creating a gateway');
       return;
     }
-    if (!gatewayLabelFromName(form.name)) {
+    if (!form.name?.trim()) {
       setError('Gateway name is required');
+      return;
+    }
+    if (!fqdnLabel) {
+      setError('Gateway FQDN label is required');
       return;
     }
 
     setSaving(true);
     try {
       const result = await createGatewayRequest({
-        tenant_id: organization.id,
+        organization_id: organization.id,
         name: form.name.trim(),
         fqdn,
         auth_mode: 'builtin',
@@ -55,12 +66,12 @@ function useGatewayCreate(onChanged) {
         setEnrollment({
           token: result.enrollment_token,
           gateway_id: result.id,
-          tenant_id: result.tenant_id,
+          organization_id: result.organization_id,
           fqdn,
           expires_at: result.token_expires_at,
         });
       }
-      setForm({ name: '' });
+      setForm({ name: '', fqdn_label: '' });
       onChanged();
     } catch (e) {
       setError(e.message || 'Failed to create gateway');
@@ -78,6 +89,7 @@ function useGatewayCreate(onChanged) {
     error,
     enrollment,
     openGatewayCreate,
+    setGatewayOrganization,
     closeGatewayCreate,
     handleGatewayCreate,
   };

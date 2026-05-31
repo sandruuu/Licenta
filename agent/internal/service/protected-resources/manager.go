@@ -293,10 +293,6 @@ func (manager *Manager) waitUntilDNSReady(ctx context.Context) error {
 	defer timer.Stop()
 	select {
 	case <-manager.server.Ready():
-		status := manager.Status()
-		if status.LastError != "" {
-			return errors.New(status.LastError)
-		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

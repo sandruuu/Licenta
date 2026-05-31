@@ -1,7 +1,7 @@
 import { Layers3 } from 'lucide-react';
 import FormField, { FormSelect } from '../ui/FormField';
 import { ActionBadge, LayerBadge, PolicySentence } from './PolicyBadges';
-import { targetLabel } from './policyModel';
+import { assignmentContextLabel, assignmentTargetLabel } from './policyModel';
 
 export default function PolicyCalculator({
   organizationID,
@@ -63,7 +63,12 @@ export default function PolicyCalculator({
                     {policy && <ActionBadge action={policy.action} />}
                   </div>
                   <p className="mt-2 text-sm font-bold text-text-primary">{policy?.name || assignment.policy_id}</p>
-                  <p className="mt-1 text-xs text-text-secondary">{targetLabel(assignment, maps)}</p>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    {assignmentTargetLabel(assignment, maps)}
+                  </p>
+                  <p className="mt-0.5 text-[11px] font-semibold text-text-muted">
+                    {assignmentContextLabel(assignment, maps)}
+                  </p>
                   {policy && <div className="mt-2"><PolicySentence policy={policy} /></div>}
                 </div>
               </div>

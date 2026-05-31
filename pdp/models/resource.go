@@ -29,7 +29,6 @@ type Resource struct {
 	CertDomain string `json:"cert_domain,omitempty"`
 
 	AllowedRoles []string `json:"allowed_roles,omitempty"`
-	RequireMFA   bool     `json:"require_mfa"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

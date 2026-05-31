@@ -181,7 +181,10 @@ func TestServiceRegenerateRevokeAndDeleteGateway(t *testing.T) {
 	})
 	service.now = func() time.Time { return fixedNow }
 
-	dataStore.SaveGateway(&models.Gateway{ID: "gw-1", Name: "Gateway", EnrollmentToken: gatewayTokenHash("old-token"), Status: "enrolled", CertSerial: "serial-1", CertPEM: "cert-1"})
+	dataStore.SaveGateway(&models.Gateway{
+		ID: "gw-1", Name: "Gateway", EnrollmentToken: gatewayTokenHash("old-token"), TokenExpiresAt: "2025-01-02T04:04:05Z",
+		Status: "enrolled", CertSerial: "serial-1", CertPEM: "cert-1", CertFingerprint: "fingerprint-1", CertExpiresAt: "2025-01-09T03:04:05Z",
+	})
 	dataStore.SaveGateway(&models.Gateway{ID: "gw-2", Name: "Delete Gateway", Status: "enrolled", CertSerial: "serial-2", CertPEM: "cert-2"})
 
 	regenerated, err := service.RegenerateEnrollmentToken("gw-1")
@@ -196,8 +199,11 @@ func TestServiceRegenerateRevokeAndDeleteGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RevokeGateway returned error: %v", err)
 	}
-	if revokedGateway.Status != "revoked" || revokedGateway.EnrollmentToken != "" {
+	if revokedGateway.Status != "revoked" || revokedGateway.EnrollmentToken != "" || revokedGateway.TokenExpiresAt != "" {
 		t.Fatalf("gateway was not revoked: %+v", revokedGateway)
+	}
+	if revokedGateway.CertSerial != "" || revokedGateway.CertPEM != "" || revokedGateway.CertFingerprint != "" || revokedGateway.CertExpiresAt != "" {
+		t.Fatalf("gateway certificate metadata was not invalidated: %+v", revokedGateway)
 	}
 	if len(revoked) != 1 || revoked[0] != "serial-1:gateway:gw-1" {
 		t.Fatalf("revocation callback mismatch after revoke: %v", revoked)

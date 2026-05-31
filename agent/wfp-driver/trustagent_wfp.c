@@ -144,6 +144,7 @@ static NTSTATUS TrustAgentRedirectConnectV4(
     _In_ UINT32 OriginalIpv4,
     _In_ UINT16 OriginalPort,
     _In_ UINT8 Protocol,
+    _In_ UINT32 OriginalProcessId,
     _In_ UINT32 ProxyIpv4,
     _In_ UINT16 ProxyPort,
     _In_ UINT32 ProxyPid,
@@ -170,6 +171,7 @@ static NTSTATUS TrustAgentRedirectConnectV4(
     redirectContext->OriginalIpv4 = OriginalIpv4;
     redirectContext->OriginalPort = OriginalPort;
     redirectContext->Protocol = Protocol;
+    redirectContext->OriginalProcessId = OriginalProcessId;
 
     status = FwpsAcquireClassifyHandle0((void*)ClassifyContext, 0, &classifyHandle);
     if (!NT_SUCCESS(status)) {
@@ -222,6 +224,7 @@ static VOID NTAPI TrustAgentClassifyConnectRedirectV4(
     UINT32 proxyIpv4;
     UINT16 proxyPort;
     UINT32 proxyPid;
+    UINT32 originalProcessId;
     UINT16 flags;
     NTSTATUS status;
 
@@ -250,6 +253,11 @@ static VOID NTAPI TrustAgentClassifyConnectRedirectV4(
     remotePort = InFixedValues
         ->incomingValue[FWPS_FIELD_ALE_CONNECT_REDIRECT_V4_IP_REMOTE_PORT]
         .value.uint16;
+    originalProcessId = 0;
+    if (InMetaValues != NULL &&
+        FWPS_IS_METADATA_FIELD_PRESENT(InMetaValues, FWPS_METADATA_FIELD_PROCESS_ID)) {
+        originalProcessId = (UINT32)InMetaValues->processId;
+    }
 
     if (protocol != TRUSTAGENT_TCP_PROTOCOL ||
         remoteIpv4 == TRUSTAGENT_IPV4_LOOPBACK ||
@@ -279,6 +287,7 @@ static VOID NTAPI TrustAgentClassifyConnectRedirectV4(
         matchedRule.SyntheticIpv4,
         remotePort,
         protocol,
+        originalProcessId,
         proxyIpv4,
         proxyPort,
         proxyPid,

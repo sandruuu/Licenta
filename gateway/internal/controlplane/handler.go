@@ -39,12 +39,22 @@ type Stream interface {
 }
 
 type Handler struct {
-	gatewayID string
-	handler   SessionHandler
-	now       func() time.Time
+	gatewayID      string
+	publicEndpoint string
+	handler        SessionHandler
+	now            func() time.Time
+}
+
+type HandlerOptions struct {
+	PublicEndpoint string
+	Now            func() time.Time
 }
 
 func NewHandler(gatewayID string, handler SessionHandler, now func() time.Time) (*Handler, error) {
+	return NewHandlerWithOptions(gatewayID, handler, HandlerOptions{Now: now})
+}
+
+func NewHandlerWithOptions(gatewayID string, handler SessionHandler, options HandlerOptions) (*Handler, error) {
 	gatewayID = strings.TrimSpace(gatewayID)
 	if gatewayID == "" {
 		return nil, errors.New("gateway_id is required")
@@ -52,10 +62,16 @@ func NewHandler(gatewayID string, handler SessionHandler, now func() time.Time) 
 	if handler == nil {
 		return nil, errors.New("session handler is required")
 	}
+	now := options.Now
 	if now == nil {
 		now = time.Now
 	}
-	return &Handler{gatewayID: gatewayID, handler: handler, now: now}, nil
+	return &Handler{
+		gatewayID:      gatewayID,
+		publicEndpoint: strings.TrimSpace(options.PublicEndpoint),
+		handler:        handler,
+		now:            now,
+	}, nil
 }
 
 func (handler *Handler) Run(ctx context.Context, stream Stream) error {
@@ -88,11 +104,15 @@ func (handler *Handler) Run(ctx context.Context, stream Stream) error {
 }
 
 func (handler *Handler) helloMessage() *structpb.Struct {
-	message, _ := structpb.NewStruct(map[string]interface{}{
+	fields := map[string]interface{}{
 		"type":       MessageGatewayHello,
 		"gateway_id": handler.gatewayID,
 		"sent_at":    handler.now().UTC().Format(time.RFC3339Nano),
-	})
+	}
+	if strings.TrimSpace(handler.publicEndpoint) != "" {
+		fields["gateway_endpoint"] = strings.TrimSpace(handler.publicEndpoint)
+	}
+	message, _ := structpb.NewStruct(fields)
 	return message
 }
 

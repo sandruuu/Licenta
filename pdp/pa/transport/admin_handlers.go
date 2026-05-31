@@ -23,6 +23,7 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	users := s.pa.Auth.Users.ListUsers()
+	currentUserID := currentAdminUserID(r)
 
 	// Strip sensitive fields
 	type safeUser struct {
@@ -39,6 +40,9 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 
 	safeUsers := make([]safeUser, 0, len(users))
 	for _, u := range users {
+		if u == nil || u.ID != currentUserID {
+			continue
+		}
 		su := safeUser{
 			ID:         u.ID,
 			Username:   u.Username,
@@ -61,31 +65,38 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdminOrganizations(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		tenants := s.pa.Store.ListTenants()
+		organizations := s.pa.Store.ListOrganizationsForUser(currentAdminUserID(r))
 		writeJSON(w, http.StatusOK, models.APIResponse{
 			Success: true,
-			Data:    tenants,
+			Data:    organizations,
 		})
 
 	case http.MethodPost:
-		var tenant models.Tenant
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&tenant); err != nil {
+		var organization models.Tenant
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&organization); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		if tenant.ID == "" {
-			tenant.ID, _ = util.GenerateID("tenant")
+		if organization.ID == "" {
+			organization.ID, _ = util.GenerateID("org")
 		}
-		tenant.CreatedAt = time.Now()
-		tenant.UpdatedAt = time.Now()
-		s.pa.Store.SaveTenant(&tenant)
+		organization.CreatedAt = time.Now()
+		organization.UpdatedAt = time.Now()
+		s.pa.Store.SaveTenant(&organization)
+		s.pa.Store.EnsureDefaultGlobalPolicyForTenant(organization.ID)
+		s.pa.Store.SaveOrganizationMembership(&models.OrganizationMembership{
+			UserID:         currentAdminUserID(r),
+			OrganizationID: organization.ID,
+			Role:           "platform_admin",
+			CreatedAt:      time.Now(),
+		})
 		writeJSON(w, http.StatusCreated, models.APIResponse{
 			Success: true,
-			Message: "Tenant created",
-			Data:    tenant,
+			Message: "Organization created",
+			Data:    organization,
 		})
 
 	default:
@@ -93,52 +104,66 @@ func (s *Server) handleAdminTenants(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleAdminTenantByID(w http.ResponseWriter, r *http.Request) {
-	tenantID := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/")
-	if tenantID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant ID required"})
+func (s *Server) handleAdminOrganizationByID(w http.ResponseWriter, r *http.Request) {
+	organizationID := organizationIDFromAdminPath(r.URL.Path)
+	if organizationID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization ID required"})
+		return
+	}
+	if !s.requireOrganizationAccess(w, r, organizationID) {
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		tenant, found := s.pa.Store.GetTenant(tenantID)
+		organization, found := s.pa.Store.GetTenant(organizationID)
 		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
 		}
-		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: tenant})
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: organization})
 
 	case http.MethodPut:
-		var tenant models.Tenant
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&tenant); err != nil {
+		var organization models.Tenant
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&organization); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		existing, found := s.pa.Store.GetTenant(tenantID)
+		existing, found := s.pa.Store.GetTenant(organizationID)
 		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
 		}
-		tenant.ID = tenantID
-		tenant.CreatedAt = existing.CreatedAt
-		if tenant.DefaultIdPID == "" {
-			tenant.DefaultIdPID = existing.DefaultIdPID
+		organization.ID = organizationID
+		organization.CreatedAt = existing.CreatedAt
+		if organization.DefaultIdPID == "" {
+			organization.DefaultIdPID = existing.DefaultIdPID
 		}
-		tenant.UpdatedAt = time.Now()
-		s.pa.Store.SaveTenant(&tenant)
-		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Tenant updated", Data: tenant})
+		organization.UpdatedAt = time.Now()
+		s.pa.Store.SaveTenant(&organization)
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Organization updated", Data: organization})
 
 	case http.MethodDelete:
-		if !s.pa.Store.DeleteTenant(tenantID) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		if !s.pa.Store.DeleteTenant(organizationID) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
 		}
-		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Tenant deleted"})
+		s.pa.Store.DeleteOrganizationMemberships(organizationID)
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Organization deleted"})
 
 	default:
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 	}
+}
+
+func organizationIDFromAdminPath(path string) string {
+	path = strings.TrimSpace(path)
+	for _, prefix := range []string{"/api/admin/organizations/"} {
+		if strings.HasPrefix(path, prefix) {
+			return strings.Trim(strings.TrimPrefix(path, prefix), "/")
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
@@ -147,7 +172,7 @@ func (s *Server) handleAdminSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessions := s.pa.Sessions.ListActiveSessions()
+	sessions := filterSessionsByOrganization(s.pa.Sessions.ListActiveSessions(), s.allowedOrganizationIDs(r))
 	writeJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
 		Data:    sessions,
@@ -166,6 +191,14 @@ func (s *Server) handleAdminSessionByID(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	session, found := s.pa.Store.GetSession(sessionID)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	if !s.requireOrganizationAccess(w, r, session.TenantID) {
+		return
+	}
 	if err := s.pa.Sessions.RevokeSession(sessionID); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
@@ -194,7 +227,7 @@ func (s *Server) handleAdminAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	entries := s.pa.Audit.GetRecentEntries(limit)
+	entries := filterAuditByOrganization(s.pa.Audit.GetRecentEntries(limit), s.allowedOrganizationIDs(r))
 	writeJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
 		Data:    entries,

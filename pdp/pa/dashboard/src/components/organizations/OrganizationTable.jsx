@@ -1,4 +1,4 @@
-import { Building2, Edit2, Trash2 } from 'lucide-react';
+import { Ban, Building2, Edit2, RotateCcw, Trash2 } from 'lucide-react';
 import DataTable, { TableActions, TableIconButton } from '../ui/DataTable';
 import StatusBadge from './StatusBadge';
 
@@ -7,6 +7,8 @@ export default function OrganizationTable({
   organizations,
   onOpen,
   onEdit,
+  onRevoke,
+  onReactivate,
   onDelete,
   pageSize,
   emptyTitle = 'No organizations yet',
@@ -54,13 +56,32 @@ export default function OrganizationTable({
               onEdit?.(organization);
             }}
           />
+          {organization.enabled !== false ? (
+            <TableIconButton
+              icon={Ban}
+              label="Revoke organization"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRevoke?.(organization);
+              }}
+            />
+          ) : (
+            <TableIconButton
+              icon={RotateCcw}
+              label="Reactivate organization"
+              onClick={(event) => {
+                event.stopPropagation();
+                onReactivate?.(organization);
+              }}
+            />
+          )}
           <TableIconButton
             icon={Trash2}
             label="Delete organization"
             danger
             onClick={(event) => {
               event.stopPropagation();
-              onDelete?.(organization.id);
+              onDelete?.(organization);
             }}
           />
         </TableActions>

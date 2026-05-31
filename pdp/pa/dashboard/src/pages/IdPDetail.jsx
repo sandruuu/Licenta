@@ -43,7 +43,7 @@ function SearchField({ value, onChange, placeholder }) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="h-10 w-full rounded-md border border-border bg-surface-secondary pl-9 pr-3 text-sm font-semibold text-text-primary placeholder:text-text-muted transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-muted"
+        className="h-10 w-full rounded-md border border-border bg-surface pl-9 pr-3 text-sm font-bold text-text-primary shadow-sm placeholder:text-text-muted transition-colors hover:border-text-muted focus:border-accent focus:outline-none focus:ring-[3px] focus:ring-accent-muted"
       />
     </div>
   );

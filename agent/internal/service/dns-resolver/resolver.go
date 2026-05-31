@@ -149,7 +149,7 @@ func (resolver *Resolver) ApplyPolicy(policy Policy) error {
 	resolver.state = StatusReady
 
 	for fqdn, mapping := range resolver.byName {
-		if _, ok := resolver.resources[fqdn]; !ok || !mapping.ExpiresAt.After(now) {
+		if _, ok := resolver.resources[fqdn]; !ok {
 			resolver.releaseLocked(mapping.SyntheticIP)
 		}
 	}
@@ -201,13 +201,13 @@ func (resolver *Resolver) resolveLocked(fqdn string, now time.Time) (Mapping, er
 		resolver.lastError = ErrResourceNotInCatalog.Error()
 		return Mapping{}, fmt.Errorf("%w: %s", ErrResourceNotInCatalog, fqdn)
 	}
-	if mapping, ok := resolver.byName[fqdn]; ok && mapping.ExpiresAt.After(now) {
+	if mapping, ok := resolver.byName[fqdn]; ok {
+		mapping.ResourceID = resource.ResourceID
+		mapping.Protocol = resource.Protocol
+		mapping.Port = resource.Port
 		mapping.LastAccess = now
 		mapping.ExpiresAt = now.Add(resolver.policyTTL)
 		return copyMapping(mapping), nil
-	}
-	if mapping, ok := resolver.byName[fqdn]; ok {
-		resolver.releaseLocked(mapping.SyntheticIP)
 	}
 	ip, err := resolver.allocateLocked()
 	if err != nil {
@@ -242,20 +242,23 @@ func (resolver *Resolver) Lookup(ip string) (Mapping, bool) {
 	}
 	ip = parsed.String()
 	now := resolver.clock().UTC()
-	resolver.mu.RLock()
+	resolver.mu.Lock()
+	defer resolver.mu.Unlock()
 	mapping, ok := resolver.byIP[ip]
-	if ok && mapping.ExpiresAt.After(now) {
-		copyValue := copyMapping(mapping)
-		resolver.mu.RUnlock()
-		return copyValue, true
+	if !ok {
+		return Mapping{}, false
 	}
-	resolver.mu.RUnlock()
-	if ok {
-		resolver.mu.Lock()
+	resource, active := resolver.resources[mapping.FQDN]
+	if !active {
 		resolver.releaseLocked(ip)
-		resolver.mu.Unlock()
+		return Mapping{}, false
 	}
-	return Mapping{}, false
+	mapping.ResourceID = resource.ResourceID
+	mapping.Protocol = resource.Protocol
+	mapping.Port = resource.Port
+	mapping.LastAccess = now
+	mapping.ExpiresAt = now.Add(resolver.policyTTL)
+	return copyMapping(mapping), true
 }
 
 func (resolver *Resolver) Status() Status {
@@ -310,7 +313,7 @@ func (resolver *Resolver) releaseLocked(ip string) {
 
 func (resolver *Resolver) collectExpiredLocked(now time.Time) {
 	for ip, mapping := range resolver.byIP {
-		if !mapping.ExpiresAt.After(now) {
+		if _, active := resolver.resources[mapping.FQDN]; !active {
 			resolver.releaseLocked(ip)
 		}
 	}

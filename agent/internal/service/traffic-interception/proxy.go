@@ -16,11 +16,12 @@ import (
 )
 
 type proxyServer struct {
-	logger     *slog.Logger
-	listenAddr string
-	controller wfpcontrol.Controller
-	connector  StreamConnector
-	timeout    time.Duration
+	logger          *slog.Logger
+	listenAddr      string
+	controller      wfpcontrol.Controller
+	connector       StreamConnector
+	timeout         time.Duration
+	processResolver processIdentityResolver
 
 	readyOnce sync.Once
 	ready     chan struct{}
@@ -46,13 +47,14 @@ func newProxyServer(config Config, logger *slog.Logger, controller wfpcontrol.Co
 		logger = slog.Default()
 	}
 	return &proxyServer{
-		logger:     logger,
-		listenAddr: listenAddr,
-		controller: controller,
-		connector:  connector,
-		timeout:    timeout,
-		ready:      make(chan struct{}),
-		routes:     routeTable{byDestination: map[string]route{}},
+		logger:          logger,
+		listenAddr:      listenAddr,
+		controller:      controller,
+		connector:       connector,
+		timeout:         timeout,
+		processResolver: resolveProcessIdentityCached,
+		ready:           make(chan struct{}),
+		routes:          routeTable{byDestination: map[string]route{}},
 	}
 }
 
@@ -171,6 +173,7 @@ func (server *proxyServer) handle(ctx context.Context, client net.Conn) {
 		server.deny("gateway stream connector is not configured", nil)
 		return
 	}
+	process := server.processIdentity(requestCtx, destination.ProcessID)
 	upstream, err := server.connector.OpenResourceStream(requestCtx, StreamRequest{
 		ResourceID:   item.ResourceID,
 		FQDN:         item.FQDN,
@@ -179,6 +182,7 @@ func (server *proxyServer) handle(ctx context.Context, client net.Conn) {
 		SyntheticIP:  item.SyntheticIP,
 		ClientAddr:   client.RemoteAddr().String(),
 		OriginalAddr: net.JoinHostPort(destination.IP, fmt.Sprint(destination.Port)),
+		Process:      process,
 	})
 	if err != nil {
 		server.deny("gateway stream rejected", err)
@@ -186,6 +190,25 @@ func (server *proxyServer) handle(ctx context.Context, client net.Conn) {
 	}
 	defer upstream.Close()
 	copyBidirectional(client, upstream)
+}
+
+func (server *proxyServer) processIdentity(ctx context.Context, pid uint32) *ProcessIdentity {
+	if pid == 0 {
+		return nil
+	}
+	resolver := server.processResolver
+	if resolver == nil {
+		resolver = resolveProcessIdentityCached
+	}
+	identity, err := resolver(ctx, pid)
+	if err == nil {
+		return identity
+	}
+	if identity == nil {
+		identity = &ProcessIdentity{PID: int(pid)}
+	}
+	server.logger.Warn("traffic proxy process identity resolution was partial", "pid", pid, "error", err)
+	return identity
 }
 
 func (server *proxyServer) deny(message string, err error) {

@@ -67,6 +67,9 @@ func securityHeadersMiddleware(deviceHealthAgentURL string) func(http.Handler) h
 }
 
 func contentSecurityPolicy(r *http.Request, connectSrc string) string {
+	if r != nil && strings.HasPrefix(r.URL.Path, "/browser/step-up/") {
+		return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+	}
 	policy := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'"
 	if r == nil || (!strings.HasPrefix(r.URL.Path, "/browser/enroll/") && !strings.HasPrefix(r.URL.Path, "/browser/session/")) {
 		policy += "; form-action 'self'"
@@ -227,11 +230,8 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Admin console accepts tokens regardless of MFADone — per-resource MFA
-		// enforcement is performed by the policy engine at access time, not at the
-		// admin API boundary. This allows freshly-issued login tokens (which always
-		// have MFADone=false) to access the admin dashboard.
-		claims, err := s.pa.Auth.ParseToken(parts[1])
+		// Admin API tokens must be issued after the dashboard MFA step.
+		claims, err := s.pa.Auth.ValidateToken(parts[1])
 		if err != nil {
 			log.Printf("[AUTH] Token validation failed: %v", err)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
@@ -249,9 +249,9 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Check admin role for admin endpoints
-		if strings.HasPrefix(r.URL.Path, "/api/admin") && claims.Role != "admin" {
+		if strings.HasPrefix(r.URL.Path, "/api/admin") && claims.Role != "platform_admin" {
 			writeJSON(w, http.StatusForbidden, map[string]string{
-				"error": "admin access required",
+				"error": "platform administrator access required",
 			})
 			return
 		}

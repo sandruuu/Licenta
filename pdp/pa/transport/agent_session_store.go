@@ -122,6 +122,25 @@ func (store *agentSessionStore) getByBrowserState(state string) (*agentSessionTr
 	return nil, false
 }
 
+func (store *agentSessionStore) deleteByAgentSessionID(agentSessionID string) bool {
+	if store == nil {
+		return false
+	}
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if agentSessionID == "" {
+		return false
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, session := range store.sessions {
+		if session != nil && strings.TrimSpace(session.AgentSessionID) == agentSessionID {
+			delete(store.sessions, id)
+			return true
+		}
+	}
+	return false
+}
+
 func randomSessionSecret(length int) (string, error) {
 	data := make([]byte, length)
 	if _, err := rand.Read(data); err != nil {

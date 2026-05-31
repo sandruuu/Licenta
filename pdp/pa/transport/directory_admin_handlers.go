@@ -10,7 +10,7 @@ import (
 
 type adminDirectoryUser struct {
 	ID          string            `json:"id"`
-	TenantID    string            `json:"tenant_id"`
+	TenantID    string            `json:"organization_id"`
 	IdPID       string            `json:"idp_id"`
 	ExternalID  string            `json:"external_id,omitempty"`
 	UserName    string            `json:"user_name"`
@@ -24,7 +24,7 @@ type adminDirectoryUser struct {
 
 type adminDirectoryGroup struct {
 	ID          string    `json:"id"`
-	TenantID    string    `json:"tenant_id"`
+	TenantID    string    `json:"organization_id"`
 	IdPID       string    `json:"idp_id"`
 	ExternalID  string    `json:"external_id,omitempty"`
 	DisplayName string    `json:"display_name"`
@@ -43,9 +43,15 @@ func (s *Server) handleAdminDirectoryUsers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	tenantID := organizationIDFromQuery(r)
+	if tenantID != "" && !s.requireOrganizationAccess(w, r, tenantID) {
+		return
+	}
 	idpID := strings.TrimSpace(r.URL.Query().Get("idp_id"))
 	users := s.pa.Store.ListDirectoryUsersFiltered(tenantID, idpID)
+	if tenantID == "" {
+		users = filterDirectoryUsersByOrganization(users, s.allowedOrganizationIDs(r))
+	}
 
 	response := make([]adminDirectoryUser, 0, len(users))
 	for _, user := range users {
@@ -80,9 +86,15 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	tenantID := organizationIDFromQuery(r)
+	if tenantID != "" && !s.requireOrganizationAccess(w, r, tenantID) {
+		return
+	}
 	idpID := strings.TrimSpace(r.URL.Query().Get("idp_id"))
 	groups := s.pa.Store.ListDirectoryGroupsFiltered(tenantID, idpID)
+	if tenantID == "" {
+		groups = filterDirectoryGroupsByOrganization(groups, s.allowedOrganizationIDs(r))
+	}
 
 	response := make([]adminDirectoryGroup, 0, len(groups))
 	for _, group := range groups {
@@ -109,4 +121,24 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: response})
+}
+
+func filterDirectoryUsersByOrganization(users []*models.DirectoryUser, allowed map[string]bool) []*models.DirectoryUser {
+	filtered := make([]*models.DirectoryUser, 0, len(users))
+	for _, user := range users {
+		if user != nil && organizationAllowed(allowed, user.TenantID) {
+			filtered = append(filtered, user)
+		}
+	}
+	return filtered
+}
+
+func filterDirectoryGroupsByOrganization(groups []*models.DirectoryGroup, allowed map[string]bool) []*models.DirectoryGroup {
+	filtered := make([]*models.DirectoryGroup, 0, len(groups))
+	for _, group := range groups {
+		if group != nil && organizationAllowed(allowed, group.TenantID) {
+			filtered = append(filtered, group)
+		}
+	}
+	return filtered
 }

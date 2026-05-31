@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	defaultCertificateValidityDays = 1
-	defaultBrowserSessionTTL       = 5 * time.Minute
+	defaultCertificateValidityDays   = 1
+	defaultBrowserSessionTTL         = 5 * time.Minute
+	defaultEnrollmentCleanupInterval = time.Minute
 )
 
 var (
@@ -108,6 +109,10 @@ type EnrollmentTokenIssuer func(userID, username, role, deviceID, nonce, userSID
 
 type InteractiveDeviceCertificateIssuer func(csrPEM []byte, validDays int, role, deviceID string) ([]byte, error)
 
+type EventPublisher interface {
+	PublishCAEPEvent(eventType string, fields map[string]string)
+}
+
 type Config struct {
 	CertificateValidityDays int
 	BrowserSessionTTL       time.Duration
@@ -121,6 +126,7 @@ type Service struct {
 	revoker                 CertificateRevoker
 	deviceRole              DeviceRoleResolver
 	enrollmentTokenIssuer   EnrollmentTokenIssuer
+	publisher               EventPublisher
 	certificateValidityDays int
 	browserSessionTTL       time.Duration
 	interactiveSessions     map[string]*InteractiveSession
@@ -168,4 +174,11 @@ func (s *Service) SetInteractiveDeviceCertificateIssuer(issuer InteractiveDevice
 		return
 	}
 	s.interactiveIssuer = issuer
+}
+
+func (s *Service) SetEventPublisher(publisher EventPublisher) {
+	if s == nil {
+		return
+	}
+	s.publisher = publisher
 }

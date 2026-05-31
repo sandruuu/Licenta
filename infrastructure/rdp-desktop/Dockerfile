@@ -29,6 +29,6 @@ RUN sed -i 's/^port=3389/port=3389/' /etc/xrdp/xrdp.ini && \
 EXPOSE 3389
 
 COPY start.sh /start.sh
-RUN chmod +x /start.sh
+RUN sed -i 's/\r$//' /start.sh && chmod +x /start.sh
 
 CMD ["/start.sh"]

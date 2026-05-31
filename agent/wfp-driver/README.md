@@ -47,6 +47,12 @@ TRUSTAGENT_WFP_RULE
 
 Driverul implementeaza doar redirectarea conexiunilor TCP IPv4. IPv6 si UDP nu fac parte din designul curent al TrustAgent.
 
+Driverul nu pastreaza catalogul de resurse si nu cunoaste utilizatori, politici
+sau sesiuni. El primeste doar reguli sintetice de la service-ul Go. Daca
+`traffic_interception_enabled=true` si service-ul nu poate aplica regulile WFP,
+configuratia recomandata este `wfp_fail_closed=true`, caz in care autentificarea
+locala nu este finalizata si catalogul nu este expus partial.
+
 ## Flux asteptat
 
 1. Service-ul primeste catalogul de la PDP.
@@ -59,6 +65,10 @@ Driverul implementeaza doar redirectarea conexiunilor TCP IPv4. IPv6 si UDP nu f
 8. Driverul ataseaza destinatia originala ca WFP redirect context.
 9. Proxy-ul citeste contextul prin `SIO_QUERY_WFP_CONNECTION_REDIRECT_CONTEXT`.
 10. Service-ul mapeaza destinatia la `resource_id` si continua cu autorizarea/tunelul.
+
+Daca proxy-ul nu poate obtine destinatia originala sau aceasta nu exista in
+catalogul autentificat, conexiunea este inchisa. Decizia finala ramane la PDP,
+prin autorizarea per flow facuta de service-ul Go.
 
 ## Build
 

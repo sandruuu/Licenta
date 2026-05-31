@@ -10,7 +10,7 @@ const (
 	CodeOK                      = "ok"
 	CodeAuthRequired            = "auth_required"
 	CodeAuthInvalid             = "auth_invalid"
-	CodeMFARequired             = "mfa_required"
+	CodeStepUpRequired          = "step_up_required"
 	CodePolicyDenied            = "policy_denied"
 	CodeRiskDenied              = "risk_denied"
 	CodeSessionInvalid          = "session_invalid"
@@ -73,13 +73,14 @@ type ProcessIdentity struct {
 }
 
 type ResourceStreamRequest struct {
-	TargetHost      string
-	TargetPort      int
-	SessionID       string
-	SessionToken    string
-	ResourceID      string
-	Protocol        string
-	GatewayID       string
-	GatewayEndpoint string
-	Process         *ProcessIdentity
+	TargetHost        string
+	TargetPort        int
+	SessionID         string
+	SessionToken      string
+	ResourceID        string
+	Protocol          string
+	GatewayID         string
+	GatewayEndpoint   string
+	GatewayServerName string
+	Process           *ProcessIdentity
 }

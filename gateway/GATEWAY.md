@@ -26,7 +26,7 @@ Removed legacy surfaces: Gateway Admin UI, SessionStore microservice, Syslog ser
 2. If `GATEWAY_ENROLLMENT_TOKEN` is set and the Gateway cert/key are missing, `internal/enrollment` generates an ECDSA P-256 private key, creates a CSR for the public key, calls PA `gateway.GatewayEnrollmentService/Enroll` over gRPC, and writes the signed Gateway certificate plus PA CA. PA marks the token as used and issues Gateway identity from the token-bound Gateway record.
 3. The same Gateway certificate and key from `certs/gateway.crt` and `certs/gateway.key` are used for Agent-facing server TLS and PA-facing client mTLS. Gateway rejects certificates that do not include both `serverAuth` and `clientAuth` extended key usages.
 4. `internal/controlplane.Client` starts with TLS 1.3 and Gateway mTLS for all PA calls.
-5. `internal/controlplane` opens the required `gateway.GatewayControlService/ControlStream` over HTTP/2 gRPC with mTLS, builds `gateway_hello`, parses PA commands, and returns acknowledgements.
+5. `internal/controlplane` opens the required `gateway.GatewayControlService/ControlStream` over HTTP/2 gRPC with mTLS, builds `gateway_hello` including the configured public Agent endpoint when present, parses PA commands, and returns acknowledgements.
 6. `provision_session` commands are stored in `internal/provisioning` with SHA-256 token hashes.
 7. When PA allows access, it sends the selected Gateway address to the Agent.
 8. Agents connect to `internal/dataplane` through TLS 1.3 plus mTLS and yamux.
@@ -35,6 +35,7 @@ Removed legacy surfaces: Gateway Admin UI, SessionStore microservice, Syslog ser
 11. Gateway ignores client-controlled target addresses for strict relay. The actual internal target is `Session.InternalHost:Session.InternalPort`, provisioned by PA.
 12. `internal/dataplane` opens a direct TCP connection to that target and bridges bytes between the yamux stream and the resource until EOF, expiry, shutdown, or revocation.
 13. `revoke_session` marks the session revoked and closes active relays for that session immediately.
+14. A periodic revalidation loop calls PA through `gateway.GatewayTrustService/RevalidateSessions`; PA returns stale/invalid session IDs, and Gateway revokes them locally.
 
 ## Data Plane Messages
 
@@ -78,6 +79,15 @@ The PA/Gateway channel is outbound from Gateway to PDP/PA:
 
 PDP/PA remains authoritative for authentication, MFA/step-up orchestration, policy evaluation, session creation, and resource-to-Gateway assignment.
 
+Gateway also uses `gateway.GatewayTrustService` for trust maintenance:
+
+- `GetCACertificate`: retrieve the PA/device CA material.
+- `GetRevokedSerials`: synchronize revoked certificate serials.
+- `RevalidateSessions`: ask PA whether locally provisioned sessions are still valid.
+
+The local revalidation interval is `session_revalidation_interval` in
+`config.json`; if it is missing or invalid, Gateway defaults it to 30 seconds.
+
 ## Enrollment And PKI
 
 Gateway enrollment is non-interactive and does not require a local Admin UI:
@@ -96,9 +106,20 @@ Certificate renewal uses `gateway.GatewayEnrollmentService/RenewCertificate` ove
 Primary JSON fields:
 
 - `pa_url`
-- `control_plane.server_name`
+- `public_endpoint`
+- `session_revalidation_interval`
 
-Gateway deployment values are read from `config.json`. Timeout, retry, circuit breaker, connection limit, yamux, certificate renewal, revocation sync, and relay bandwidth behavior are internal Gateway policies, not deployment configuration.
+`public_endpoint` is the host:port value that PA gives Agents after authorization, for example `localhost:9443` in a local test or `gateway.example.com:9443` in a deployed environment. It can also be overridden with `GATEWAY_PUBLIC_ENDPOINT`.
+
+`session_revalidation_interval` controls how often Gateway asks PA to recheck
+its locally provisioned sessions. This is separate from session expiry: expired
+sessions are rejected locally, while revalidation handles policy/resource/device
+changes observed by PA.
+
+Gateway deployment values are read from `config.json`. Timeout, retry, circuit
+breaker, connection limit, yamux, certificate renewal, revocation sync, and
+relay bandwidth behavior are internal Gateway policies, not deployment
+configuration.
 
 There are no Gateway `resources`, `internal_dns`, `cgnat`, `session_timeout`, Admin, SessionStore, or Syslog config sections.
 
@@ -122,6 +143,7 @@ Runtime mounts:
 Runtime environment:
 
 - `GATEWAY_ENROLLMENT_TOKEN`: one-time token generated in PA for first enrollment
+- `GATEWAY_PUBLIC_ENDPOINT`: optional host:port override advertised to PA in `gateway_hello`
 
 Certificates are runtime artifacts. They are not kept in the repository; the Gateway reads and writes them through the Docker `gateway-certs` volume according to the certificate paths from `config.json`. The config file is mounted read-only because enrollment state is enforced by PA, not by rewriting local config.
 
@@ -143,3 +165,4 @@ Current focused tests cover:
 - control-plane command parsing and mTLS stream behavior
 - provisioning token hash, binding, expiry, and revocation checks
 - PA revoked-serial sync
+- PA session revalidation

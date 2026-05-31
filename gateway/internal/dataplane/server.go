@@ -30,21 +30,22 @@ import (
 )
 
 const (
-	agentListenAddr          = ":9443"
-	relayDialTimeout         = 10 * time.Second
-	maxConnections           = 1000
-	maxConnectionsPerIP      = 100
-	relayBufferSizeBytes     = 64 * 1024
-	yamuxMaxStreamWindowSize = 256 * 1024
-	yamuxStreamOpenTimeout   = 30 * time.Second
-	yamuxStreamCloseTimeout  = 5 * time.Minute
-	revocationSyncInterval   = time.Minute
-	certExpiryCheckInterval  = 12 * time.Hour
-	certExpiryCriticalWindow = 7 * 24 * time.Hour
-	certExpiryWarningWindow  = 30 * 24 * time.Hour
-	certRenewalCheckInterval = 6 * time.Hour
-	certRenewalWindow        = 48 * time.Hour
-	maxRelayBandwidthMbps    = 400
+	agentListenAddr            = ":9443"
+	relayDialTimeout           = 10 * time.Second
+	maxConnections             = 1000
+	maxConnectionsPerIP        = 100
+	relayBufferSizeBytes       = 64 * 1024
+	yamuxMaxStreamWindowSize   = 256 * 1024
+	yamuxStreamOpenTimeout     = 30 * time.Second
+	yamuxStreamCloseTimeout    = 5 * time.Minute
+	revocationSyncInterval     = time.Minute
+	sessionRevalidationTimeout = 10 * time.Second
+	certExpiryCheckInterval    = 12 * time.Hour
+	certExpiryCriticalWindow   = 7 * 24 * time.Hour
+	certExpiryWarningWindow    = 30 * 24 * time.Hour
+	certRenewalCheckInterval   = 6 * time.Hour
+	certRenewalWindow          = 48 * time.Hour
+	maxRelayBandwidthMbps      = 400
 )
 
 type Gateway struct {
@@ -74,6 +75,7 @@ type activeRelay struct {
 	sessionID  string
 	deviceID   string
 	resourceID string
+	renew      chan time.Time
 	cancel     func(reason string)
 }
 
@@ -99,6 +101,7 @@ func (gateway *Gateway) ProvisionSession(session provisioning.Session, sessionTo
 	if err := gateway.provisioned.Provision(session, sessionToken); err != nil {
 		return err
 	}
+	gateway.renewActiveRelays(session.ID, session.ExpiresAt)
 	log.Printf("[GATEWAY] PA provisioned session %s for device=%s resource=%s target=%s:%d expires=%s",
 		session.ID, session.DeviceID, session.ResourceID, session.InternalHost, session.InternalPort, session.ExpiresAt.Format(time.RFC3339))
 	return nil
@@ -143,6 +146,7 @@ func (gateway *Gateway) ListenAndServe() error {
 
 	gateway.syncRevokedSerials()
 	go gateway.revocationSyncLoop()
+	go gateway.sessionRevalidationLoop()
 	go gateway.certExpiryLoop()
 
 	log.Printf("[GATEWAY] strict PEP listening on %s", agentListenAddr)
@@ -384,6 +388,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *ConnectRe
 
 	relayID := newRelayID()
 	relayCtx, cancelRelay := context.WithCancel(gateway.ctx)
+	renewRelay := make(chan time.Time, 1)
 	var closeOnce sync.Once
 	closeRelay := func(reason string) {
 		closeOnce.Do(func() {
@@ -398,6 +403,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *ConnectRe
 		sessionID:  session.ID,
 		deviceID:   session.DeviceID,
 		resourceID: session.ResourceID,
+		renew:      renewRelay,
 		cancel:     closeRelay,
 	})
 	defer func() {
@@ -405,17 +411,7 @@ func (gateway *Gateway) handleConnectRequest(stream net.Conn, request *ConnectRe
 		closeRelay("complete")
 	}()
 
-	if deadline := time.Until(session.ExpiresAt); deadline > 0 {
-		timer := time.NewTimer(deadline)
-		defer timer.Stop()
-		go func() {
-			select {
-			case <-timer.C:
-				closeRelay("session.expired")
-			case <-relayCtx.Done():
-			}
-		}()
-	}
+	go watchRelayExpiry(relayCtx, session.ExpiresAt, renewRelay, closeRelay)
 
 	bytesPerSecond := relayLimitBytesPerSecond(session.MaxBandwidthMbps, maxRelayBandwidthMbps)
 	log.Printf("[GATEWAY] relay opened id=%s session=%s device=%s resource=%s target=%s:%d process=%s",
@@ -470,6 +466,8 @@ func (gateway *Gateway) validateProvisionedConnect(request *ConnectRequest, stat
 	switch validationErr.Code {
 	case provisioning.CodeBadRequest:
 		return nil, CodeBadRequest, validationErr.Message
+	case provisioning.CodeSessionExpired:
+		return nil, CodeSessionExpired, validationErr.Message
 	default:
 		return nil, CodeSessionInvalid, validationErr.Message
 	}
@@ -509,6 +507,57 @@ func (gateway *Gateway) revocationSyncLoop() {
 		case <-gateway.ctx.Done():
 			return
 		}
+	}
+}
+
+func (gateway *Gateway) sessionRevalidationLoop() {
+	interval := 30 * time.Second
+	if gateway != nil && gateway.cfg != nil && gateway.cfg.SessionRevalidationInterval > 0 {
+		interval = gateway.cfg.SessionRevalidationInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			gateway.revalidateProvisionedSessions()
+		case <-gateway.ctx.Done():
+			return
+		}
+	}
+}
+
+func (gateway *Gateway) revalidateProvisionedSessions() {
+	if gateway == nil || gateway.controlPlane == nil || gateway.provisioned == nil {
+		return
+	}
+	sessions := gateway.provisioned.ListSessions()
+	if len(sessions) == 0 {
+		return
+	}
+	reported := make([]controlplane.RevalidationSession, 0, len(sessions))
+	for _, session := range sessions {
+		reported = append(reported, controlplane.RevalidationSession{
+			SessionID:  session.ID,
+			DeviceID:   session.DeviceID,
+			ResourceID: session.ResourceID,
+			Protocol:   session.Protocol,
+			ExpiresAt:  session.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		})
+	}
+	ctx, cancel := context.WithTimeout(gateway.ctx, sessionRevalidationTimeout)
+	defer cancel()
+	invalid, err := gateway.controlPlane.RevalidateSessions(ctx, reported)
+	if err != nil {
+		log.Printf("[GATEWAY] session revalidation failed: %v", err)
+		return
+	}
+	for _, result := range invalid {
+		reason := firstNonEmptyString(result.Reason, result.Status, "pa_revalidation_failed")
+		gateway.RevokeProvisionedSession(result.SessionID, reason)
+	}
+	if len(invalid) > 0 {
+		log.Printf("[GATEWAY] revalidation revoked %d stale provisioned session(s)", len(invalid))
 	}
 }
 
@@ -708,6 +757,75 @@ func (gateway *Gateway) terminateRelays(match func(*activeRelay) bool, reason st
 	}
 }
 
+func (gateway *Gateway) renewActiveRelays(sessionID string, expiresAt time.Time) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || expiresAt.IsZero() {
+		return
+	}
+	count := 0
+	gateway.activeRelays.Range(func(_, value any) bool {
+		active, ok := value.(*activeRelay)
+		if !ok || active == nil || active.sessionID != sessionID || active.renew == nil {
+			return true
+		}
+		select {
+		case active.renew <- expiresAt:
+		default:
+			select {
+			case <-active.renew:
+			default:
+			}
+			select {
+			case active.renew <- expiresAt:
+			default:
+			}
+		}
+		count++
+		return true
+	})
+	if count > 0 {
+		log.Printf("[GATEWAY] renewed %d active relay(s) for session=%s expires=%s", count, sessionID, expiresAt.Format(time.RFC3339))
+	}
+}
+
+func watchRelayExpiry(ctx context.Context, expiresAt time.Time, renew <-chan time.Time, closeRelay func(reason string)) {
+	if closeRelay == nil || expiresAt.IsZero() {
+		return
+	}
+	wait := time.Until(expiresAt)
+	if wait <= 0 {
+		closeRelay("session.expired")
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			closeRelay("session.expired")
+			return
+		case nextExpiry := <-renew:
+			if nextExpiry.IsZero() {
+				continue
+			}
+			wait = time.Until(nextExpiry)
+			if wait <= 0 {
+				closeRelay("session.expired")
+				return
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(wait)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (gateway *Gateway) incIP(ip string) int64 {
 	value, _ := gateway.perIPConns.LoadOrStore(ip, &atomic.Int64{})
 	return value.(*atomic.Int64).Add(1)
@@ -759,6 +877,15 @@ func remoteIPOnly(addr net.Addr) string {
 		return host
 	}
 	return addr.String()
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func newRelayID() string {

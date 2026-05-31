@@ -29,6 +29,7 @@ func (service *Service) Run(ctx context.Context) error {
 	}()
 	go service.runProtectedResources(ctx)
 	go service.runDeviceDataSync(ctx)
+	go service.runAgentEvents(ctx)
 	service.logger.Info("TrustAgent service running", "pipe", ipc.PipePath(), "protocol", ipc.ProtocolVersion)
 	service.transition(StateRunning)
 

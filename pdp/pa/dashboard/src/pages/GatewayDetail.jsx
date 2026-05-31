@@ -2,13 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  Ban,
   Edit2,
   Building2,
   Plus,
   Router,
   Server,
 } from 'lucide-react';
-import { getGateways, getOrganizations, getResources, updateGateway } from '../api';
+import { getGateways, getOrganizations, getResources, revokeGateway, updateGateway } from '../api';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
@@ -23,11 +24,16 @@ import {
 } from '../components/ui/Detail';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { formatDateTime } from '../utils/format';
+import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 function gatewayStatusVariant(status) {
   if (status === 'revoked') return 'danger';
   if (status === 'pending') return 'warning';
   return 'success';
+}
+
+function isRevokedGateway(gateway) {
+  return String(gateway?.status || '').toLowerCase() === 'revoked';
 }
 
 function DetailValue({ label, value, mono = false }) {
@@ -105,7 +111,7 @@ export default function GatewayDetail() {
       await updateGateway(gateway.id, {
         name: editForm.name?.trim(),
         fqdn: editForm.fqdn?.trim(),
-        tenant_id: editForm.tenant_id,
+        organization_id: editForm.tenant_id,
       });
       setEditOpen(false);
       await load();
@@ -113,6 +119,17 @@ export default function GatewayDetail() {
       setError(e.message || 'Failed to update gateway');
     } finally {
       setEditSaving(false);
+    }
+  };
+
+  const revokeSelectedGateway = async () => {
+    if (!gateway || !confirm(`Revoke gateway "${gateway.name || gateway.id}" and terminate its active sessions?`)) return;
+    setError('');
+    try {
+      await revokeGateway(gateway.id);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to revoke gateway');
     }
   };
 
@@ -137,7 +154,8 @@ export default function GatewayDetail() {
     );
   }
 
-  const resourceListFilter = `tenant_id=${encodeURIComponent(organization?.id || gateway.tenant_id || '')}&gateway_id=${encodeURIComponent(gateway.id)}&q=${encodeURIComponent(gateway.name || gateway.id)}`;
+  const resourceListFilter = `organization_id=${encodeURIComponent(organization?.id || gateway.organization_id || '')}&gateway_id=${encodeURIComponent(gateway.id)}&q=${encodeURIComponent(gateway.name || gateway.id)}`;
+  const gatewayRevoked = isRevokedGateway(gateway);
 
   return (
     <div className="space-y-7">
@@ -157,12 +175,17 @@ export default function GatewayDetail() {
                     <Badge variant={gatewayStatusVariant(gateway.status)}>{gateway.status || 'active'}</Badge>
                   </div>
                   <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                    <span>{organization?.name || gateway.tenant_id || 'Unassigned'}</span>
+                    <span>{organization?.name || gateway.organization_id || 'Unassigned'}</span>
                   </div>
                 </div>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              {!gatewayRevoked ? (
+                <Button variant="danger" onClick={revokeSelectedGateway} title="Revoke gateway" aria-label="Revoke gateway">
+                  <Ban size={14} />
+                </Button>
+              ) : null}
               <Button onClick={openEdit}>
                 <Edit2 size={14} />
               </Button>
@@ -175,7 +198,7 @@ export default function GatewayDetail() {
             <p className={detailSectionTitleClass}>Gateway Configuration</p>
             <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               <DetailValue label="FQDN" value={gateway.fqdn} mono />
-              <DetailValue label="Certificate Expires" value={formatDateTime(gateway.cert_expires_at)} />
+              <DetailValue label="Certificate" value={gatewayRevoked ? 'Invalidated' : formatDateTime(gateway.cert_expires_at)} />
             </div>
           </div>
 
@@ -192,7 +215,7 @@ export default function GatewayDetail() {
                     <DetailSummaryItem key={resource.id} onClick={() => navigate(`/dashboard/resources/${encodeURIComponent(resource.id)}`)}>
                       <span className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="truncate text-base font-semibold text-text-primary hover:text-accent">{resource.name || resource.id}</span>
-                        <Badge variant="info">{(resource.type || '-').toUpperCase()}</Badge>
+                        <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
                         <Badge variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</Badge>
                       </span>
                       <span className="mt-1 block truncate text-xs text-text-secondary">

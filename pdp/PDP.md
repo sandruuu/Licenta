@@ -7,10 +7,10 @@ interne clare:
 - PA, Policy Administrator: orchestreaza fluxuri, sesiuni, identitati,
   certificate, Gateway-uri, resurse, audit si transport.
 - PE, Policy Engine: evalueaza determinist contextul de acces si returneaza
-  `allow`, `deny` sau `mfa_required`.
+  `allow`, `deny` sau `step_up_required`.
 
 Documentul acesta este documentatia canonica pentru implementarea existenta din
-`pdp/`. Nu include functionalitati planificate care nu exista in cod.
+`pdp/`.
 
 ## Runtime
 
@@ -45,7 +45,7 @@ La pornire, `cmd/pdp/main.go`:
 pdp/
   cmd/pdp/              entrypoint runtime
   config/               model config, defaults, loader JSON
-  models/               modele API, auth, audit, tenant, resource, policy, device
+  models/               modele API, auth, audit, organization, resource, policy, device
   store/                SQLite schema, migrari, CRUD pe entitati
   pa/                   Policy Administrator
     auth/               user auth, JWT, OIDC, federation, TOTP
@@ -76,7 +76,7 @@ pdp/
 - server: `listen_addr`, `pdp_fqdn`, `tls_cert`, `mtls_ca`;
 - Vault PKI: `pki_url`, `pki_token`, `pki_path`, roluri PDP/device/Gateway,
   `pki_transit_key`, CA file, SNI si timeout;
-- JWT: expiry, MFA token expiry, Vault Transit key pentru cheia JWT;
+- JWT: auth token expiry, enrollment token TTL, Vault Transit key pentru cheia JWT;
 - sesiuni: durata sesiune si numar maxim de sesiuni per user;
 - securitate: lockout dupa login attempts;
 - date: `data_dir`, `database_path`, fisiere encrypted key;
@@ -100,7 +100,7 @@ Persistenta este SQLite si este initializata in `store/schema.go`.
 Schema curenta include:
 
 - `users`
-- `tenants`
+- `organizations`
 - `schema_meta`
 - `policy_rules`
 - `policy_assignments`
@@ -123,7 +123,7 @@ Schema curenta include:
 - `directory_groups`
 - `directory_group_members`
 
-Store-ul este impartit pe fisiere pe domenii: `users.go`, `tenants.go`,
+Store-ul este impartit pe fisiere pe domenii: `users.go`, `organizations.go`,
 `resources.go`, `policies.go`, `sessions.go`, `gateways.go`,
 `enrollments.go`, `device_data.go`, `audit.go`, `directory.go`,
 `identity_auth.go`, `tokens.go`, `pending.go`, `serialization.go` si
@@ -138,21 +138,22 @@ redenominarea device-data.
 
 Modelele sunt in `models/`.
 
-- `Tenant`: organizatie izolata, domenii HRD, IdP implicit.
-- `IdentityProviderConfig`: IdP OIDC per tenant, domenii, discovery, claim
+- `Organization`: organizatie izolata, domenii HRD, IdP implicit.
+- `IdentityProviderConfig`: IdP OIDC per organization, domenii, discovery, claim
   mapping, group-role mapping si token SCIM.
-- `User`: utilizator local sau federat, rol, tenant, MFA methods, sursa auth.
+- `User`: utilizator local sau federat, rol, organization, MFA methods, sursa auth.
 - `DirectoryUser`, `DirectoryGroup`: obiecte provisionate prin SCIM.
-- `Resource`: resursa protejata, host intern, port, `external_url`, tenant,
+- `Resource`: resursa protejata, host intern, port, `external_url`, organization,
   Gateway, cert metadata, tag-uri, metadata.
-- `Gateway`: Gateway inscris, tenant, certificat mTLS, token enrollment,
+- `Gateway`: Gateway inscris, organization, certificat mTLS, token enrollment,
   endpoint public/listen, resurse asignate, federation config legacy.
-- `PolicyRule`: regula reutilizabila, conditii, prioritate, actiune.
+- `PolicyRule`: regula reutilizabila de conditional access, cu sectiuni de
+  conditii, actiune si metadate de aplicare.
 - `PolicyAssignment`: atasare regula la nivel `organization`, `group`,
   `resource` sau `resource_group`.
 - `Session`: sesiune autorizata PA, user, device, resursa, Gateway, protocol,
-  risc, tenant, expirare si revocare.
-- `DeviceEnrollment`: stare enrollment device, CSR/certificat, user si tenant.
+  risc, organization, expirare si revocare.
+- `DeviceEnrollment`: stare enrollment device, CSR/certificat, user si organization.
 - `DeviceHealthReport`: raport compatibil scorificat.
 - `DeviceDataReport`: date brute normalizate de dispozitiv.
 - `AuditEntry`: eveniment audit.
@@ -176,7 +177,7 @@ Modelele sunt in `models/`.
 - `Cfg`
 
 PA coordoneaza fluxurile cu efecte laterale si apeleaza PE doar pentru decizia
-determinista. PA valideaza tokenuri, incarca user/tenant/grupuri/resurse,
+determinista. PA valideaza tokenuri, incarca user/organization/grupuri/resurse,
 incarca device-data, calculeaza context geo, creeaza sesiuni, provision-eaza
 Gateway-ul, publica evenimente si scrie audit.
 
@@ -188,38 +189,119 @@ Inputul PE este `evaluation.AccessContext`, care contine:
 
 - `models.AccessRequest`
 - reguli deja incarcate de PA/store
+- context MFA/step-up deja satisfacut, prin `models.AuthContext`
 - rol si email user
 - identitate directory si grupuri
 - failed login attempts
+- starea MFA a utilizatorului
+- tara/cod tara si daca locatia IP este cunoscuta
 - timpul curent
-- geo velocity si impossible travel
+- geo velocity, new location, impossible travel si baseline anomaly
 
 `Engine.Evaluate`:
 
 1. calculeaza scorul de risc prin `pe/risk.CalculateRiskScore`;
-2. parcurge regulile active in ordinea furnizata de PA/store;
-3. verifica toate conditiile;
-4. intoarce actiunea primei reguli potrivite;
-5. daca nu exista regula potrivita, returneaza `deny` fail-closed.
+2. construieste semnalele de acces observate, de exemplu `new_location`,
+   `impossible_travel` si `sensitive_protocol`;
+3. parcurge toate regulile active furnizate de PA/store;
+4. ignora regulile care nu se potrivesc contextului cererii;
+5. combina efectele tuturor regulilor care se potrivesc;
+6. returneaza `deny` fail-closed daca nicio regula nu se potriveste.
 
-Conditiile existente includ:
+Modelul curent este similar Microsoft Entra Conditional Access: mai multe
+politici pot fi aplicate aceluiasi target, iar PE nu foloseste ordinea ca
+mecanism principal de override. Ordinea din store ramane utila doar pentru
+determinism si pentru alegerea unei reguli reprezentative in `matched_rule`.
+Decizia finala respecta prioritatea:
 
-- roluri, useri, grupuri;
-- IP-uri permise/blocate;
-- endpoint trust policy si bypass IP;
-- block compromised endpoints;
-- comportament separat pentru endpoint-uri mobile;
-- date range, blocked dates, timezone, time window, zile permise;
+```text
+Block/Deny > Require MFA/step_up_required > Skip MFA > Allow
+```
+
+`Skip MFA` este tratat ca un efect de permitere fara step-up doar daca nicio
+alta politica potrivita nu cere MFA si nicio politica potrivita nu blocheaza.
+Daca o politica globala cere MFA si o politica de aplicatie incearca bypass,
+rezultatul final ramane `step_up_required`.
+
+Politicile sunt atasate prin `PolicyAssignment` pe patru niveluri:
+
+- `organization`: global pentru organizatie;
+- `group`: pentru un grup de utilizatori, indiferent de aplicatie;
+- `resource`: pentru o aplicatie/resursa, indiferent de grup;
+- `resource_group`: pentru un grup care acceseaza o resursa specifica.
+
+Se pot aplica mai multe politici pe acelasi nivel/target. UI-ul nu mai expune
+ordonare manuala pentru assignments.
+
+Pentru fiecare organizatie, store-ul creeaza automat o politica globala default:
+
+- ID: `policy-global-default-{organization_id}`;
+- assignment: `assignment-global-default-{organization_id}`;
+- scope: `organization`;
+- New User Policy: `require_enrollment`;
+- Authentication Policy: `enforce_mfa`;
+- metode step-up: `totp`, `webauthn`.
+
+Politica globala default este creata la initializarea store-ului si la crearea
+unei organizatii noi. Ea nu poate fi stearsa si nu poate fi asignata manual.
+
+Sectiunile de politica implementate in model/UI:
+
+- Details: nume, descriere, enabled si assignments curente.
+- New User Policy:
+  - `require_enrollment`;
+  - `allow_without_mfa`;
+  - `deny`.
+- Authentication Policy:
+  - `enforce_mfa`;
+  - `bypass_mfa`;
+  - `deny`;
+  - metode step-up disponibile cand MFA este cerut: TOTP si WebAuthn/passkey.
+- Risk-Based Authentication:
+  - cand este activata, cere MFA pentru semnale interne de risc:
+    `new_location`, `unrealistic_travel`/`impossible_travel` si
+    `user_baseline_anomaly`;
+  - baseline-ul utilizatorului necesita istoric suficient de accesuri
+    geolocate, calculat in componenta geo/policies.
+- User Location:
+  - reguli pe tari selectate;
+  - actiune pentru toate celelalte tari;
+  - actiune pentru locatii necunoscute;
+  - actiuni posibile: allow, require MFA, skip MFA, block.
+- Authorized Networks:
+  - allow access from these networks;
+  - skip MFA from these networks;
+  - require MFA from these networks every time;
+  - block access from these networks;
+  - block access from any other network not specified above;
+  - valorile acceptate sunt IP, CIDR si intervale IP `start-end`.
+- Device Health:
+  - required checks;
+  - expected status, implicit `good`;
+  - daca politica se potriveste si un required check lipseste sau nu are
+    statusul asteptat, PE returneaza `deny`.
+
+Conditiile suplimentare suportate in model/engine, chiar daca nu toate au UI
+dedicat in editorul curent:
+
+- roluri, useri si grupuri permise;
+- ferestre de timp, zile permise, blocked dates, date range si timezone;
 - resurse tinta si porturi tinta;
-- process identity required;
+- process identity obligatoriu;
 - procese permise/blocate dupa nume;
-- hash-uri proces permise/blocate;
-- scor minim device health;
-- required checks si status cerut.
+- hash-uri de proces permise/blocate;
+- risk score minim/maxim, niveluri de risc si semnale de risc;
+- session controls: max age, revalidate interval, revoke on posture change si
+  revoke on risk increase.
+
+Cand mai multe politici potrivite definesc session controls, PE combina
+valorile restrictiv: cea mai mica durata nenula pentru expirare/revalidare si
+OR logic pentru revocari.
 
 Risk score-ul include device health/data staleness, scor health, check-uri
-critice, failed login attempts, business hours, protocol, impossible travel,
-geo velocity si anomaly score.
+critice, failed login attempts, business hours, new device, new location,
+protocol, impossible travel, geo velocity, user baseline anomaly si anomaly
+score.
 
 ## Autentificare, OIDC si MFA
 
@@ -227,7 +309,7 @@ geo velocity si anomaly score.
 
 - user manager cu register, authenticate, lockout, role update;
 - TOTP RFC 6238;
-- JWT ES256 pentru auth token, MFA token, enrollment token si agent session
+- JWT ES256 pentru auth token, enrollment token si agent session
   token;
 - JWKS;
 - OIDC manager cu authorization code, PKCE, refresh token si native Connect-App
@@ -243,16 +325,14 @@ TOTP este implementat in `pa/auth/totp.go`. Modelul `PushChallenge` exista in
 Endpoint-uri relevante:
 
 - `/api/auth/login`
-- `/api/auth/verify-mfa`
-- `/api/auth/mfa-step-up`
+- `/api/auth/mfa/verify`
 - `/api/auth/register`
-- `/api/auth/enroll-mfa`
-- `/api/auth/activate-mfa`
 - `/api/auth/revoke-token`
-- `/api/mfa/webauthn/register/begin`
-- `/api/mfa/webauthn/register/finish`
-- `/api/mfa/webauthn/authenticate/begin`
-- `/api/mfa/webauthn/authenticate/finish`
+- `/browser/step-up/{challenge_id}`
+- `/api/step-up/webauthn/begin`
+- `/api/step-up/webauthn/finish`
+- `/api/step-up/webauthn/register/begin`
+- `/api/step-up/webauthn/register/finish`
 - `/auth/authorize`
 - `/auth/token`
 - `/auth/userinfo`
@@ -260,19 +340,19 @@ Endpoint-uri relevante:
 - `/.well-known/openid-configuration`
 - `/.well-known/jwks.json`
 
-## Multi-Tenant, HRD si SCIM
+## Organizations, HRD si SCIM
 
-Multi-tenancy este modelata prin `Tenant`, `IdentityProviderConfig`,
-`tenant_id` pe entitati si prin paginile de organizatii din dashboard.
+Izolarea este modelata prin `Organization`, `IdentityProviderConfig`,
+`organization_id` pe entitati si prin paginile de organizatii din dashboard.
 
 Home Realm Discovery este in `pa/transport/oidc_hrd.go`. Rezolutia IdP-ului
 urmeaza aceasta ordine:
 
 1. `idp_id` explicit;
 2. domeniu din `login_hint`;
-3. `tenant_id` explicit;
-4. context tenant derivat din Gateway client legacy;
-5. fallback single-tenant.
+3. `organization_id` explicit;
+4. context organization derivat din Gateway client legacy;
+5. fallback single-organization.
 
 SCIM inbound este in `pa/transport/scim_handlers.go` si expune o suprafata
 deliberat mica pentru IdP provisioning:
@@ -331,6 +411,8 @@ Serviciul gRPC include:
 - `ClaimSession`
 - `GetCatalog`
 - `RevokeSession`
+- `trustagent.events.AgentEventsService/Watch`, ca stream separat pentru
+  invalidari de catalog si revocari relevante pentru sesiunea Agent.
 
 PDP creeaza o tranzactie de autentificare browser, mediaza OIDC/IdP, apoi la
 claim emite `agent_session_token`. Tokenul este legat de certificatul mTLS al
@@ -339,6 +421,7 @@ device-ului prin thumbprint si include scope-uri precum:
 - `catalog:read`
 - `flow:authorize`
 - `session:revoke`
+- `events:read`
 
 Catalogul este construit in `pa/catalog` si contine:
 
@@ -348,7 +431,7 @@ Catalogul este construit in `pa/catalog` si contine:
 - `policy_epoch`
 - `device_data_policy`
 
-Resursele din catalog sunt filtrate pe tenant, user, grupuri si politici.
+Resursele din catalog sunt filtrate pe organization, user, grupuri si politici.
 `external_url` este sursa FQDN-ului expus catre Agent. Catalogul include doar
 resurse active si accesibile explicit prin politicile aplicabile.
 
@@ -376,7 +459,7 @@ health/device-data prin broker-ul PA.
 `pa/resources` implementeaza:
 
 - list/create/get/update/delete resurse;
-- validare tenant si Gateway;
+- validare organization si Gateway;
 - generare credentiale per-app ramase compatibile cu baze vechi;
 - metadata, tags, certificate fields;
 - emitere evenimente CAEP-style pentru resurse actualizate.
@@ -385,7 +468,7 @@ health/device-data prin broker-ul PA.
 
 - `host` si `port` pentru target intern Gateway;
 - `external_url` pentru FQDN-ul vazut de Agent;
-- `tenant_id` pentru izolare;
+- `organization_id` pentru izolare;
 - `gateway_id` pentru Gateway-ul care poate ajunge la target;
 - `type` pentru protocol derivat in catalog (`web` -> `http/https` dupa URL).
 
@@ -404,7 +487,7 @@ Endpoint-uri admin:
 - enrollment mTLS cu CSR;
 - certificate renewal;
 - revocarea certificatului vechi la renewal;
-- validare tenant si resurse asignate;
+- validare organization si resurse asignate;
 - registry de conexiuni control plane;
 - comenzi `provision_session`, `revoke_session`, `heartbeat`.
 
@@ -414,6 +497,7 @@ Servicii gRPC:
 - `gateway.GatewayEnrollmentService/RenewCertificate`
 - `gateway.GatewayTrustService/GetCACertificate`
 - `gateway.GatewayTrustService/GetRevokedSerials`
+- `gateway.GatewayTrustService/RevalidateSessions`
 - `gateway.GatewayControlService/ControlStream`
 
 Endpoint-uri admin:
@@ -430,6 +514,13 @@ Cand Agentul cere autorizarea unei conexiuni si PE returneaza `allow`, PA:
 5. returneaza Agentului `session_id`, `session_token`, Gateway si expiry.
 
 Daca provisioning-ul Gateway esueaza, sesiunea PA este revocata.
+
+Daca PE returneaza `step_up_required`, PA creeaza un `StepUpChallenge` cu TTL,
+metode permise si URL browser. In acest caz PA nu creeaza sesiune de resursa si
+nu provisioneaza Gateway-ul. Agentul primeste decizia impreuna cu URL-ul de
+step-up, afiseaza/deschide browserul pentru utilizator, iar dupa finalizarea
+MFA trimite o noua cerere de autorizare pentru aceeasi resursa. PE vede atunci
+contextul MFA satisfacut prin `AuthContext` si poate returna `allow`.
 
 ## Agent Flow Authorization
 
@@ -456,8 +547,10 @@ Validari importante:
 - tokenul trebuie sa fie legat de certificatul device curent;
 - tokenul trebuie sa includa scope-ul `flow:authorize`;
 - resursa trebuie sa fie activa;
-- resursa trebuie sa aiba tenant si Gateway;
+- resursa trebuie sa aiba organization si Gateway;
 - Gateway-ul trebuie sa fie conectat pentru provisioning.
+- daca decizia este `step_up_required`, raspunsul include `step_up_url`,
+  `step_up_challenge_id`, metodele permise si ACR-ul cerut.
 
 ## Audit si Evenimente
 
@@ -469,6 +562,18 @@ poate verifica integritatea lantului.
 schimbari de sanatate/device-data, resurse, politici, sesiuni, revocari si
 alte notificari interne. Broker-ul tine buffer configurabil si numara mesaje
 drop-uite per subscription.
+
+Agentul consuma evenimente relevante prin
+`trustagent.events.AgentEventsService/Watch`. Stream-ul este filtrat pe
+identitatea din `agent_session_token` si pe certificatul mTLS device. Evenimente
+transmise catre Agent:
+
+- `access.revoked`, pentru sesiuni sterse, device revocat sau acces revocat;
+- `catalog.invalidated`, pentru schimbari de resurse, politici sau Gateway-uri.
+
+Agentul reactioneaza fie prin revocarea sesiunii locale, fie prin refresh de
+catalog. Broker-ul este in-memory; pentru productie multi-instanta ar fi nevoie
+de un broker persistent/distribuit.
 
 Endpoint-uri admin:
 
@@ -510,6 +615,7 @@ Categorii HTTP expuse de `pa/transport`:
   - `/auth/login`
   - `/browser/enroll/`
   - `/browser/session/`
+  - `/browser/step-up/`
 - OIDC:
   - `/auth/authorize`
   - `/auth/token`
@@ -518,13 +624,14 @@ Categorii HTTP expuse de `pa/transport`:
   - `/.well-known/openid-configuration`
   - `/.well-known/jwks.json`
 - SCIM:
-  - `/scim/v2/{tenant_id}/...`
-- auth/MFA:
+  - `/scim/v2/{organization_id}/...`
+- auth:
   - `/api/auth/*`
-  - `/api/mfa/webauthn/*`
+- resource step-up MFA:
+  - `/api/step-up/webauthn/*`
 - admin:
   - `/api/admin/users`
-  - `/api/admin/tenants`
+  - `/api/admin/organizations`
   - `/api/admin/sessions`
   - `/api/admin/audit`
   - `/api/admin/directory/users`
@@ -536,7 +643,8 @@ Categorii HTTP expuse de `pa/transport`:
   - `/api/admin/device-data`
   - `/api/admin/dashboard`
   - `/api/admin/gateways`
-  - `/api/admin/tenants/idps`
+  - `/api/admin/organizations/idps/discover`
+  - `/api/admin/organizations/idps`
 - dashboard SPA:
   - `/dashboard`
   - `/dashboard/`
@@ -550,6 +658,7 @@ PDP inregistreaza aceste servicii gRPC peste acelasi listener HTTPS:
 - `trustcloud.catalog.DeviceCatalogService`
 - `trustagent.device.DeviceDataService`
 - `trustcloud.agent.AgentAuthorizationService`
+- `trustagent.events.AgentEventsService`
 - `gateway.GatewayEnrollmentService`
 - `gateway.GatewayTrustService`
 - `gateway.GatewayControlService`
@@ -579,13 +688,10 @@ Rute curente:
 - `/dashboard/device-health`
 - `/dashboard/audit`
 
-`/dashboard/tenants` redirecteaza catre `/dashboard/organizations`, deoarece UI
-foloseste termenul organizatie pentru modelul `Tenant`.
-
 Dashboard-ul acopera:
 
 - overview si statistici;
-- organizatii/tenants si IdP-uri;
+- organizatii si IdP-uri;
 - Gateway-uri si detalii Gateway;
 - resurse si detalii resursa;
 - protect app flow;
@@ -620,8 +726,7 @@ Proprietati relevante implementate:
 - Campurile `client_id` si `client_secret` de pe `resources` sunt pastrate doar
   pentru baze de date mai vechi; resursele protejate nu mai sunt clienti OIDC.
 - `gateway.FederationConfig` este pastrat ca model legacy pentru configuratii
-  Gateway mai vechi; fluxul curent foloseste IdP-uri per tenant.
-- `/dashboard/tenants` ramane redirect catre `/dashboard/organizations`.
+  Gateway mai vechi; fluxul curent foloseste IdP-uri per organization.
 
 ## Validare
 

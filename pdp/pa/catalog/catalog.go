@@ -98,9 +98,12 @@ func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.Us
 			continue
 		}
 		switch strings.ToLower(strings.TrimSpace(rule.Action)) {
-		case "allow", "mfa_required":
+		case models.DecisionAllow, models.DecisionStepUpRequired:
 			return true
 		case "deny":
+			if !rule.Conditions.AccessConditions.Empty() {
+				continue
+			}
 			return false
 		}
 	}
@@ -151,11 +154,7 @@ func ResourceProtocol(resource *models.Resource) string {
 		protocol = "tcp"
 	}
 	if protocol == "web" {
-		if parsed, err := url.Parse(strings.TrimSpace(resource.ExternalURL)); err == nil && parsed.Scheme != "" {
-			protocol = strings.ToLower(parsed.Scheme)
-		} else {
-			protocol = "https"
-		}
+		protocol = "https"
 	}
 	return protocol
 }
@@ -250,14 +249,14 @@ func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user 
 			if !catalogRuleMatchesIdentity(rule, user, groupIDs, groupNames, resource) {
 				continue
 			}
-			checks := normalizeCheckNames(rule.Conditions.RequiredChecks)
+			checks := normalizeCheckNames(rule.Conditions.DevicePosture.RequiredChecks)
 			if len(checks) == 0 {
 				continue
 			}
 			for _, check := range checks {
 				required[check] = struct{}{}
 			}
-			status := normalizeDeviceDataStatus(rule.Conditions.RequiredCheckStatus)
+			status := normalizeDeviceDataStatus(rule.Conditions.DevicePosture.RequiredStatus)
 			if status == "" {
 				status = "good"
 			}
@@ -282,7 +281,8 @@ func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user 
 
 func deviceDataPolicyRuleAction(action string) bool {
 	action = strings.ToLower(strings.TrimSpace(action))
-	return action == "allow" || action == "mfa_required"
+	action, _ = models.NormalizePolicyAction(action)
+	return action == models.DecisionAllow || action == models.DecisionStepUpRequired
 }
 
 func normalizeDeviceDataPolicy(policy DeviceDataPolicy) DeviceDataPolicy {

@@ -1,6 +1,9 @@
 networks:
   gateway-net:
     driver: bridge
+  truststack-private:
+    external: true
+    name: truststack_private
 
 volumes:
   gateway-certs:
@@ -19,8 +22,18 @@ services:
       - "${GATEWAY_HOST_PORT:-9443}:9443"
     environment:
       GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:-}
+      GATEWAY_PUBLIC_ENDPOINT: ${GATEWAY_PUBLIC_ENDPOINT:-localhost:9443}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /app/certs/pa-ca.crt ] && [ -f /bootstrap/vault-pki-ca-cert.pem ]; then
+          cp /bootstrap/vault-pki-ca-cert.pem /app/certs/pa-ca.crt
+        fi
+        exec ./gateway
     volumes:
       - ./config.json:/app/config.json:ro
+      - ../pdp/data:/bootstrap:ro
       - gateway-certs:/app/certs
     networks:
       - gateway-net
+      - truststack-private

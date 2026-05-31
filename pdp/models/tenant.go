@@ -17,6 +17,14 @@ type Tenant struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// OrganizationMembership links a PDP administrator account to an organization.
+type OrganizationMembership struct {
+	UserID         string    `json:"user_id"`
+	OrganizationID string    `json:"organization_id"`
+	Role           string    `json:"role"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 // IdentityProviderConfig defines an external OIDC provider trusted by a tenant.
 type IdentityProviderConfig struct {
 	ID       string `json:"id"`

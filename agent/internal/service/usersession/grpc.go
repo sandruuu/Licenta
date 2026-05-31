@@ -179,10 +179,11 @@ func (client *GRPCClient) GetCatalog(ctx context.Context, request GetCatalogRequ
 	}
 	fields := response.AsMap()
 	return CatalogResponse{
-		Version:     stringField(fields, "version"),
-		Resources:   catalogResources(fields["resources"]),
-		TTLSeconds:  int(numberField(fields, "ttl_seconds")),
-		PolicyEpoch: stringField(fields, "policy_epoch"),
+		Version:          stringField(fields, "version"),
+		Resources:        catalogResources(fields["resources"]),
+		TTLSeconds:       int(numberField(fields, "ttl_seconds")),
+		PolicyEpoch:      stringField(fields, "policy_epoch"),
+		DeviceDataPolicy: deviceDataPolicy(fields["device_data_policy"]),
 	}, nil
 }
 
@@ -284,4 +285,29 @@ func catalogResources(value any) []ipc.CatalogResource {
 		}
 	}
 	return resources
+}
+
+func deviceDataPolicy(value any) ipc.DeviceDataPolicy {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return ipc.DeviceDataPolicy{}
+	}
+	return ipc.DeviceDataPolicy{
+		RequiredChecks:      stringSliceField(fields["required_checks"]),
+		RequiredCheckStatus: stringField(fields, "required_check_status"),
+	}
+}
+
+func stringSliceField(value any) []string {
+	raw, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	values := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+			values = append(values, text)
+		}
+	}
+	return values
 }

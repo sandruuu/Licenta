@@ -13,15 +13,24 @@ import (
 	"time"
 
 	"pdp/config"
+	"pdp/models"
 	"pdp/store"
+)
+
+const (
+	userBaselineWindow       = 30 * 24 * time.Hour
+	userBaselineMaxLocations = 50
+	userBaselineMinLocations = 5
+	userBaselineMinDays      = 3
 )
 
 // GeoLocation holds the result of an IP geolocation lookup.
 type GeoLocation struct {
-	Latitude  float64
-	Longitude float64
-	City      string
-	Country   string
+	Latitude    float64
+	Longitude   float64
+	City        string
+	Country     string
+	CountryCode string
 }
 
 // geoCache is a single cached geolocation entry with TTL.
@@ -135,6 +144,7 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		Longitude   float64 `json:"longitude"`
 		City        string  `json:"city"`
 		CountryName string  `json:"country_name"`
+		CountryCode string  `json:"country_code"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Printf("[GEO] provider decode failed for %s: %v", ip, err)
@@ -147,10 +157,11 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 	}
 
 	loc := GeoLocation{
-		Latitude:  result.Latitude,
-		Longitude: result.Longitude,
-		City:      result.City,
-		Country:   result.CountryName,
+		Latitude:    result.Latitude,
+		Longitude:   result.Longitude,
+		City:        result.City,
+		Country:     result.CountryName,
+		CountryCode: result.CountryCode,
 	}
 
 	g.mu.Lock()
@@ -188,6 +199,20 @@ type GeoVelocityResult struct {
 	SpeedKmH     float64 // estimated travel speed in km/h
 	DistanceKm   float64 // great-circle distance in km
 	TimeDeltaH   float64 // time between events in hours
+}
+
+// AccessLocationContext describes the location context observed for an access
+// request.
+type AccessLocationContext struct {
+	IsNewLocation            bool
+	LocationKnown            bool
+	Country                  string
+	CountryCode              string
+	UserBaselineReady        bool
+	UserBaselineAnomaly      bool
+	UserBaselineEventCount   int
+	UserBaselineDistinctDays int
+	GeoVelocityResult
 }
 
 // CheckImpossibleTravel compares the given IP's location against the user's
@@ -251,6 +276,107 @@ func (g *GeoLocator) CheckImpossibleTravel(userID, sourceIP string) GeoVelocityR
 	}
 
 	return result
+}
+
+// CheckAccessLocation evaluates whether the current request comes from a new
+// location and whether it implies impossible travel.
+func (g *GeoLocator) CheckAccessLocation(userID, sourceIP string) AccessLocationContext {
+	empty := AccessLocationContext{}
+
+	currentLoc, _ := g.Locate(sourceIP)
+	if currentLoc.Latitude == 0 && currentLoc.Longitude == 0 {
+		return empty
+	}
+
+	ctx := AccessLocationContext{
+		LocationKnown: true,
+		Country:       currentLoc.Country,
+		CountryCode:   currentLoc.CountryCode,
+	}
+
+	prev, err := g.store.GetLastLoginLocation(userID)
+	if err != nil || prev == nil {
+		return ctx
+	}
+
+	recent, recentErr := g.store.GetRecentLoginLocations(userID, userBaselineMaxLocations)
+	if recentErr == nil && len(recent) > 0 {
+		ctx.IsNewLocation = true
+		for _, known := range recent {
+			if known == nil {
+				continue
+			}
+			if haversineKm(known.Latitude, known.Longitude, currentLoc.Latitude, currentLoc.Longitude) < g.sameAreaDistanceKM {
+				ctx.IsNewLocation = false
+				break
+			}
+		}
+		g.populateUserBaseline(&ctx, recent, currentLoc)
+	}
+
+	dist := haversineKm(prev.Latitude, prev.Longitude, currentLoc.Latitude, currentLoc.Longitude)
+	if dist < g.sameAreaDistanceKM {
+		return ctx
+	}
+
+	timeDelta := time.Since(prev.Timestamp).Hours()
+	if timeDelta <= 0 {
+		timeDelta = 0.001
+	}
+
+	speed := dist / timeDelta
+	result := GeoVelocityResult{
+		SpeedKmH:   speed,
+		DistanceKm: dist,
+		TimeDeltaH: timeDelta,
+	}
+
+	switch {
+	case speed > g.impossibleTravelSpeedKMH:
+		result.IsImpossible = true
+		result.IsSuspicious = true
+		log.Printf("[GEO] IMPOSSIBLE TRAVEL: user=%s speed=%.0f km/h dist=%.0f km time=%.2f h (%s -> %s)",
+			userID, speed, dist, timeDelta, prev.City, currentLoc.City)
+	case speed > g.suspiciousTravelSpeedKMH:
+		result.IsSuspicious = true
+		log.Printf("[GEO] SUSPICIOUS TRAVEL: user=%s speed=%.0f km/h dist=%.0f km time=%.2f h (%s -> %s)",
+			userID, speed, dist, timeDelta, prev.City, currentLoc.City)
+	}
+
+	ctx.GeoVelocityResult = result
+	return ctx
+}
+
+func (g *GeoLocator) populateUserBaseline(ctx *AccessLocationContext, recent []*models.LoginLocation, currentLoc GeoLocation) {
+	if ctx == nil {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-userBaselineWindow)
+	distinctDays := map[string]struct{}{}
+	baseline := make([]*models.LoginLocation, 0, len(recent))
+	for _, loc := range recent {
+		if loc == nil || loc.Timestamp.IsZero() || loc.Timestamp.Before(cutoff) {
+			continue
+		}
+		baseline = append(baseline, loc)
+		distinctDays[loc.Timestamp.UTC().Format("2006-01-02")] = struct{}{}
+	}
+
+	ctx.UserBaselineEventCount = len(baseline)
+	ctx.UserBaselineDistinctDays = len(distinctDays)
+	ctx.UserBaselineReady = ctx.UserBaselineEventCount >= userBaselineMinLocations &&
+		ctx.UserBaselineDistinctDays >= userBaselineMinDays
+	if !ctx.UserBaselineReady {
+		return
+	}
+
+	ctx.UserBaselineAnomaly = true
+	for _, known := range baseline {
+		if haversineKm(known.Latitude, known.Longitude, currentLoc.Latitude, currentLoc.Longitude) < g.sameAreaDistanceKM {
+			ctx.UserBaselineAnomaly = false
+			return
+		}
+	}
 }
 
 // SaveCurrentLocation stores the current login location for future travel checks.

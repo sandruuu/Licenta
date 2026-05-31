@@ -105,6 +105,7 @@ func initializePolicyAdministrator(cfg *config.Config, dataStore *store.Store, s
 
 	ensureBootstrapAdmin(policyAdmin, cfg.BootstrapAdmin)
 	policyAdmin.Sessions.StartCleanupLoop(cfg.Runtime.SessionCleanupInterval, stopChan)
+	policyAdmin.Enrollment.StartCleanupLoop(cfg.Runtime.EnrollmentCleanupInterval, stopChan)
 	return policyAdmin
 }
 
@@ -150,6 +151,10 @@ func ensureBootstrapAdmin(policyAdmin *pa.PolicyAdministrator, admin config.Boot
 	if !admin.Enabled {
 		return
 	}
+	if admin.Password == "" || admin.Password == "admin" {
+		log.Printf("[INIT] Refusing insecure bootstrap admin password; use self-registration or configure a strong bootstrap secret")
+		return
+	}
 	users := policyAdmin.Store.ListUsers()
 	for _, u := range users {
 		if u.Username == admin.Username {
@@ -165,6 +170,10 @@ func ensureBootstrapAdmin(policyAdmin *pa.PolicyAdministrator, admin config.Boot
 		log.Printf("[INIT] Failed to create bootstrap admin: %v", err)
 		return
 	}
-	policyAdmin.Auth.Users.SetUserRole(user.ID, admin.Role)
-	log.Printf("[INIT] Bootstrap admin ensured: %s (role=%s)", admin.Username, admin.Role)
+	role := admin.Role
+	if role == "" || role == "admin" {
+		role = "platform_admin"
+	}
+	policyAdmin.Auth.Users.SetUserRole(user.ID, role)
+	log.Printf("[INIT] Bootstrap admin ensured: %s (role=%s)", admin.Username, role)
 }

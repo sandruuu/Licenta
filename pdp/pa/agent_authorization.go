@@ -24,22 +24,25 @@ type AgentAuthorizationRequest struct {
 	Port                 int
 	Process              *models.ProcessIdentity
 	SourceIP             string
+	PublicOrigin         string
 }
 
 type AgentAuthorizationResponse struct {
-	Decision        string
-	Reason          string
-	RiskScore       int
-	MatchedRule     string
-	Policies        []string
-	SessionID       string
-	SessionToken    string
-	GatewayID       string
-	GatewayEndpoint string
-	ResourceID      string
-	Protocol        string
-	Port            int
-	ExpiresAt       time.Time
+	Decision          string
+	Reason            string
+	RiskScore         int
+	MatchedRule       string
+	Policies          []string
+	SessionID         string
+	SessionToken      string
+	GatewayID         string
+	GatewayEndpoint   string
+	GatewayServerName string
+	ResourceID        string
+	Protocol          string
+	Port              int
+	ExpiresAt         time.Time
+	StepUp            *models.StepUpRequirement
 }
 
 type GatewayProvisionedSession = pagateway.ProvisionedSession
@@ -86,17 +89,31 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	}
 	if pa != nil && pa.Store != nil {
 		if deviceData, ok := pa.Store.GetDeviceData(deviceID); ok {
-			accessReq.DeviceHealth = deviceHealthFromData(deviceData)
+			accessReq.DeviceHealth = DeviceHealthFromData(deviceData)
 		} else if health, ok := pa.Store.GetDeviceHealth(deviceID); ok {
 			accessReq.DeviceHealth = health
 		}
 	}
 
-	decision := pa.EvaluateAccess(accessReq)
+	authCtx := models.AuthContext{
+		ACR: strings.TrimSpace(claims.ACR),
+		AMR: append([]string(nil), claims.AMR...),
+	}
+	if pa != nil && pa.StepUps != nil {
+		if completed := pa.StepUps.AuthContext(claims.SessionID, claims.UserID, deviceID, resolved.resource.ID, time.Now().UTC()); completed.ACR != "" {
+			authCtx = completed
+		}
+	}
+	decision := pa.EvaluateAccessWithAuth(accessReq, authCtx)
 	if decision == nil {
 		return AgentAuthorizationResponse{}, newAccessError(AccessErrorInternal, "policy decision failed", nil)
 	}
-	if decision.Decision != "allow" {
+	if decision.Decision != models.DecisionAllow {
+		if decision.Decision == models.DecisionStepUpRequired {
+			if err := pa.attachStepUpChallenge(decision, req, claims, resolved.resource); err != nil {
+				log.Printf("[AGENT-AUTHZ] Failed to create step-up challenge: device=%s resource=%s err=%v", deviceID, resolved.resource.ID, err)
+			}
+		}
 		pa.auditAgentAuthorization(accessReq, decision, false)
 		return agentAuthorizationResponseFromDecision(decision), nil
 	}
@@ -105,14 +122,16 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	if err != nil {
 		return AgentAuthorizationResponse{}, err
 	}
-	session, err := pa.Sessions.CreateSession(decision, accessReq)
+	session, reusedSession, err := pa.Sessions.CreateOrRenewSession(decision, accessReq, pa.resourceSessionRenewBefore())
 	if err != nil {
-		log.Printf("[AGENT-AUTHZ] Failed to create PA session: %v", err)
+		log.Printf("[AGENT-AUTHZ] Failed to create or renew PA session: %v", err)
 		return AgentAuthorizationResponse{}, newAccessError(AccessErrorInternal, "failed to create session", err)
 	}
 	sessionToken, err := generateSessionToken()
 	if err != nil {
-		_ = pa.Sessions.RevokeSession(session.ID)
+		if !reusedSession {
+			_ = pa.Sessions.RevokeSession(session.ID)
+		}
 		return AgentAuthorizationResponse{}, newAccessError(AccessErrorInternal, "failed to generate session token", err)
 	}
 
@@ -132,7 +151,9 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		PolicyVersion: strings.TrimSpace(decision.MatchedRule),
 	}
 	if err := provisioner.ProvisionSession(ctx, gateway.ID, provision); err != nil {
-		_ = pa.Sessions.RevokeSession(session.ID)
+		if !reusedSession {
+			_ = pa.Sessions.RevokeSession(session.ID)
+		}
 		log.Printf("[AGENT-AUTHZ] Failed to provision Gateway session: gateway=%s session=%s err=%v", gateway.ID, session.ID, err)
 		return AgentAuthorizationResponse{}, newAccessError(AccessErrorConflict, "gateway is not ready for session provisioning", err)
 	}
@@ -140,17 +161,56 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	decision.SessionID = session.ID
 	decision.ExpiresAt = session.ExpiresAt.Unix()
 	pa.auditAgentAuthorization(accessReq, decision, true)
+	pa.recordAccessLocation(accessReq)
 
 	response := agentAuthorizationResponseFromDecision(decision)
 	response.SessionID = session.ID
 	response.SessionToken = sessionToken
 	response.GatewayID = gateway.ID
 	response.GatewayEndpoint = endpoint
+	response.GatewayServerName = strings.TrimSpace(gateway.FQDN)
 	response.ResourceID = resolved.resource.ID
 	response.Protocol = resolved.protocol
 	response.Port = resolved.port
 	response.ExpiresAt = session.ExpiresAt
 	return response, nil
+}
+
+func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDecision, req AgentAuthorizationRequest, claims *auth.CustomClaims, resource *models.Resource) error {
+	if pa == nil || pa.StepUps == nil || decision == nil || claims == nil || resource == nil {
+		return fmt.Errorf("step-up services are not available")
+	}
+	requirement := decision.StepUp
+	if requirement == nil {
+		requirement = &models.StepUpRequirement{}
+		decision.StepUp = requirement
+	}
+	challenge, err := pa.StepUps.CreateChallenge(StepUpChallengeRequest{
+		AgentSessionID: strings.TrimSpace(claims.SessionID),
+		UserID:         strings.TrimSpace(claims.UserID),
+		Username:       strings.TrimSpace(claims.Username),
+		TenantID:       strings.TrimSpace(resource.TenantID),
+		DeviceID:       strings.TrimSpace(req.DeviceID),
+		ResourceID:     strings.TrimSpace(resource.ID),
+		PolicyID:       strings.TrimSpace(decision.MatchedRule),
+		PublicOrigin:   strings.TrimSpace(req.PublicOrigin),
+		Requirement:    requirement,
+	})
+	if err != nil {
+		return err
+	}
+	requirement.ChallengeID = challenge.ID
+	requirement.URL = challenge.URL
+	requirement.Methods = append([]string(nil), challenge.Methods...)
+	requirement.MinStrength = challenge.MinStrength
+	requirement.WebAuthnAttachment = challenge.WebAuthnAttachment
+	requirement.AllowedAAGUIDs = append([]string(nil), challenge.AllowedAAGUIDs...)
+	requirement.RequiredACR = challenge.RequiredACR
+	requirement.MaxAgeSeconds = challenge.MaxAgeSeconds
+	requirement.ExpiresAt = challenge.ExpiresAt
+	requirement.PolicyID = challenge.PolicyID
+	requirement.ResourceID = challenge.ResourceID
+	return nil
 }
 
 func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (*auth.CustomClaims, error) {
@@ -319,7 +379,7 @@ func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Reso
 	return gateway, endpoint, nil
 }
 
-func deviceHealthFromData(report *models.DeviceDataReport) *models.DeviceHealthReport {
+func DeviceHealthFromData(report *models.DeviceDataReport) *models.DeviceHealthReport {
 	if report == nil {
 		return nil
 	}
@@ -384,6 +444,7 @@ func agentAuthorizationResponseFromDecision(decision *models.AccessDecision) Age
 		RiskScore:   decision.RiskScore,
 		MatchedRule: decision.MatchedRule,
 		Policies:    decision.Policies,
+		StepUp:      decision.StepUp,
 	}
 }
 
@@ -418,6 +479,13 @@ func (pa *PolicyAdministrator) auditAgentAuthorization(req models.AccessRequest,
 	pa.Audit.LogEvent("agent_access_request", req.UserID, req.Username, req.SourceIP, req.Resource, decision.Decision, decision.Reason, success)
 }
 
+func (pa *PolicyAdministrator) recordAccessLocation(req models.AccessRequest) {
+	if pa == nil || pa.Geo == nil || strings.TrimSpace(req.UserID) == "" || strings.TrimSpace(req.SourceIP) == "" {
+		return
+	}
+	pa.Geo.SaveCurrentLocation(req.UserID, req.SourceIP)
+}
+
 func firstNonEmptyString(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
@@ -425,4 +493,14 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (pa *PolicyAdministrator) resourceSessionRenewBefore() time.Duration {
+	if pa == nil || pa.Cfg == nil {
+		return time.Minute
+	}
+	if pa.Cfg.Runtime.ResourceSessionRenewBefore <= 0 {
+		return time.Minute
+	}
+	return pa.Cfg.Runtime.ResourceSessionRenewBefore
 }

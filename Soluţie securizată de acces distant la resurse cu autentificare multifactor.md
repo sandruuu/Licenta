@@ -2,15 +2,15 @@
 
 În cadrul implementării aplicației, a fost adoptată abordarea arhitecturală de tip Agent/Gateway, în conformitate cu principiile definite în standardul NIST SP 800-207.
 
-Această arhitectură se bazează pe separarea planului de control de planul de date, unde deciziile de acces sunt luate într-un punct central numit Policy Decision Point (PDP) și sunt executate în puncte de aplicare a politicilor numite Policy Enforcement Points (PEP). În modelul propus, Agentul instalat pe dispozitivul utilizatorului și Gateway-ul situat în fața resurselor acționează ca PEP-uri distribuite, în timp ce funcția de PDP este localizată în cloud pentru centralizarea logicii de acces.
+Această arhitectură se bazează pe separarea planului de control de planul de date, unde deciziile de acces sunt luate într-un punct central numit Policy Decision Point (PDP) și sunt executate în puncte de aplicare a politicilor numite Policy Enforcement Points (PEP). În modelul propus, Agentul instalat pe dispozitivul utilizatorului și Gateway-ul situat în fața resurselor acționează ca PEP-uri distribuite, în timp ce funcția de PDP centralizează logica de acces și poate fi publicată într-un mediu cloud sau rulată într-un mediu local/de laborator.
 
 ![][image1]
 
-Comunicarea dintre Agent și PA este utilizat gRPC peste HTTP/2 cu mTLS.
+Comunicarea dintre Agent și PA utilizează gRPC peste HTTP/2 cu mTLS.
 
 Canalul dintre Agent și Gateway este un tunel securizat prin mTLS, în interiorul căruia sunt multiplexate fluxuri logice corespunzătoare sesiunilor autorizate. Gateway-ul comunică la rândul său cu Policy Administrator prin gRPC peste HTTP/2 cu mTLS.
 
-Interacțiunea dintre Policy Administrator și Policy Engine este una internă, de tip request-response, prin care contextul cererii de acces este transmis către motorul de politici, iar acesta returnează una dintre deciziile allow, deny sau mfa\_required. Modulul MFA intern este orchestrat de Policy Administrator și comunică prin API-uri interne pentru generarea challenge-urilor, verificarea factorilor și actualizarea contextului de acces.
+Interacțiunea dintre Policy Administrator și Policy Engine este una internă, de tip request-response, în cadrul aceluiași proces PDP. Contextul cererii de acces este transmis către motorul de politici, iar acesta returnează una dintre deciziile allow, deny sau step\_up\_required. Decizia step\_up\_required indică faptul că utilizatorul trebuie să finalizeze o autentificare suplimentară înainte ca sesiunea de acces să fie creată și provisionată către Gateway.
 
 # Policy Decision Point (PDP) 
 
@@ -47,7 +47,7 @@ Interfața de administrare a Policy Administratorului (PA) reprezintă component
 * **Managementul Gateway-urilor**: înregistrarea și configurarea Gateway-urilor prin tokenuri de înrolare, administrarea certificatelor mTLS, monitorizarea stării operaționale și asocierea acestora cu resursele protejate.  
 * **Managementul resurselor**: definirea aplicațiilor și serviciilor interne protejate (FQDN extern/intern, port, protocol), asocierea acestora cu Gateway-uri și stabilirea politicilor de acces.  
 * **Modelarea unui mediu multi-organizațional**: fiecare tenant are asociat propriul furnizor de identitate, își definește propriile Gateway-uri și resurse, iar izolarea dintre organizații este menținută atât la nivel de identitate, cât și la nivel de infrastructură de acces. În cadrul fiecărui tenant sunt incluse și mecanisme de mapare a atributelor provenite din furnizorii de identitate în roluri interne, acestea fiind utilizate ulterior de motorul de politici pentru evaluarea deciziilor de acces.   
-* **Motorul de politici de acces**: definirea regulilor de acces bazate pe utilizator, rol, dispozitiv, stare de conformitate, context de risc, interval orar și locație, cu acțiuni de tip allow, deny sau mfa\_required.  
+* **Motorul de politici de acces**: definirea regulilor de acces bazate pe utilizator, rol, dispozitiv, stare de conformitate, context de risc, interval orar, locație și rețea sursă, cu acțiuni de tip allow, deny sau step\_up\_required.
 * **Gestionarea sesiunilor**: monitorizarea în timp real a sesiunilor active între Agent și Gateway, inclusiv posibilitatea de revocare a acestora.  
 * **Infrastructura Vault PKI**: administrarea certificatelor digitale utilizate de dispozitive și Gateway-uri, monitorizarea stării autorităților de certificare și gestionarea ciclului de viață al certificatelor.  
 * **Audit și jurnalizare**: înregistrarea tuturor evenimentelor relevante de securitate și administrare, inclusiv autentificări, decizii de acces, modificări de politici și evenimente de infrastructură.
@@ -58,18 +58,23 @@ Policy Engine reprezintă nucleul logic al PDP, fiind responsabil exclusiv de ev
 
 PE funcționează ca un motor de evaluare deterministă a regulilor de securitate, pe baza unui set de politici definite centralizat.
 
-Tipuri de politici evaluate de PE:
+Tipuri de politici și secțiuni evaluate de PE:
 
 * politici bazate pe utilizatori și grupuri;  
-* politici bazate pe dispozitiv;  
-* politici bazate pe resurse;  
+* politica pentru utilizatori noi, care stabilește ce se întâmplă cu utilizatorii neînrolați MFA;
+* politica de autentificare, care poate impune sau omite MFA și poate limita metodele step-up disponibile;
+* politici de Risk-Based Authentication, care activează verificări precum locație nouă, deplasare nerealistă și abatere față de baseline-ul utilizatorului;
+* politici de localizare a utilizatorului, cu reguli pe țări selectate și comportament separat pentru toate celelalte țări;
+* politici de rețea sursă, cu liste pentru allow, skip MFA, require MFA, block și opțiune de blocare a oricărei rețele nespecificate;
+* politici bazate pe starea de sănătate a dispozitivului;
+* politici bazate pe resurse, protocol și port;
 * politici temporale.
 
 Decizii:
 
 * **allow** – acces permis;  
 * **deny** – acces refuzat;  
-* **mfa\_required** – necesită autentificare suplimentară.
+* **step\_up\_required** – necesită autentificare suplimentară înainte de autorizarea sesiunii.
 
 ## **Interacțiunea dintre PA și PE**
 
@@ -79,6 +84,10 @@ Fluxul standard este următorul:
 2. PA transmite contextul către PE;  
 3. PE evaluează politicile și returnează o decizie;  
 4. PA interpretează decizia și o aplică asupra fluxului operațional.
+
+Atunci când mai multe politici sunt aplicabile aceleiași cereri, implementarea curentă le evaluează împreună și combină efectele. O politică care nu se potrivește contextului nu oprește evaluarea celorlalte politici. Decizia finală respectă prioritatea: Block/Deny, Require MFA/step-up, Skip MFA, Allow.
+
+Pentru fiecare organizație este creată automat o politică globală default, aplicată la nivel de organizație. Aceasta cere înrolarea utilizatorilor în MFA și impune MFA prin metodele disponibile în implementare, respectiv TOTP și WebAuthn/Passkey. Politica globală default este o politică de sistem și nu este ștearsă manual de administrator.
 
 # IdP
 
@@ -98,7 +107,7 @@ Din punct de vedere arhitectural, acesta este împărțit în două procese dist
 **Serviciu de sistem** **(Service)**  
 Este componenta responsabilă pentru funcțiile privilegiate ale aplicației:
 
-* utilizarea **Trusted Platform Module (TPM) 2.0** pentru gestionarea identității hardware a dispozitivului și pentru protejarea materialului criptografic utilizat în stabilirea canalelor de comunicație securizate de tip mTLS;   
+* generarea și protejarea identității criptografice a dispozitivului prin Windows CNG, cu încercarea utilizării Microsoft Platform Crypto Provider pentru protecție TPM și fallback software atunci când TPM-ul nu este disponibil;
 * interceptarea și redirecționarea traficului prin utilizarea **Windows Filtering Platform (WFP)**, prin mecanismul de connect redirection pentru conexiuni TCP IPv4 către spațiul sintetic `100.64.0.0/10`, astfel încât acestea să fie redirecționate către proxy-ul local al agentului;  
 * manipularea politicilor de rezoluție DNS prin configurarea **Name Resolution Policy Table (NRPT)** pentru a forța rezoluția domeniilor prin agent, ocolind setările DNS ale rețelei locale;  
 * utilizează **Windows Management Instrumentation (WMI)** pentru colectarea informațiilor de telemetrie ale dispozitivului (starea antivirusului, configurația firewall-ului, patch-urile instalate etc.) și le transmite către Policy Administrator (PA) imediat după înrolare, la intervale de 30 de minute și în cazul producerii unor evenimente critice sau al remedierii unei probleme (de exemplu, dezactivarea sau reactivarea firewall-ului).
@@ -108,7 +117,7 @@ Este componenta responsabilă pentru funcțiile privilegiate ale aplicației:
 * declanșează procedura interactivă de înrolare pentru dispozitivele neînrolate, solicitând Service-ului inițierea sesiunii cu PDP și deschizând browserul către URL-ul primit;
 * după înrolarea dispozitivului, declanșează procesul de autentificare prin solicitarea unei sesiuni către Service și deschiderea browserului către URL-ul returnat de PDP. Fluxul **OIDC Authorization Code Flow cu PKCE** este orchestrat de PDP, nu de Tray;
 * permite deconectarea utilizatorului autentificat, prin revocarea sesiunii de utilizator și eliminarea din interfață a catalogului de resurse asociat acelei sesiuni;
-* implementează **interfață grafică** care afișează starea Agentului (neînrolat, înrolat, autentificat sau deconectat), starea de înrolare a dispozitivului și informații despre certificat, identitatea utilizatorului autentificat, date de securitate despre dispozitiv (firewall, antivirus, criptare disc, actualizări, conectivitate), lista de resurse disponibile, sesiunile active, mesajele privind refuzul accesului și motivele aferente. Datele despre dispozitiv și lista de resurse sunt afișate utilizatorului numai după finalizarea autentificării.
+* implementează **interfață grafică** care afișează starea Agentului (neînrolat, înrolat, autentificat sau deconectat), starea de înrolare a dispozitivului și informații despre certificat, identitatea utilizatorului autentificat, date de securitate despre dispozitiv (firewall, antivirus, criptare disc, actualizări, conectivitate), lista de resurse disponibile, sesiunile active, mesajele privind refuzul accesului și motivele aferente. Atunci când PDP returnează step-up required, Tray-ul afișează și deschide URL-ul securizat prin care utilizatorul finalizează MFA. Datele despre dispozitiv și lista de resurse sunt afișate utilizatorului numai după finalizarea autentificării.
 
 Limbaje folosite: Go \+ Wails \+ React
 
@@ -198,7 +207,7 @@ Prin consultarea tabelei interne de mapare, Agentul corelează adresa IP sinteti
 
 După identificarea resursei logice corespunzătoare, Agentul agregă un set de informații contextuale necesare pentru evaluarea solicitării de acces. 
 
-Contextul colectat include identificatorul dispozitivului, informații despre securitatea dispozitivului, utilizator, resursa solicitată, precum și parametrii conexiunii.
+Contextul colectat include identificatorul dispozitivului, informații despre securitatea dispozitivului, utilizator, resursa solicitată, parametrii conexiunii, identitatea procesului local, adresa IP sursă, localizarea derivată din IP și semnalele de risc calculate de PDP.
 
 Aceste informații permit definirea unor politici de acces granulare.
 
@@ -210,9 +219,9 @@ PA realizează validarea solicitării, investigând integritatea identității d
 
 Funcția de Policy Administrator transmite cererea de autorizare către Policy Engine, componenta centrală responsabilă cu evaluarea și aplicarea politicilor de securitate. Aceasta procesează solicitarea pe baza regulilor definite centralizat, corelându-le cu contextul operațional furnizat de Agent. 
 
-Dacă decizia furnizată de Policy Engine indică necesitatea unei autentificări suplimentare, Agentul declanșează o procedură de validare secundară. 
+Dacă decizia furnizată de Policy Engine indică necesitatea unei autentificări suplimentare, decizia returnată către Agent este step\_up\_required. În această situație, PA creează un challenge de step-up, nu creează încă sesiunea de acces și nu provisionează Gateway-ul.
 
-Solicitarea inițială este retransmisă către Policy Administrator, permițând Policy Engine să reanalizeze contextul de securitate actualizat. În condițiile în care riscurile sunt mitigate, iar cerințele de conformitate sunt îndeplinite, accesul la resursă este autorizat.
+Agentul afișează URL-ul de step-up în Tray și îl deschide în browser, iar utilizatorul finalizează MFA prin metoda permisă de politică. După validarea MFA, solicitarea poate fi reluată către Policy Administrator, permițând Policy Engine să reanalizeze contextul de securitate actualizat. În condițiile în care riscurile sunt mitigate, iar cerințele de conformitate sunt îndeplinite, accesul la resursă este autorizat.
 
 ## Stabilirea și monitorizarea canalului securizat
 
@@ -271,11 +280,11 @@ Policy Administrator poate iniția revocarea unei sesiuni în mai multe situați
 
 La recepționarea unei astfel de instrucțiuni, Gateway-ul identifică sesiunea afectată și întrerupe imediat fluxul de comunicație asociat, indiferent de starea curentă a conexiunii. În paralel, sunt invalidate tokenurile de sesiune și sunt închise canalele active dintre Agent și resursa internă.
 
-# MFA
+# MFA și step-up authentication
 
-Procesul MFA este orchestrat de Policy Administrator printr-un modul intern. În momentul în care Policy Engine stabilește că accesul către o resursă necesită autentificare suplimentară, acesta returnează decizia mfa\_required.
+Procesul MFA este orchestrat de Policy Administrator printr-un modul intern. În momentul în care Policy Engine stabilește că accesul către o resursă necesită autentificare suplimentară, acesta returnează decizia step\_up\_required.
 
-La primirea acestei decizii, Policy Administrator nu autorizează încă sesiunea, ci creează un context MFA de tip PENDING\_MFA, asociat utilizatorului, dispozitivului, resursei, sesiunii și deciziei de acces. Agentul este notificat prin canalul de control securizat pentru a iniția procesul.
+În implementarea curentă, decizia folosită pentru acest caz este step\_up\_required. La primirea acestei decizii, Policy Administrator nu autorizează încă sesiunea, ci creează un challenge de step-up asociat utilizatorului, dispozitivului, resursei și deciziei de acces. Agentul primește URL-ul de step-up și îl expune în Tray, de unde utilizatorul poate finaliza autentificarea suplimentară în browser.
 
 Pentru TOTP, utilizatorul introduce codul generat de aplicația de autentificare. Codul este transmis către componenta MFA internă, care validează local, pe baza secretului asociat utilizatorului și a intervalului temporal curent. Pentru prevenirea replay-ului, challenge-ul este marcat ca utilizat, iar același cod/time-step nu este acceptat de mai multe ori.
 

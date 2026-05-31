@@ -9,11 +9,8 @@ import (
 	"time"
 
 	"pdp/models"
+	paauth "pdp/pa/auth"
 )
-
-// ─────────────────────────────────────────────
-// Authentication endpoints
-// ─────────────────────────────────────────────
 
 // checkAuthRateLimit enforces per-IP rate limiting on authentication endpoints.
 // Returns true if the request should be rejected (rate limit exceeded).
@@ -47,145 +44,90 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Note: login endpoint is exempt from CSRF validation because
-	// there is no existing session to protect — the credentials themselves
-	// are the authentication factor. Rate limiting prevents brute force.
-
 	var req models.LoginRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
 
-	resp, err := s.pa.Auth.Login(req)
+	user, ok := s.authenticatePrimaryLogin(w, r, req)
+	if !ok {
+		return
+	}
+
+	if !s.appConfig().AdminMFARequired() {
+		s.issueAdminLoginToken(w, r, user)
+		return
+	}
+
+	ttl := s.appConfig().Runtime.BrowserAuthSessionTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	if s.userHasTOTPConfigured(user) {
+		challenge, err := s.adminMFA.create(user, "", ttl)
+		if err != nil {
+			log.Printf("[AUTH] MFA challenge error: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA challenge failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, models.LoginResponse{
+			Status:      "mfa_required",
+			Message:     "MFA verification required",
+			UserID:      user.ID,
+			ChallengeID: challenge.ID,
+			MFARequired: true,
+		})
+		return
+	}
+
+	secret, err := paauth.GenerateTOTPSecret()
 	if err != nil {
-		log.Printf("[AUTH] Login error: %v", err)
+		log.Printf("[AUTH] TOTP setup error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
+	challenge, err := s.adminMFA.create(user, secret, ttl)
+	if err != nil {
+		log.Printf("[AUTH] MFA setup challenge error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
+	qrURI := paauth.BuildTOTPURI(secret, s.appConfig().TOTPIssuer, user.Username)
+	qrImage, err := paauth.BuildTOTPQRCodeImage(qrURI)
+	if err != nil {
+		log.Printf("[AUTH] TOTP QR code error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, models.LoginResponse{
+		Status:      "mfa_setup_required",
+		Message:     "Set up MFA to continue",
+		UserID:      user.ID,
+		ChallengeID: challenge.ID,
+		MFARequired: true,
+		MFASetup:    true,
+		Secret:      secret,
+		QRCodeURL:   qrURI,
+		QRCodeImage: qrImage,
+	})
+}
+
+func (s *Server) issueAdminLoginToken(w http.ResponseWriter, r *http.Request, user *models.User) {
+	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+	if err != nil {
+		log.Printf("[AUTH] JWT issue after password login failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
-
-	status := http.StatusOK
-	if resp.Status == "denied" {
-		status = http.StatusUnauthorized
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard password login completed; MFA disabled by configuration", true)
 	}
-
-	writeJSON(w, status, resp)
-}
-
-func (s *Server) handleVerifyMFA(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	if s.checkAuthRateLimit(w, r) {
-		return
-	}
-
-	// CSRF validation for browser-based MFA requests
-	if origin := r.Header.Get("Origin"); origin != "" {
-		if !validateCSRF(r) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "CSRF validation failed"})
-			return
-		}
-	}
-
-	var req models.MFAVerifyRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	resp, err := s.pa.Auth.VerifyMFA(req)
-	if err != nil {
-		log.Printf("[AUTH] MFA verify error: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "verification failed"})
-		return
-	}
-
-	status := http.StatusOK
-	if resp.Status == "denied" {
-		status = http.StatusUnauthorized
-	}
-
-	writeJSON(w, status, resp)
-}
-
-// POST /api/auth/mfa-step-up
-// Accepts an auth token (MFADone=false) and returns a temporary MFA token
-// plus the user's configured MFA methods. Called by the login page when
-// the policy engine requires MFA for resource access.
-func (s *Server) handleMFAStepUp(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	if s.checkAuthRateLimit(w, r) {
-		return
-	}
-
-	if origin := r.Header.Get("Origin"); origin != "" {
-		if !validateCSRF(r) {
-			writeJSON(w, http.StatusForbidden, map[string]string{"error": "CSRF validation failed"})
-			return
-		}
-	}
-
-	var req models.MFAStepUpRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	if req.AuthToken == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "auth_token is required"})
-		return
-	}
-
-	// Parse the auth token WITHOUT requiring MFADone=true
-	claims, err := s.pa.Auth.ParseToken(req.AuthToken)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, models.MFAStepUpResponse{
-			Status:  "denied",
-			Message: "Invalid or expired auth token",
-		})
-		return
-	}
-
-	// Look up user to get configured MFA methods
-	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
-	if !exists {
-		writeJSON(w, http.StatusUnauthorized, models.MFAStepUpResponse{
-			Status:  "denied",
-			Message: "User not found",
-		})
-		return
-	}
-
-	if !user.MFAEnabled() {
-		writeJSON(w, http.StatusBadRequest, models.MFAStepUpResponse{
-			Status:  "denied",
-			Message: "No MFA methods configured for this user",
-		})
-		return
-	}
-
-	// Issue a temporary MFA token carrying the user's methods
-	mfaToken, err := s.pa.Auth.JWT.GenerateMFAToken(user.ID, user.Username, user.Role, user.MFAMethods)
-	if err != nil {
-		log.Printf("[AUTH] MFA step-up token error: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to issue MFA token"})
-		return
-	}
-
-	log.Printf("[AUTH] MFA step-up: %s — issued MFA token, methods=%v", user.Username, user.MFAMethods)
-
-	writeJSON(w, http.StatusOK, models.MFAStepUpResponse{
-		Status:     "mfa_required",
-		Message:    "MFA verification required",
-		MFAToken:   mfaToken,
-		MFAMethods: user.MFAMethods,
+	writeJSON(w, http.StatusOK, models.LoginResponse{
+		Status:    "authenticated",
+		Message:   "Authentication successful",
+		AuthToken: authToken,
+		UserID:    user.ID,
 	})
 }
 
@@ -196,6 +138,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.checkAuthRateLimit(w, r) {
+		return
+	}
+
+	if s.hasLocalPlatformAdmin() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "administrator registration is disabled"})
 		return
 	}
 
@@ -221,45 +168,127 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleEnrollMFA(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
+func (s *Server) hasLocalPlatformAdmin() bool {
+	for _, user := range s.pa.Auth.Users.ListUsers() {
+		if user == nil {
+			continue
+		}
+		if strings.TrimSpace(user.PasswordHash) == "" || strings.TrimSpace(user.AuthSource) != "" {
+			continue
+		}
+		if user.Role == "platform_admin" {
+			return true
+		}
 	}
-
-	userID := r.Header.Get("X-User-ID")
-	resp, err := s.pa.Auth.Users.EnrollMFA(userID, s.pa.Cfg.TOTPIssuer)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "MFA enrollment failed", err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	return false
 }
 
-func (s *Server) handleActivateMFA(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-
-	userID := r.Header.Get("X-User-ID")
-
-	var body struct {
-		Code string `json:"code"`
+	if s.checkAuthRateLimit(w, r) {
+		return
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&body); err != nil {
+
+	var req models.MFAVerifyRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-
-	if err := s.pa.Auth.Users.ActivateMFA(userID, body.Code); err != nil {
-		writeError(w, http.StatusBadRequest, "MFA activation failed", err)
+	challenge, found := s.adminMFA.get(req.ChallengeID)
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "MFA challenge expired or invalid"})
+		return
+	}
+	user, exists := s.pa.Auth.Users.GetUser(challenge.UserID)
+	if !exists || user == nil || user.Disabled {
+		s.adminMFA.consume(challenge.ID)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, models.APIResponse{
-		Success: true,
-		Message: "MFA activated successfully",
+	var verifyErr error
+	if strings.TrimSpace(challenge.PendingTOTPSecret) != "" {
+		verifyErr = s.pa.Auth.Users.ActivateTOTPSecret(user.ID, challenge.PendingTOTPSecret, req.Code)
+	} else {
+		verifyErr = s.pa.Auth.Users.VerifyMFA(user.ID, req.Code)
+	}
+	if verifyErr != nil {
+		log.Printf("[AUTH] MFA verification failed for user=%s: %v", user.Username, verifyErr)
+		if retry := s.adminMFA.recordFailure(challenge.ID, s.appConfig().MaxLoginAttempts); !retry {
+			s.pa.Store.RecordFailedLogin(user.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "too many failed MFA attempts"})
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid MFA code"})
+		return
+	}
+
+	s.adminMFA.consume(challenge.ID)
+	s.pa.Store.ResetLoginAttempts(user.Username)
+	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+	if err != nil {
+		log.Printf("[AUTH] JWT issue after MFA failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+		return
+	}
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_mfa_completed", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard MFA completed", true)
+	}
+	writeJSON(w, http.StatusOK, models.LoginResponse{
+		Status:      "authenticated",
+		Message:     "Authentication successful",
+		AuthToken:   authToken,
+		UserID:      user.ID,
+		MFARequired: true,
 	})
+}
+
+func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request, req models.LoginRequest) (*models.User, bool) {
+	if strings.EqualFold(strings.TrimSpace(req.Username), "admin") && req.Password == "admin" {
+		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		if s.pa.Audit != nil {
+			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Default admin/admin credentials rejected", false)
+		}
+		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
+			Status:  "denied",
+			Message: "Default administrator credentials are disabled",
+		})
+		return nil, false
+	}
+
+	if locked, until := s.pa.Store.IsLockedOut(req.Username); locked {
+		if s.pa.Audit != nil {
+			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Account locked until "+until.Format(time.RFC3339), false)
+		}
+		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
+			Status:  "denied",
+			Message: "Account temporarily locked due to too many failed attempts",
+		})
+		return nil, false
+	}
+	user, err := s.pa.Auth.Users.Authenticate(req.Username, req.Password)
+	if err != nil {
+		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		if s.pa.Audit != nil {
+			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Invalid credentials", false)
+		}
+		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
+			Status:  "denied",
+			Message: "Invalid credentials",
+		})
+		return nil, false
+	}
+	if user.Role != "platform_admin" {
+		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "platform administrator access required"})
+		return nil, false
+	}
+	s.pa.Store.ResetLoginAttempts(req.Username)
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Primary authentication completed", true)
+	}
+	return user, true
 }

@@ -54,8 +54,17 @@ type StreamRequest struct {
 	SyntheticIP  string
 	ClientAddr   string
 	OriginalAddr string
+	Process      *ProcessIdentity
 }
 
 type StreamConnector interface {
 	OpenResourceStream(context.Context, StreamRequest) (net.Conn, error)
+}
+
+type ProcessIdentity struct {
+	PID    int
+	Name   string
+	Path   string
+	SHA256 string
+	Signer string
 }

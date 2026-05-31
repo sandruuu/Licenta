@@ -119,6 +119,7 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 	if s == nil {
 		return nil, fmt.Errorf("enrollment service not initialized")
 	}
+	s.CleanExpiredInteractiveSessions(time.Now().UTC())
 	if strings.TrimSpace(req.CSRHash) == "" || strings.TrimSpace(req.SPKIHash) == "" || strings.TrimSpace(req.DeviceNonce) == "" {
 		return nil, fmt.Errorf("%w: csr_sha256, spki_sha256 and device_nonce are required", ErrInvalidRequest)
 	}
@@ -165,6 +166,47 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 		PollSecret:      pollSecret,
 		ExpiresAt:       expiresAt,
 	}, nil
+}
+
+func (s *Service) StartCleanupLoop(interval time.Duration, stopChan <-chan struct{}) {
+	if s == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = defaultEnrollmentCleanupInterval
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopChan:
+				return
+			case <-ticker.C:
+				s.CleanExpiredInteractiveSessions(time.Now().UTC())
+			}
+		}
+	}()
+}
+
+func (s *Service) CleanExpiredInteractiveSessions(now time.Time) int {
+	if s == nil {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for id, session := range s.interactiveSessions {
+		if session == nil || (!session.ExpiresAt.IsZero() && !now.Before(session.ExpiresAt.UTC())) {
+			delete(s.interactiveSessions, id)
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Service) GetInteractiveSession(sessionID string) (*InteractiveSession, bool) {
@@ -223,7 +265,7 @@ func (s *Service) BeginInteractiveIDPLogin(sessionID string, tenant *models.Tena
 		return nil, ErrNotFound
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
-		session.Status = InteractiveStatusDenied
+		delete(s.interactiveSessions, session.ID)
 		return nil, ErrExpiredSession
 	}
 	if session.AuthRealmID != "" && session.IDPProfileID != "" {
@@ -256,7 +298,7 @@ func (s *Service) CompleteInteractiveIDPLogin(sessionID, subject, email, issuer,
 		return nil, ErrNotFound
 	}
 	if time.Now().UTC().After(session.ExpiresAt) {
-		session.Status = InteractiveStatusDenied
+		delete(s.interactiveSessions, session.ID)
 		return nil, ErrExpiredSession
 	}
 	if session.Status != InteractiveStatusWaitingForUserLogin {
@@ -279,9 +321,9 @@ func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret st
 	if s == nil {
 		return nil, fmt.Errorf("enrollment service not initialized")
 	}
-	s.mu.RLock()
+	s.mu.Lock()
 	session, ok := s.interactiveSessions[strings.TrimSpace(sessionID)]
-	defer s.mu.RUnlock()
+	defer s.mu.Unlock()
 	if !ok || session == nil {
 		return nil, ErrNotFound
 	}
@@ -289,6 +331,7 @@ func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret st
 		return nil, err
 	}
 	if time.Now().UTC().After(session.ExpiresAt) && session.Status != InteractiveStatusEnrolled {
+		delete(s.interactiveSessions, session.ID)
 		return &InteractiveSessionStatus{Status: InteractiveStatusDenied, Reason: "enrollment_session_expired"}, nil
 	}
 	return &InteractiveSessionStatus{Status: session.Status}, nil
@@ -369,15 +412,7 @@ func (s *Service) CompleteInteractiveSession(req InteractiveCompleteRequest) (*I
 	_ = csrDER // kept explicit: CSR DER was validated against session hash above.
 
 	s.mu.Lock()
-	if live, ok := s.interactiveSessions[session.ID]; ok && live != nil {
-		live.DeviceID = deviceID
-		live.CertificatePEM = leafPEM
-		live.CertificateChain = chainPEM
-		live.CertThumbprint = certThumbprint
-		live.CertificateExpiry = expiresAt
-		live.SingleUseConsumed = true
-		live.Status = InteractiveStatusEnrolled
-	}
+	delete(s.interactiveSessions, session.ID)
 	s.mu.Unlock()
 
 	return &InteractiveCompleteResult{

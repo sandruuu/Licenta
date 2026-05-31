@@ -67,6 +67,7 @@ typedef struct _TRUSTAGENT_WFP_ORIGINAL_TARGET {
     UINT16 OriginalPort;
     UINT8 Protocol;
     UINT8 Reserved2;
+    UINT32 OriginalProcessId;
 } TRUSTAGENT_WFP_ORIGINAL_TARGET, *PTRUSTAGENT_WFP_ORIGINAL_TARGET;
 
 #pragma pack(pop)

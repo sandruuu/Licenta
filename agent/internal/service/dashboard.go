@@ -20,6 +20,7 @@ func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 	peer, _ := ipc.PeerIdentityFromContext(ctx)
 	userSession := service.userSessions.Snapshot(peer)
 	authenticated := strings.EqualFold(userSession.UserSession.State, ipc.UserSessionStateAuthenticated)
+	now := service.clock().UTC()
 	catalog := ipc.CatalogInfo{}
 	deviceData := ipc.DeviceDataReport{}
 	if authenticated {
@@ -30,6 +31,11 @@ func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 		status.DeviceDataCheckCount = 0
 		status.DeviceDataCollectedAt = time.Time{}
 		status.DeviceDataLastError = ""
+		if status.EnrollmentState == ipc.EnrollmentStateEnrolled &&
+			strings.EqualFold(userSession.UserSession.State, ipc.UserSessionStateSignedOut) &&
+			strings.TrimSpace(userSession.UserSession.Message) == "" {
+			userSession.UserSession.Message = service.signedOutAccessPrompt(now)
+		}
 	}
 	return ipc.AgentDashboard{
 		Connection:  dashboardConnection(status),
@@ -38,7 +44,7 @@ func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 		UserSession: userSession.UserSession,
 		Catalog:     catalog,
 		DeviceData:  deviceData,
-		ReportedAt:  service.clock().UTC(),
+		ReportedAt:  now,
 	}
 }
 

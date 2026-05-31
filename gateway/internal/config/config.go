@@ -3,14 +3,18 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	FileName           = "config.json"
 	EnrollmentTokenEnv = "GATEWAY_ENROLLMENT_TOKEN"
+	PublicEndpointEnv  = "GATEWAY_PUBLIC_ENDPOINT"
 
 	PACAPath        = "certs/pa-ca.crt"
 	GatewayCertPath = "certs/gateway.crt"
@@ -19,9 +23,11 @@ const (
 )
 
 type Config struct {
-	PAURL           string              `json:"pa_url"`
-	EnrollmentToken string              `json:"-"`
-	ControlPlane    *ControlPlaneConfig `json:"control_plane,omitempty"`
+	PAURL                       string              `json:"pa_url"`
+	PublicEndpoint              string              `json:"public_endpoint,omitempty"`
+	SessionRevalidationInterval time.Duration       `json:"session_revalidation_interval,omitempty"`
+	EnrollmentToken             string              `json:"-"`
+	ControlPlane                *ControlPlaneConfig `json:"control_plane,omitempty"`
 }
 
 type ControlPlaneConfig struct {
@@ -31,7 +37,10 @@ type ControlPlaneConfig struct {
 }
 
 func DefaultConfig() *Config {
-	return &Config{ControlPlane: &ControlPlaneConfig{}}
+	return &Config{
+		SessionRevalidationInterval: 30 * time.Second,
+		ControlPlane:                &ControlPlaneConfig{},
+	}
 }
 
 func Load() (*Config, error) {
@@ -70,6 +79,15 @@ func (cfg *Config) Validate() error {
 	}
 
 	requiredString("pa_url", cfg.PAURL)
+	if cfg.SessionRevalidationInterval <= 0 {
+		cfg.SessionRevalidationInterval = 30 * time.Second
+	}
+	cfg.PublicEndpoint = strings.TrimSpace(cfg.PublicEndpoint)
+	if cfg.PublicEndpoint != "" {
+		if err := validatePublicEndpoint(cfg.PublicEndpoint); err != nil {
+			addValidationError(err.Error())
+		}
+	}
 
 	if len(validationErrors) > 0 {
 		return fmt.Errorf("invalid config: %s", strings.Join(validationErrors, "; "))
@@ -78,6 +96,9 @@ func (cfg *Config) Validate() error {
 }
 
 func (cfg *Config) ApplyEnvironment() error {
+	if endpoint := strings.TrimSpace(os.Getenv(PublicEndpointEnv)); endpoint != "" {
+		cfg.PublicEndpoint = endpoint
+	}
 	token := strings.TrimSpace(os.Getenv(EnrollmentTokenEnv))
 	if token == "" {
 		return nil
@@ -128,4 +149,19 @@ func resolveSecretRef(value string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+func validatePublicEndpoint(endpoint string) error {
+	host, portValue, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil {
+		return fmt.Errorf("public_endpoint must be host:port")
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("public_endpoint host is required")
+	}
+	port, err := strconv.Atoi(portValue)
+	if err != nil || port <= 0 || port > 65535 {
+		return fmt.Errorf("public_endpoint port must be between 1 and 65535")
+	}
+	return nil
 }

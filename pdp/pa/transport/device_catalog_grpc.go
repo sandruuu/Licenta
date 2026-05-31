@@ -120,6 +120,7 @@ func (s *Server) initDeviceCatalogGRPC() {
 	grpcServer.RegisterService(&deviceCatalogGRPCServiceDesc, &deviceCatalogGRPCService{server: s})
 	grpcServer.RegisterService(&deviceDataGRPCServiceDesc, &deviceDataGRPCService{server: s})
 	grpcServer.RegisterService(&agentAuthorizationGRPCServiceDesc, &agentAuthorizationGRPCService{server: s})
+	grpcServer.RegisterService(&agentEventsGRPCServiceDesc, &agentEventsGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayEnrollmentGRPCServiceDesc, &gatewayEnrollmentGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayTrustGRPCServiceDesc, &gatewayTrustGRPCService{server: s})
 	grpcServer.RegisterService(&gatewayControlGRPCServiceDesc, &gatewayControlGRPCService{server: s})

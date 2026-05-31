@@ -38,11 +38,11 @@ func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
 	entry.EntryHash = computeAuditHash(prevHash, entry)
 
 	_, err := s.db.Exec(`INSERT INTO audit_log
-		(id, timestamp, event_type, user_id, username, source_ip, resource, decision, details, success, prev_hash, entry_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, timestamp, event_type, user_id, username, source_ip, resource, decision, details, success, tenant_id, prev_hash, entry_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.ID, fmtTime(entry.Timestamp), entry.EventType, entry.UserID, entry.Username,
 		entry.SourceIP, entry.Resource, entry.Decision, entry.Details, b2i(entry.Success),
-		entry.PrevHash, entry.EntryHash)
+		entry.TenantID, entry.PrevHash, entry.EntryHash)
 	if err != nil {
 		log.Printf("[STORE] Failed to add audit entry: %v", err)
 		return
@@ -153,7 +153,7 @@ func (s *Store) GetAuditLog(limit int) []*models.AuditEntry {
 	}
 
 	rows, err := s.db.Query(`SELECT id, timestamp, event_type, user_id, username, source_ip,
-		resource, decision, details, success FROM audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
+		resource, decision, details, success, tenant_id FROM audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil
 	}
@@ -166,7 +166,7 @@ func (s *Store) GetAuditLog(limit int) []*models.AuditEntry {
 		var success int
 
 		if err := rows.Scan(&e.ID, &ts, &e.EventType, &e.UserID, &e.Username, &e.SourceIP,
-			&e.Resource, &e.Decision, &e.Details, &success); err != nil {
+			&e.Resource, &e.Decision, &e.Details, &success, &e.TenantID); err != nil {
 			continue
 		}
 

@@ -52,7 +52,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 
 	server := newIdentityProviderTestServer(dataStore)
 
-	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?tenant_id=tenant-2", nil)
+	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?organization_id=tenant-2", nil)
 	idpCfg, tenant, err := server.resolveIdentityProvider(request, "connect-app")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider returned error: %v", err)
@@ -70,7 +70,7 @@ func TestResolveIdentityProviderUsesTenantLevelConfig(t *testing.T) {
 		t.Fatalf("domain IdP mismatch: idp=%+v tenant=%+v", idpCfg, tenant)
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?tenant_id=tenant-2&login_hint=alice@example.test", nil)
+	request = httptest.NewRequest(http.MethodGet, "/auth/authorize?organization_id=tenant-2&login_hint=alice@example.test", nil)
 	if _, _, err = server.resolveIdentityProvider(request, "connect-app"); err == nil {
 		t.Fatalf("expected tenant/login_hint mismatch to be rejected")
 	}
@@ -130,11 +130,13 @@ func TestAdminIdentityProvidersAllowOnePerTenant(t *testing.T) {
 	now := time.Now()
 	dataStore.SaveTenant(&models.Tenant{ID: "tenant-1", Name: "Tenant 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
 	dataStore.SaveTenant(&models.Tenant{ID: "tenant-2", Name: "Tenant 2", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	dataStore.SaveOrganizationMembership(&models.OrganizationMembership{UserID: "admin-1", OrganizationID: "tenant-1", Role: "platform_admin", CreatedAt: now})
+	dataStore.SaveOrganizationMembership(&models.OrganizationMembership{UserID: "admin-1", OrganizationID: "tenant-2", Role: "platform_admin", CreatedAt: now})
 	server := newIdentityProviderTestServer(dataStore)
 
 	body := `{"id":"idp-1","name":"IdP 1","issuer":"https://idp1.example.test","client_id":"client-1"}`
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/admin/tenants/idps?tenant_id=tenant-1", strings.NewReader(body))
+	request := authorizedIdentityProviderRequest(http.MethodPost, "/api/admin/organizations/idps?organization_id=tenant-1", body)
 	server.handleAdminIdentityProviders(recorder, request)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("first IdP status = %d, body=%s", recorder.Code, recorder.Body.String())
@@ -142,7 +144,7 @@ func TestAdminIdentityProvidersAllowOnePerTenant(t *testing.T) {
 
 	body = `{"id":"idp-2","name":"IdP 2","issuer":"https://idp2.example.test","client_id":"client-2","is_default":true}`
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/admin/tenants/idps?tenant_id=tenant-1", strings.NewReader(body))
+	request = authorizedIdentityProviderRequest(http.MethodPost, "/api/admin/organizations/idps?organization_id=tenant-1", body)
 	server.handleAdminIdentityProviders(recorder, request)
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("second IdP status = %d, want %d, body=%s", recorder.Code, http.StatusConflict, recorder.Body.String())
@@ -159,11 +161,19 @@ func TestAdminIdentityProvidersAllowOnePerTenant(t *testing.T) {
 
 	body = `{"id":"idp-2","name":"IdP 2","issuer":"https://idp2.example.test","client_id":"client-2"}`
 	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPost, "/api/admin/tenants/idps?tenant_id=tenant-2", strings.NewReader(body))
+	request = authorizedIdentityProviderRequest(http.MethodPost, "/api/admin/organizations/idps?organization_id=tenant-2", body)
 	server.handleAdminIdentityProviders(recorder, request)
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("second tenant IdP status = %d, body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+func authorizedIdentityProviderRequest(method, target, body string) *http.Request {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request.Header.Set("X-User-ID", "admin-1")
+	request.Header.Set("X-Username", "admin@example.test")
+	request.Header.Set("X-User-Role", "platform_admin")
+	return request
 }
 
 func newIdentityProviderTestStore(t *testing.T) *store.Store {

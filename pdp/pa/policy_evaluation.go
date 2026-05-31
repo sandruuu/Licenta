@@ -8,12 +8,18 @@ import (
 	"pdp/pe/evaluation"
 )
 
+const newDeviceWindow = 24 * time.Hour
+
 // EvaluateAccess is the PA-to-PE boundary. PA gathers operational state and
 // passes a normalized, side-effect-free context into the Policy Engine.
 func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.AccessDecision {
+	return pa.EvaluateAccessWithAuth(req, models.AuthContext{})
+}
+
+func (pa *PolicyAdministrator) EvaluateAccessWithAuth(req models.AccessRequest, authCtx models.AuthContext) *models.AccessDecision {
 	if pa == nil || pa.Engine == nil {
 		return &models.AccessDecision{
-			Decision:  "deny",
+			Decision:  models.DecisionDeny,
 			Reason:    "Policy Engine unavailable",
 			RiskScore: 100,
 		}
@@ -45,13 +51,16 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 
 	ctx := evaluation.AccessContext{
 		Request: req,
+		Auth:    authCtx,
 		Now:     time.Now(),
 	}
 
 	if pa.Store != nil {
 		ctx.FailedAttempts = pa.Store.GetFailedAttempts(req.Username)
+		ctx.IsNewDevice = pa.isNewUserDevice(req.UserID, req.DeviceID, ctx.Now)
 		if user != nil {
 			ctx.UserRole = user.Role
+			ctx.UserMFAEnabled = user.MFAEnabled()
 			if decision := pa.populateDirectoryContext(&ctx, user); decision != nil {
 				return decision
 			}
@@ -64,17 +73,39 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 	}
 
 	if pa.Geo != nil && strings.TrimSpace(req.SourceIP) != "" && strings.TrimSpace(req.UserID) != "" {
-		geoResult := pa.Geo.CheckImpossibleTravel(req.UserID, req.SourceIP)
-		ctx.GeoVelocity = geoResult.SpeedKmH
-		ctx.IsImpossibleTravel = geoResult.IsImpossible
+		locationCtx := pa.Geo.CheckAccessLocation(req.UserID, req.SourceIP)
+		ctx.GeoVelocity = locationCtx.SpeedKmH
+		ctx.IsImpossibleTravel = locationCtx.IsImpossible
+		ctx.IsNewLocation = locationCtx.IsNewLocation
+		ctx.IsUserBaselineAnomaly = locationCtx.UserBaselineAnomaly
+		ctx.SourceLocationKnown = locationCtx.LocationKnown
+		ctx.SourceCountry = locationCtx.Country
+		ctx.SourceCountryCode = locationCtx.CountryCode
 	}
 
 	return pa.Engine.Evaluate(ctx)
 }
 
+func (pa *PolicyAdministrator) isNewUserDevice(userID, deviceID string, now time.Time) bool {
+	if pa == nil || pa.Store == nil || strings.TrimSpace(userID) == "" || strings.TrimSpace(deviceID) == "" {
+		return false
+	}
+	binding, found := pa.Store.GetDeviceUserBinding(strings.TrimSpace(userID), strings.TrimSpace(deviceID))
+	if !found || binding == nil {
+		return true
+	}
+	if binding.BoundAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return now.Sub(binding.BoundAt) <= newDeviceWindow
+}
+
 func denyTenantMismatch(reason string) *models.AccessDecision {
 	return &models.AccessDecision{
-		Decision:  "deny",
+		Decision:  models.DecisionDeny,
 		Reason:    reason,
 		RiskScore: 100,
 	}

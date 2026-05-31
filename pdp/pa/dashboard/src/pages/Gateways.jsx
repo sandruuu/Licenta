@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Edit2, Router, Trash2 } from 'lucide-react';
+import { Ban, Copy, Edit2, RotateCcw, Router, Trash2 } from 'lucide-react';
 import {
   deleteGateway,
   getGateways,
   getOrganizations,
+  regenerateGatewayToken,
+  revokeGateway,
   updateGateway,
 } from '../api';
+import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
+import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import Modal from '../components/ui/Modal';
 import FormField, { FormInput, FormSelect } from '../components/ui/FormField';
@@ -26,6 +31,17 @@ function statusVariant(status) {
   return 'neutral';
 }
 
+function isRevokedGateway(gateway) {
+  return String(gateway?.status || '').toLowerCase() === 'revoked';
+}
+
+function invalidatedValue(row, value) {
+  if (isRevokedGateway(row)) {
+    return <Badge variant="danger">Invalidated</Badge>;
+  }
+  return <span className="text-mono">{formatDateTime(value)}</span>;
+}
+
 export default function Gateways() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -33,12 +49,19 @@ export default function Gateways() {
   const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
+  const [deleteGatewayTarget, setDeleteGatewayTarget] = useState(null);
+  const [revokeGatewayTarget, setRevokeGatewayTarget] = useState(null);
+  const [reactivateGatewayTarget, setReactivateGatewayTarget] = useState(null);
+  const [reactivationEnrollment, setReactivationEnrollment] = useState(null);
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('tenant_id') || 'all');
+  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('organization_id') || 'all');
 
   const organizationByID = useMemo(() => {
     const result = new Map();
@@ -59,6 +82,8 @@ export default function Gateways() {
       setLoading(false);
     }
   };
+
+  const gatewayCreate = useGatewayCreate(load);
 
   useEffect(() => {
     load();
@@ -81,7 +106,7 @@ export default function Gateways() {
       await updateGateway(form.id, {
         name: form.name?.trim(),
         fqdn: form.fqdn?.trim(),
-        tenant_id: form.tenant_id,
+        organization_id: form.tenant_id,
       });
       setModal(null);
       await load();
@@ -92,14 +117,61 @@ export default function Gateways() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this gateway? This cannot be undone.')) return;
+  const confirmDeleteGateway = async () => {
+    if (!deleteGatewayTarget) return;
     setError('');
+    setDeleting(true);
     try {
-      await deleteGateway(id);
+      await deleteGateway(deleteGatewayTarget.id);
+      setDeleteGatewayTarget(null);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to delete gateway');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const confirmRevokeGateway = async () => {
+    if (!revokeGatewayTarget) return;
+    setError('');
+    setRevoking(true);
+    try {
+      await revokeGateway(revokeGatewayTarget.id);
+      setRevokeGatewayTarget(null);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to revoke gateway');
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  const confirmReactivateGateway = async () => {
+    if (!reactivateGatewayTarget) return;
+    setError('');
+    setReactivating(true);
+    try {
+      const result = await regenerateGatewayToken(reactivateGatewayTarget.id);
+      setReactivationEnrollment({
+        ...result,
+        name: reactivateGatewayTarget.name,
+        fqdn: reactivateGatewayTarget.fqdn,
+      });
+      setReactivateGatewayTarget(null);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to reactivate gateway');
+    } finally {
+      setReactivating(false);
+    }
+  };
+
+  const copyText = async (value) => {
+    try {
+      await navigator.clipboard?.writeText(value || '');
+    } catch {
+      // Clipboard support is best-effort in local development browsers.
     }
   };
 
@@ -120,23 +192,31 @@ export default function Gateways() {
     },
     { key: 'fqdn', label: 'FQDN', render: (value) => <span className="text-mono">{value || '-'}</span> },
     { key: 'status', label: 'Status', render: (value) => <Badge variant={statusVariant(value)}>{value || 'unknown'}</Badge> },
-    { key: 'token_expires_at', label: 'Token Expires', render: (value) => <span className="text-mono">{formatDateTime(value)}</span> },
-    { key: 'cert_expires_at', label: 'Cert Expires', render: (value) => <span className="text-mono">{formatDateTime(value)}</span> },
+    { key: 'token_expires_at', label: 'Token Expires', render: (value, row) => invalidatedValue(row, value) },
+    { key: 'cert_expires_at', label: 'Cert Expires', render: (value, row) => invalidatedValue(row, value) },
     {
       key: 'actions',
       label: 'Actions',
       align: 'right',
-      render: (_, row) => (
-        <TableActions>
-          <TableIconButton icon={Edit2} label="Edit gateway" onClick={() => openEdit(row)} />
-          <TableIconButton
-            icon={Trash2}
-            label="Delete gateway"
-            danger
-            onClick={() => handleDelete(row.id)}
-          />
-        </TableActions>
-      ),
+      render: (_, row) => {
+        const revoked = isRevokedGateway(row);
+        return (
+          <TableActions>
+            <TableIconButton icon={Edit2} label="Edit gateway" onClick={() => openEdit(row)} />
+            {revoked ? (
+              <TableIconButton icon={RotateCcw} label="Reactivate gateway" onClick={() => setReactivateGatewayTarget(row)} />
+            ) : (
+              <TableIconButton icon={Ban} label="Revoke gateway" danger onClick={() => setRevokeGatewayTarget(row)} />
+            )}
+            <TableIconButton
+              icon={Trash2}
+              label="Delete gateway"
+              danger
+              onClick={() => setDeleteGatewayTarget(row)}
+            />
+          </TableActions>
+        );
+      },
     },
   ];
   const filteredGateways = useMemo(() => {
@@ -177,9 +257,32 @@ export default function Gateways() {
     gatewayPagination.resetPage();
   };
 
+  const openCreateGateway = () => {
+    const selectedOrganization = organizationFilter !== 'all'
+      ? organizations.find((organization) => organization.id === organizationFilter)
+      : organizations[0];
+
+    if (!selectedOrganization) {
+      setError('Create an organization before adding a gateway.');
+      return;
+    }
+
+    gatewayCreate.openGatewayCreate(selectedOrganization);
+  };
+
+  const handleCreateGatewayOrganizationChange = (organizationID) => {
+    const selectedOrganization = organizations.find((organization) => organization.id === organizationID);
+    if (selectedOrganization) gatewayCreate.setGatewayOrganization(selectedOrganization);
+  };
+
   return (
     <>
-      <PageHeader title="Gateways" subtitle="Enroll edge gateways under one organization and attach resources to them" />
+      <PageHeader
+        title="Gateways"
+        subtitle="Enroll edge gateways under one organization and attach resources to them"
+        createLabel="Add Gateway"
+        onCreate={openCreateGateway}
+      />
 
       {error && (
         <div className="bg-danger-muted border border-danger rounded-md p-3 mb-4 text-sm text-danger">
@@ -257,6 +360,97 @@ export default function Gateways() {
           </FormField>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        open={!!deleteGatewayTarget}
+        onClose={() => setDeleteGatewayTarget(null)}
+        onConfirm={confirmDeleteGateway}
+        title="Delete gateway"
+        message={
+          deleteGatewayTarget
+            ? `Delete "${deleteGatewayTarget.name || deleteGatewayTarget.fqdn || deleteGatewayTarget.id}"? This gateway will no longer be available for protected resources.`
+            : ''
+        }
+        confirmLabel="Delete gateway"
+        loading={deleting}
+      />
+
+      <ConfirmDialog
+        open={!!revokeGatewayTarget}
+        onClose={() => setRevokeGatewayTarget(null)}
+        onConfirm={confirmRevokeGateway}
+        title="Revoke gateway"
+        message={
+          revokeGatewayTarget
+            ? `Revoke "${revokeGatewayTarget.name || revokeGatewayTarget.fqdn || revokeGatewayTarget.id}" and terminate its active sessions? The gateway will need to be enrolled again before it can protect resources.`
+            : ''
+        }
+        confirmLabel="Revoke gateway"
+        loading={revoking}
+      />
+
+      <ConfirmDialog
+        open={!!reactivateGatewayTarget}
+        onClose={() => setReactivateGatewayTarget(null)}
+        onConfirm={confirmReactivateGateway}
+        title="Reactivate gateway"
+        message={
+          reactivateGatewayTarget
+            ? `Reactivate "${reactivateGatewayTarget.name || reactivateGatewayTarget.fqdn || reactivateGatewayTarget.id}"? A new enrollment token will be generated and the gateway will need to enroll again.`
+            : ''
+        }
+        confirmLabel="Reactivate gateway"
+        confirmVariant="primary"
+        loadingLabel="Reactivating..."
+        loading={reactivating}
+      />
+
+      <Modal
+        open={!!reactivationEnrollment}
+        onClose={() => setReactivationEnrollment(null)}
+        title="Gateway reactivation token"
+        size="lg"
+        footer={(
+          <Button onClick={() => setReactivationEnrollment(null)}>Done</Button>
+        )}
+      >
+        <div className="rounded-md border border-warning/30 bg-warning-muted p-3">
+          <div className="text-xs font-bold text-text-primary">Enrollment token</div>
+          <div className="mt-3 flex items-center gap-2">
+            <code className="text-mono min-w-0 flex-1 [overflow-wrap:anywhere] text-text-primary">
+              {reactivationEnrollment?.enrollment_token || '-'}
+            </code>
+            <button
+              type="button"
+              onClick={() => copyText(reactivationEnrollment?.enrollment_token)}
+              title="Copy enrollment token"
+              aria-label="Copy enrollment token"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-warning/10 hover:text-accent"
+            >
+              <Copy size={14} />
+            </button>
+          </div>
+          <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
+            Expires
+            <span className="mt-1 block text-mono normal-case tracking-normal text-text-secondary">{formatDateTime(reactivationEnrollment?.token_expires_at)}</span>
+          </p>
+        </div>
+      </Modal>
+
+      {gatewayCreate.open ? (
+        <GatewayCreateModal
+          organization={gatewayCreate.organization}
+          organizations={organizations}
+          onOrganizationChange={handleCreateGatewayOrganizationChange}
+          form={gatewayCreate.form}
+          setForm={gatewayCreate.setForm}
+          error={gatewayCreate.error}
+          enrollment={gatewayCreate.enrollment}
+          saving={gatewayCreate.saving}
+          onClose={gatewayCreate.closeGatewayCreate}
+          onCreate={gatewayCreate.handleGatewayCreate}
+        />
+      ) : null}
     </>
   );
 }

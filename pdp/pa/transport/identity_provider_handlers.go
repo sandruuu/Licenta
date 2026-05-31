@@ -14,22 +14,25 @@ import (
 )
 
 // ──────────────────────────────────────────────────────────────────────
-// Admin Identity Provider Config endpoints (per Tenant)
+// Admin Identity Provider Config endpoints (per Organization)
 // ──────────────────────────────────────────────────────────────────────
 
-// handleAdminIdentityProviders handles GET/POST /api/admin/tenants/idps
-// Query param: tenant_id (required).
-// GET  — list IdP configs for a tenant
+// handleAdminIdentityProviders handles GET/POST /api/admin/organizations/idps
+// Query param: organization_id (required).
+// GET  — list IdP configs for an organization
 // POST — create a new IdP config
 func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Request) {
-	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	tenantID := organizationIDFromQuery(r)
 	if tenantID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "tenant_id query parameter is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization_id query parameter is required"})
+		return
+	}
+	if !s.requireOrganizationAccess(w, r, tenantID) {
 		return
 	}
 	tenant, found := s.pa.Store.GetTenant(tenantID)
 	if !found || tenant == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "tenant not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 		return
 	}
 
@@ -125,9 +128,9 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 	}
 }
 
-// handleAdminIdentityProviderByID handles GET/PUT/DELETE /api/admin/tenants/idps/{id}
+// handleAdminIdentityProviderByID handles GET/PUT/DELETE /api/admin/organizations/idps/{id}
 func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/api/admin/tenants/idps/")
+	id := identityProviderIDFromAdminPath(r.URL.Path)
 	id = strings.TrimSpace(id)
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "IdP config ID required"})
@@ -141,12 +144,18 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
+		if !s.requireOrganizationAccess(w, r, cfg.TenantID) {
+			return
+		}
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: s.sanitizeIdPConfigForTenant(cfg, cfg.TenantID)})
 
 	case http.MethodPut:
 		existing, found := s.pa.Store.GetIdentityProviderConfig(id)
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
+			return
+		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
 			return
 		}
 
@@ -222,6 +231,9 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
+		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			return
+		}
 		if !s.pa.Store.DeleteIdentityProviderConfig(id) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete IdP config"})
 			return
@@ -261,11 +273,11 @@ func (s *Server) reconcileTenantDefaultIdP(tenantID string) {
 func (s *Server) setTenantDefaultIdP(tenantID, idpID string) error {
 	tenant, found := s.pa.Store.GetTenant(tenantID)
 	if !found || tenant == nil {
-		return fmt.Errorf("tenant not found")
+		return fmt.Errorf("organization not found")
 	}
 	cfg, found := s.pa.Store.GetIdentityProviderConfig(idpID)
 	if !found || cfg == nil || !strings.EqualFold(cfg.TenantID, tenantID) {
-		return fmt.Errorf("identity provider not found for tenant")
+		return fmt.Errorf("identity provider not found for organization")
 	}
 	if !cfg.Enabled {
 		return fmt.Errorf("disabled identity provider cannot be default")
@@ -307,7 +319,7 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 	}
 	return map[string]interface{}{
 		"id":                 cfg.ID,
-		"tenant_id":          cfg.TenantID,
+		"organization_id":    cfg.TenantID,
 		"name":               cfg.Name,
 		"type":               cfg.Type,
 		"enabled":            cfg.Enabled,
@@ -328,7 +340,7 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 }
 
 // handleAdminIdPDiscover tests OIDC discovery for a given issuer URL.
-// POST /api/admin/tenants/idps/discover  { "issuer": "https://..." }
+// POST /api/admin/organizations/idps/discover  { "issuer": "https://..." }
 func (s *Server) handleAdminIdPDiscover(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -367,4 +379,21 @@ func (s *Server) handleAdminIdPDiscover(w http.ResponseWriter, r *http.Request) 
 		"userinfo_endpoint":      disc.UserinfoEndpoint,
 		"jwks_uri":               disc.JWKSURI,
 	})
+}
+
+func organizationIDFromQuery(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.URL.Query().Get("organization_id"))
+}
+
+func identityProviderIDFromAdminPath(path string) string {
+	path = strings.TrimSpace(path)
+	for _, prefix := range []string{"/api/admin/organizations/idps/"} {
+		if strings.HasPrefix(path, prefix) {
+			return strings.Trim(strings.TrimPrefix(path, prefix), "/")
+		}
+	}
+	return ""
 }

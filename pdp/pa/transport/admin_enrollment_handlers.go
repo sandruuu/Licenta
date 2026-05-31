@@ -22,6 +22,7 @@ func (s *Server) handleAdminEnrollments(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list enrollments"})
 		return
 	}
+	enrollments = filterEnrollmentsByOrganization(enrollments, s.allowedOrganizationIDs(r))
 	writeJSON(w, http.StatusOK, enrollments)
 }
 
@@ -42,6 +43,14 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 	}
 
 	adminUser := r.Header.Get("X-Username")
+	enrollment, found := s.pa.Store.GetDeviceEnrollment(enrollmentID)
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "enrollment not found"})
+		return
+	}
+	if !s.requireOrganizationAccess(w, r, enrollment.TenantID) {
+		return
+	}
 
 	switch action {
 	case "approve":
@@ -92,6 +101,16 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action: " + action + " (expected: approve, revoke)"})
 	}
+}
+
+func filterEnrollmentsByOrganization(enrollments []*models.DeviceEnrollment, allowed map[string]bool) []*models.DeviceEnrollment {
+	filtered := make([]*models.DeviceEnrollment, 0, len(enrollments))
+	for _, enrollment := range enrollments {
+		if enrollment != nil && organizationAllowed(allowed, enrollment.TenantID) {
+			filtered = append(filtered, enrollment)
+		}
+	}
+	return filtered
 }
 
 func (s *Server) writeAdminEnrollmentActionError(w http.ResponseWriter, enrollmentID, action string, err error) {

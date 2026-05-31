@@ -117,7 +117,9 @@ write_pki_roles() {
     allow_any_name=true \
     key_type=any \
     enforce_hostnames=false \
-    allowed_uri_sans="trustgateway://*" \
+    use_csr_common_name=false \
+    use_csr_sans=false \
+    allowed_uri_sans="spiffe://gateway/organization/*/gateway/*" \
     allow_ip_sans=true \
     client_flag=true \
     server_flag=true \

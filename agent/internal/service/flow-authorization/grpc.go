@@ -69,19 +69,25 @@ func authorizeResponseFromStruct(value *structpb.Struct) AuthorizeResponse {
 	}
 	fields := value.AsMap()
 	return AuthorizeResponse{
-		Decision:        stringField(fields, "decision"),
-		Reason:          stringField(fields, "reason"),
-		RiskScore:       int(numberField(fields, "risk_score")),
-		MatchedRule:     stringField(fields, "matched_rule"),
-		Policies:        stringListField(fields["policies"]),
-		SessionID:       stringField(fields, "session_id"),
-		SessionToken:    stringField(fields, "session_token"),
-		GatewayID:       stringField(fields, "gateway_id"),
-		GatewayEndpoint: stringField(fields, "gateway_endpoint"),
-		ResourceID:      stringField(fields, "resource_id"),
-		Protocol:        stringField(fields, "protocol"),
-		Port:            int(numberField(fields, "port")),
-		ExpiresAt:       timeField(fields, "expires_at"),
+		Decision:          stringField(fields, "decision"),
+		Reason:            stringField(fields, "reason"),
+		RiskScore:         int(numberField(fields, "risk_score")),
+		MatchedRule:       stringField(fields, "matched_rule"),
+		Policies:          stringListField(fields["policies"]),
+		SessionID:         stringField(fields, "session_id"),
+		SessionToken:      stringField(fields, "session_token"),
+		GatewayID:         stringField(fields, "gateway_id"),
+		GatewayEndpoint:   stringField(fields, "gateway_endpoint"),
+		GatewayServerName: stringField(fields, "gateway_server_name", "gateway_tls_server_name"),
+		ResourceID:        stringField(fields, "resource_id"),
+		Protocol:          stringField(fields, "protocol"),
+		Port:              int(numberField(fields, "port")),
+		ExpiresAt:         timeField(fields, "expires_at"),
+		StepUpChallengeID: stringField(fields, "step_up_challenge_id"),
+		StepUpURL:         stringField(fields, "step_up_url"),
+		StepUpMethods:     stringListField(fields["step_up_methods"]),
+		StepUpRequiredACR: stringField(fields, "step_up_required_acr"),
+		StepUpExpiresAt:   timeField(fields, "step_up_expires_at"),
 	}
 }
 

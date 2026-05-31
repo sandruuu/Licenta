@@ -30,6 +30,7 @@ type PolicyAdministrator struct {
 	Gateways   *gateway.Service
 	Resources  *resources.Service
 	Sessions   *sessions.SessionManager
+	StepUps    *StepUpManager
 	Audit      *audit.AuditLogger
 	Store      *store.Store
 	Cfg        *config.Config
@@ -55,6 +56,7 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 		}),
 		Resources: resources.NewService(s),
 		Sessions:  sessions.NewSessionManager(s, cfg.SessionExpiry, cfg.MaxSessions),
+		StepUps:   NewStepUpManager(),
 		Audit:     auditLogger,
 		Store:     s,
 		Cfg:       cfg,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Edit2, Server, Trash2 } from 'lucide-react';
+import { Ban, Edit2, RotateCcw, Server, Trash2 } from 'lucide-react';
 import {
   createResource,
   deleteResource,
@@ -11,6 +11,7 @@ import {
 } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
@@ -19,6 +20,7 @@ import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui
 import Pagination from '../components/ui/Pagination';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { usePublicConfig } from '../config/publicConfig';
+import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 const typeMeta = [
   { value: 'web', label: 'WEB' },
@@ -38,13 +40,6 @@ function catalogHost(resource) {
   return externalURL || resource?.host || '-';
 }
 
-function typeVariant(type) {
-  if (type === 'web') return 'info';
-  if (type === 'ssh') return 'success';
-  if (type === 'rdp') return 'accent';
-  return 'neutral';
-}
-
 export default function Resources() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -56,12 +51,18 @@ export default function Resources() {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
+  const [deleteResourceTarget, setDeleteResourceTarget] = useState(null);
+  const [revokeResourceTarget, setRevokeResourceTarget] = useState(null);
+  const [reactivateResourceTarget, setReactivateResourceTarget] = useState(null);
   const [error, setError] = useState('');
   const [openedCreateFromURL, setOpenedCreateFromURL] = useState(false);
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('tenant_id') || 'all');
+  const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('organization_id') || 'all');
 
   const organizationByID = useMemo(() => new Map(organizations.map((organization) => [organization.id, organization])), [organizations]);
   const gatewayByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
@@ -91,7 +92,7 @@ export default function Resources() {
     load();
   }, []);
 
-  const defaultOrganizationID = () => searchParams.get('tenant_id') || organizations[0]?.id || '';
+  const defaultOrganizationID = () => searchParams.get('organization_id') || organizations[0]?.id || '';
   const defaultGatewayID = (organizationID) => searchParams.get('gateway_id') || gatewaysForOrganization(organizationID)[0]?.id || '';
 
   const openCreate = (type = searchParams.get('type') || 'web') => {
@@ -122,7 +123,7 @@ export default function Resources() {
 
     const type = searchParams.get('type') || 'web';
     const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
-    const organizationID = searchParams.get('tenant_id') || organizations[0]?.id || '';
+    const organizationID = searchParams.get('organization_id') || organizations[0]?.id || '';
     const option = typeOptions.find((item) => item.value === normalizedType);
     const gatewayID = searchParams.get('gateway_id') || gateways.find((gateway) => gateway.tenant_id === organizationID)?.id || '';
 
@@ -175,7 +176,7 @@ export default function Resources() {
       name: form.name?.trim(),
       description: form.description?.trim(),
       type: form.type,
-      tenant_id: form.tenant_id,
+      organization_id: form.tenant_id,
       gateway_id: form.gateway_id,
       host: form.host?.trim(),
       port: parseInt(form.port, 10) || 0,
@@ -199,14 +200,48 @@ export default function Resources() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Delete this resource?')) return;
+  const confirmDeleteResource = async () => {
+    if (!deleteResourceTarget) return;
     setError('');
+    setDeleting(true);
     try {
-      await deleteResource(id);
+      await deleteResource(deleteResourceTarget.id);
+      setDeleteResourceTarget(null);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to delete resource');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const confirmRevokeResource = async () => {
+    if (!revokeResourceTarget) return;
+    setError('');
+    setRevoking(true);
+    try {
+      await updateResource(revokeResourceTarget.id, { enabled: false });
+      setRevokeResourceTarget(null);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to revoke resource');
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  const confirmReactivateResource = async () => {
+    if (!reactivateResourceTarget) return;
+    setError('');
+    setReactivating(true);
+    try {
+      await updateResource(reactivateResourceTarget.id, { enabled: true });
+      setReactivateResourceTarget(null);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to reactivate resource');
+    } finally {
+      setReactivating(false);
     }
   };
 
@@ -220,7 +255,7 @@ export default function Resources() {
         </div>
       ),
     },
-    { key: 'type', label: 'Type', render: (value) => <Badge variant={typeVariant(value)}>{(value || '').toUpperCase()}</Badge> },
+    { key: 'type', label: 'Type', render: (value) => <Badge variant={resourceTypeBadgeVariant(value)}>{(value || '').toUpperCase()}</Badge> },
     { key: 'tenant_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
     { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
@@ -238,7 +273,12 @@ export default function Resources() {
       render: (_, row) => (
         <TableActions>
           <TableIconButton icon={Edit2} label="Edit resource" onClick={() => openEdit(row)} />
-          <TableIconButton icon={Trash2} label="Delete resource" danger onClick={() => handleDelete(row.id)} />
+          {row.enabled === false ? (
+            <TableIconButton icon={RotateCcw} label="Reactivate resource" onClick={() => setReactivateResourceTarget(row)} />
+          ) : (
+            <TableIconButton icon={Ban} label="Revoke resource" danger onClick={() => setRevokeResourceTarget(row)} />
+          )}
+          <TableIconButton icon={Trash2} label="Delete resource" danger onClick={() => setDeleteResourceTarget(row)} />
         </TableActions>
       ),
     },
@@ -384,20 +424,63 @@ export default function Resources() {
             <FormInput value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Production Admin Portal" />
           </FormField>
 
-          <FormField label="Internal Host" className={`mb-0 ${form.type === 'web' ? 'md:col-span-2' : 'md:col-span-4'}`}>
+          <FormField label="Internal Host" className="mb-0 md:col-span-2">
             <FormInput value={form.host || ''} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="10.0.0.5 or server.internal" />
           </FormField>
-          {form.type === 'web' && (
-            <FormField label="External URL" className="mb-0 md:col-span-2">
-              <FormInput value={form.external_url || ''} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://app.example.com" />
-            </FormField>
-          )}
+          <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
+            <FormInput value={form.external_url || ''} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://app.example.com or ssh.example.com" />
+          </FormField>
 
           <div className="md:col-span-4 flex flex-wrap items-center gap-x-8 gap-y-3 pt-2">
             <FormCheckbox id="res-enabled" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} label="Enabled" />
           </div>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        open={!!deleteResourceTarget}
+        onClose={() => setDeleteResourceTarget(null)}
+        onConfirm={confirmDeleteResource}
+        title="Delete resource"
+        message={
+          deleteResourceTarget
+            ? `Delete "${deleteResourceTarget.name}"? This resource will no longer be available for protected access.`
+            : ''
+        }
+        confirmLabel="Delete resource"
+        loading={deleting}
+      />
+
+      <ConfirmDialog
+        open={!!revokeResourceTarget}
+        onClose={() => setRevokeResourceTarget(null)}
+        onConfirm={confirmRevokeResource}
+        title="Revoke resource"
+        message={
+          revokeResourceTarget
+            ? `Revoke "${revokeResourceTarget.name}"? New sessions for this resource will be disabled until it is reactivated.`
+            : ''
+        }
+        confirmLabel="Revoke resource"
+        loadingLabel="Revoking..."
+        loading={revoking}
+      />
+
+      <ConfirmDialog
+        open={!!reactivateResourceTarget}
+        onClose={() => setReactivateResourceTarget(null)}
+        onConfirm={confirmReactivateResource}
+        title="Reactivate resource"
+        message={
+          reactivateResourceTarget
+            ? `Reactivate "${reactivateResourceTarget.name}"? The resource can become available again according to its policies.`
+            : ''
+        }
+        confirmLabel="Reactivate resource"
+        confirmVariant="primary"
+        loadingLabel="Reactivating..."
+        loading={reactivating}
+      />
     </>
   );
 }

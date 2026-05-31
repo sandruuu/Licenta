@@ -53,7 +53,7 @@ func TestRunControlStreamOnceUsesMTLSAndAppliesCommands(t *testing.T) {
 	writePEM(t, config.GatewayCertPath, "CERTIFICATE", certs.gatewayCertDER)
 	writePEM(t, config.GatewayKeyPath, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(certs.gatewayKey))
 
-	server := &testControlServer{t: t}
+	server := &testControlServer{t: t, expectedEndpoint: "localhost:9443"}
 	serverTLS := &tls.Config{
 		MinVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{certs.serverCert},
@@ -72,13 +72,13 @@ func TestRunControlStreamOnceUsesMTLSAndAppliesCommands(t *testing.T) {
 		listener.Close()
 	})
 
-	client, err := NewClient(&config.Config{PAURL: "https://" + listener.Addr().String()})
+	client, err := NewClient(&config.Config{PAURL: "https://" + listener.Addr().String(), PublicEndpoint: "localhost:9443"})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	protocol, err := NewHandler("gw-1", &recordingControlHandler{}, nil)
+	protocol, err := NewHandlerWithOptions("gw-1", &recordingControlHandler{}, HandlerOptions{PublicEndpoint: client.publicEndpoint})
 	if err != nil {
-		t.Fatalf("NewHandler() error = %v", err)
+		t.Fatalf("NewHandlerWithOptions() error = %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -94,6 +94,7 @@ func TestRunControlStreamOnceUsesMTLSAndAppliesCommands(t *testing.T) {
 type testControlServer struct {
 	t                    *testing.T
 	sawClientCertificate bool
+	expectedEndpoint     string
 }
 
 func (server *testControlServer) ControlStream(stream grpc.ServerStream) error {
@@ -109,6 +110,11 @@ func (server *testControlServer) ControlStream(stream grpc.ServerStream) error {
 	}
 	if got := structFieldString(hello, "type"); got != MessageGatewayHello {
 		server.t.Fatalf("hello type = %q, want %q", got, MessageGatewayHello)
+	}
+	if server.expectedEndpoint != "" {
+		if got := structFieldString(hello, "gateway_endpoint"); got != server.expectedEndpoint {
+			server.t.Fatalf("gateway_endpoint = %q, want %q", got, server.expectedEndpoint)
+		}
 	}
 	provision := mustStruct(server.t, map[string]interface{}{
 		"type":       CommandProvisionSession,

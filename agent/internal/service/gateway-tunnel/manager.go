@@ -80,13 +80,14 @@ func (err *GatewayError) Error() string {
 }
 
 type Manager struct {
-	mu       sync.Mutex
-	options  Options
-	logger   *slog.Logger
-	status   Status
-	conn     net.Conn
-	session  *yamux.Session
-	statusMu sync.RWMutex
+	mu                sync.Mutex
+	options           Options
+	defaultServerName string
+	logger            *slog.Logger
+	status            Status
+	conn              net.Conn
+	session           *yamux.Session
+	statusMu          sync.RWMutex
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -113,9 +114,10 @@ func NewManager(options Options) (*Manager, error) {
 		options.ReconnectMaxBackoff = 30 * time.Second
 	}
 	return &Manager{
-		options: options,
-		logger:  loggerOrDefault(options.Logger),
-		status:  Status{State: StatusStopped, GatewayAddress: options.GatewayAddress, ServerName: options.ServerName, UpdatedAt: time.Now().UTC()},
+		options:           options,
+		defaultServerName: options.ServerName,
+		logger:            loggerOrDefault(options.Logger),
+		status:            Status{State: StatusStopped, GatewayAddress: options.GatewayAddress, ServerName: options.ServerName, UpdatedAt: time.Now().UTC()},
 	}, nil
 }
 
@@ -171,6 +173,10 @@ func (manager *Manager) Connect(ctx context.Context) error {
 }
 
 func (manager *Manager) ConnectTo(ctx context.Context, gatewayAddress string) error {
+	return manager.ConnectToServerName(ctx, gatewayAddress, "")
+}
+
+func (manager *Manager) ConnectToServerName(ctx context.Context, gatewayAddress, serverName string) error {
 	if manager == nil {
 		return errors.New("gateway tunnel manager is nil")
 	}
@@ -178,13 +184,18 @@ func (manager *Manager) ConnectTo(ctx context.Context, gatewayAddress string) er
 	if gatewayAddress == "" {
 		return errors.New("gateway endpoint is required")
 	}
+	serverName = strings.TrimSpace(serverName)
+	if serverName == "" {
+		serverName = manager.defaultServerName
+	}
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.session != nil && !manager.session.IsClosed() && strings.EqualFold(manager.options.GatewayAddress, gatewayAddress) {
+	if manager.session != nil && !manager.session.IsClosed() && strings.EqualFold(manager.options.GatewayAddress, gatewayAddress) && strings.EqualFold(strings.TrimSpace(manager.options.ServerName), serverName) {
 		return nil
 	}
 	manager.closeSessionLocked()
 	manager.options.GatewayAddress = gatewayAddress
+	manager.options.ServerName = serverName
 	return manager.connectLocked(ctx)
 }
 
@@ -205,7 +216,7 @@ func (manager *Manager) OpenResourceStream(ctx context.Context, request Resource
 	if strings.TrimSpace(request.SessionID) == "" || strings.TrimSpace(request.SessionToken) == "" {
 		return nil, errors.New("Gateway stream requires PDP-provisioned session material")
 	}
-	if err := manager.ConnectTo(ctx, firstNonEmpty(request.GatewayEndpoint, manager.options.GatewayAddress)); err != nil {
+	if err := manager.ConnectToServerName(ctx, firstNonEmpty(request.GatewayEndpoint, manager.options.GatewayAddress), request.GatewayServerName); err != nil {
 		return nil, err
 	}
 	manager.mu.Lock()

@@ -8,10 +8,25 @@ import (
 )
 
 const (
-	gatewayTrustGRPCGetCACertificate  = "/gateway.GatewayTrustService/GetCACertificate"
-	gatewayTrustGRPCGetRevokedSerials = "/gateway.GatewayTrustService/GetRevokedSerials"
-	gatewayEnrollmentGRPCRenewCert    = "/gateway.GatewayEnrollmentService/RenewCertificate"
+	gatewayTrustGRPCGetCACertificate   = "/gateway.GatewayTrustService/GetCACertificate"
+	gatewayTrustGRPCGetRevokedSerials  = "/gateway.GatewayTrustService/GetRevokedSerials"
+	gatewayTrustGRPCRevalidateSessions = "/gateway.GatewayTrustService/RevalidateSessions"
+	gatewayEnrollmentGRPCRenewCert     = "/gateway.GatewayEnrollmentService/RenewCertificate"
 )
+
+type RevalidationSession struct {
+	SessionID  string
+	DeviceID   string
+	ResourceID string
+	Protocol   string
+	ExpiresAt  string
+}
+
+type SessionRevalidationResult struct {
+	SessionID string
+	Status    string
+	Reason    string
+}
 
 func (client *Client) GetCACert() ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
@@ -41,6 +56,56 @@ func (client *Client) GetRevokedSerials() ([]string, error) {
 		return nil, fmt.Errorf("parse revoked serials: %w", err)
 	}
 	return serials, nil
+}
+
+func (client *Client) RevalidateSessions(ctx context.Context, sessions []RevalidationSession) ([]SessionRevalidationResult, error) {
+	items := make([]interface{}, 0, len(sessions))
+	for _, session := range sessions {
+		if session.SessionID == "" {
+			continue
+		}
+		item := map[string]interface{}{
+			"session_id":  session.SessionID,
+			"device_id":   session.DeviceID,
+			"resource_id": session.ResourceID,
+			"protocol":    session.Protocol,
+			"expires_at":  session.ExpiresAt,
+		}
+		items = append(items, item)
+	}
+	request, err := structpb.NewStruct(map[string]interface{}{"sessions": items})
+	if err != nil {
+		return nil, fmt.Errorf("build session revalidation request: %w", err)
+	}
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), requestTimeout)
+		defer cancel()
+	}
+	response, err := client.invokeUnary(ctx, gatewayTrustGRPCRevalidateSessions, request)
+	if err != nil {
+		return nil, fmt.Errorf("revalidate provisioned sessions: %w", err)
+	}
+	field := response.GetFields()["invalid_sessions"]
+	if field == nil || field.GetListValue() == nil {
+		return nil, nil
+	}
+	results := make([]SessionRevalidationResult, 0, len(field.GetListValue().GetValues()))
+	for _, value := range field.GetListValue().GetValues() {
+		item := value.GetStructValue()
+		if item == nil {
+			continue
+		}
+		result := SessionRevalidationResult{
+			SessionID: structFieldString(item, "session_id"),
+			Status:    structFieldString(item, "status"),
+			Reason:    structFieldString(item, "reason"),
+		}
+		if result.SessionID != "" {
+			results = append(results, result)
+		}
+	}
+	return results, nil
 }
 
 type CertRenewalResponse struct {
