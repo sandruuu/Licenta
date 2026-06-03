@@ -2,8 +2,6 @@ import { createElement, useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
-  Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   Pie,
@@ -15,24 +13,14 @@ import {
 } from 'recharts';
 import {
   Activity,
-  AlertTriangle,
   Clock3,
   FileText,
-  KeyRound,
-  Monitor,
   PieChart as PieChartIcon,
-  Radio,
-  Server,
-  ShieldCheck,
 } from 'lucide-react';
 import {
   getAuditLog,
   getDashboardStats,
-  getDeviceDataReports,
-  getResources,
-  getSessions,
 } from '../api';
-import Badge from '../components/ui/Badge';
 import PageHeader from '../components/ui/PageHeader';
 import { formatDateTime } from '../utils/format';
 
@@ -45,35 +33,6 @@ const CHART_COLORS = {
   muted: 'color-mix(in srgb, var(--color-cool-steel) 54%, var(--color-white-smoke))',
   grid: 'color-mix(in srgb, var(--color-border-light) 70%, transparent)',
   text: 'var(--color-text-muted)',
-};
-
-const RESOURCE_TYPE_CHART_COLORS = {
-  web: '#1f6f78',
-  ssh: '#4353a3',
-  rdp: '#7550a8',
-};
-
-const TONE_STYLES = {
-  accent: {
-    background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)',
-    color: 'var(--color-accent)',
-  },
-  info: {
-    background: 'color-mix(in srgb, var(--color-info) 13%, transparent)',
-    color: 'var(--color-info)',
-  },
-  success: {
-    background: 'color-mix(in srgb, #9ed7aa 34%, transparent)',
-    color: '#2f6f3a',
-  },
-  warning: {
-    background: 'color-mix(in srgb, #f3d57b 42%, transparent)',
-    color: '#79620a',
-  },
-  danger: {
-    background: 'color-mix(in srgb, #eba5a0 36%, transparent)',
-    color: '#93433d',
-  },
 };
 
 const DECISION_PILL_STYLES = {
@@ -144,18 +103,6 @@ function classifyAuditEntry(entry) {
   return 'Other';
 }
 
-function devicePosture(report) {
-  const checks = asList(report?.checks);
-  if (checks.length === 0) return 'No data';
-  if (checks.some((check) => normalizeText(check.status) === 'critical')) return 'Critical';
-  if (checks.some((check) => ['warning', 'unavailable'].includes(normalizeText(check.status)))) return 'Warning';
-  return 'Healthy';
-}
-
-function getResourceType(resource) {
-  return resource?.type || resource?.protocol || 'other';
-}
-
 function makeDecisionData(audit, stats) {
   const counts = new Map([
     ['Allowed', 0],
@@ -174,76 +121,6 @@ function makeDecisionData(audit, stats) {
     { label: 'Step-up', value: counts.get('Step-up') || 0, color: CHART_COLORS.warning },
     { label: 'Blocked', value: counts.get('Blocked') || 0, color: CHART_COLORS.danger },
     { label: 'Failed', value: counts.get('Failed') || 0, color: CHART_COLORS.muted },
-  ];
-}
-
-function makeDeviceData(reports, stats) {
-  if (reports.length === 0) {
-    const totalDevices = safeNumber(stats?.total_devices);
-    const healthyDevices = safeNumber(stats?.healthy_devices);
-    return [
-      { label: 'Healthy', value: healthyDevices, color: CHART_COLORS.success },
-      { label: 'Needs attention', value: Math.max(totalDevices - healthyDevices, 0), color: CHART_COLORS.warning },
-      { label: 'No data', value: 0, color: CHART_COLORS.muted },
-    ];
-  }
-
-  const counts = new Map([
-    ['Healthy', 0],
-    ['Warning', 0],
-    ['Critical', 0],
-    ['No data', 0],
-  ]);
-
-  for (const report of reports) {
-    const posture = devicePosture(report);
-    counts.set(posture, (counts.get(posture) || 0) + 1);
-  }
-
-  return [
-    { label: 'Healthy', value: counts.get('Healthy') || 0, color: CHART_COLORS.success },
-    { label: 'Warning', value: counts.get('Warning') || 0, color: CHART_COLORS.warning },
-    { label: 'Critical', value: counts.get('Critical') || 0, color: CHART_COLORS.danger },
-    { label: 'No data', value: counts.get('No data') || 0, color: CHART_COLORS.muted },
-  ];
-}
-
-function makeResourceTypeData(resources) {
-  const counts = new Map();
-  for (const resource of resources) {
-    const type = getResourceType(resource);
-    counts.set(type, (counts.get(type) || 0) + 1);
-  }
-
-  const palette = [CHART_COLORS.accent, CHART_COLORS.info, CHART_COLORS.success, CHART_COLORS.warning, CHART_COLORS.muted];
-  const entries = Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-
-  if (entries.length === 0) {
-    return [{ label: 'No resources', value: 0, color: CHART_COLORS.muted }];
-  }
-
-  return entries.map(([label, value], index) => ({
-    label,
-    value,
-    color: RESOURCE_TYPE_CHART_COLORS[String(label || '').toLowerCase()] || palette[index % palette.length],
-  }));
-}
-
-function makeSessionData(sessions, stats) {
-  const now = Date.now();
-  const active = sessions.filter((session) => {
-    const expires = new Date(session?.expires_at).getTime();
-    return !session?.revoked && (!Number.isFinite(expires) || expires > now);
-  }).length;
-  const revoked = sessions.filter((session) => session?.revoked).length;
-  const expired = Math.max(sessions.length - active - revoked, 0);
-
-  return [
-    { label: 'Active', value: sessions.length ? active : safeNumber(stats?.active_sessions), color: CHART_COLORS.success },
-    { label: 'Expired', value: expired, color: CHART_COLORS.muted },
-    { label: 'Revoked', value: revoked, color: CHART_COLORS.danger },
   ];
 }
 
@@ -286,23 +163,6 @@ function makeActivityTrend(entries) {
 
 function totalValue(data) {
   return data.reduce((sum, item) => sum + safeNumber(item.value), 0);
-}
-
-function MetricCard({ icon: Icon, label, value, detail, tone = 'accent' }) {
-  return (
-    <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface transition-colors hover:border-accent">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-bold uppercase text-text-muted">{label}</p>
-          <p className="mt-3 text-3xl font-bold leading-none text-text-primary">{formatNumber(value)}</p>
-        </div>
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md" style={TONE_STYLES[tone] || TONE_STYLES.accent}>
-          {createElement(Icon, { size: 20 })}
-        </div>
-      </div>
-      {detail && <p className="mt-3 truncate text-sm font-semibold text-text-secondary">{detail}</p>}
-    </div>
-  );
 }
 
 function DashboardPanel({ icon: Icon, title, right, children, className = '', bodyClassName = 'p-5' }) {
@@ -360,15 +220,12 @@ function ChartLegend({ data }) {
         const value = safeNumber(item.value);
         const percent = total > 0 ? Math.round((value / total) * 100) : 0;
         return (
-          <div key={item.label} className="flex items-center justify-between gap-3">
+          <div key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
             <div className="flex min-w-0 items-center gap-2">
               <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: item.color }} />
               <span className="truncate text-sm font-semibold text-text-secondary">{item.label}</span>
             </div>
-            <div className="shrink-0 text-right">
-              <span className="text-sm font-bold text-text-primary">{formatNumber(value)}</span>
-              <span className="ml-2 text-xs font-semibold text-text-muted">{percent}%</span>
-            </div>
+            <span className="text-right text-xs font-semibold text-text-muted">{percent}%</span>
           </div>
         );
       })}
@@ -376,20 +233,16 @@ function ChartLegend({ data }) {
   );
 }
 
-function DonutChart({ data, centerLabel, centerValue, compact = false, sideLegend = false }) {
+function DonutChart({ data, centerLabel, centerValue, compact = false }) {
   const total = totalValue(data);
   const chartData = total > 0
     ? data.filter((item) => safeNumber(item.value) > 0)
     : [{ label: 'No data', value: 1, color: 'var(--color-border)' }];
-  const layoutClass = sideLegend
-    ? 'grid gap-5 sm:grid-cols-[176px_1fr] sm:items-center'
-    : compact
-      ? 'grid gap-4'
-      : 'grid gap-5 md:grid-cols-[220px_1fr] md:items-center';
+  const chartSizeClass = compact ? 'h-[176px] max-w-[176px]' : 'h-[220px] max-w-[220px]';
 
   return (
-    <div className={layoutClass}>
-      <div className={`relative min-w-0 ${compact || sideLegend ? 'h-[176px]' : 'h-[220px]'}`}>
+    <div className="grid gap-4">
+      <div className={`relative mx-auto w-full min-w-0 ${chartSizeClass}`}>
         <ResponsiveContainer width="100%" height="100%">
           <RechartsPieChart>
             <Pie
@@ -416,49 +269,6 @@ function DonutChart({ data, centerLabel, centerValue, compact = false, sideLegen
         </div>
       </div>
       <ChartLegend data={data} />
-    </div>
-  );
-}
-
-function VerticalBarChart({ data, height = 260, barSize = 34 }) {
-  return (
-    <div style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 12, bottom: 2, left: -16 }}>
-          <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="label" tick={AXIS_STYLE} tickLine={false} axisLine={false} interval={0} />
-          <YAxis tick={AXIS_STYLE} tickLine={false} axisLine={false} allowDecimals={false} />
-          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'var(--color-accent-muted)' }} animationDuration={0} />
-          <Bar dataKey="value" name="Events" radius={[6, 6, 0, 0]} barSize={barSize} isAnimationActive={false}>
-            {data.map((item) => <Cell key={item.label} fill={item.color} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  );
-}
-
-function HorizontalBarChart({ data, height = 240, axisWidth = 118 }) {
-  return (
-    <div style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} layout="vertical" margin={{ top: 8, right: 16, bottom: 8, left: 16 }}>
-          <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" horizontal={false} />
-          <XAxis type="number" hide allowDecimals={false} />
-          <YAxis
-            type="category"
-            dataKey="label"
-            tick={AXIS_STYLE}
-            tickLine={false}
-            axisLine={false}
-            width={axisWidth}
-          />
-          <Tooltip content={<ChartTooltip />} cursor={{ fill: 'var(--color-accent-muted)' }} animationDuration={0} />
-          <Bar dataKey="value" name="Count" radius={[0, 6, 6, 0]} barSize={16} isAnimationActive={false}>
-            {data.map((item) => <Cell key={item.label} fill={item.color} />)}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
     </div>
   );
 }
@@ -571,9 +381,6 @@ function DashboardSkeleton() {
 export default function Dashboard() {
   const [stats, setStats] = useState({});
   const [audit, setAudit] = useState([]);
-  const [resources, setResources] = useState([]);
-  const [sessions, setSessions] = useState([]);
-  const [deviceReports, setDeviceReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -587,19 +394,13 @@ export default function Dashboard() {
       const results = await Promise.allSettled([
         getDashboardStats(),
         getAuditLog(40),
-        getResources(),
-        getSessions(),
-        getDeviceDataReports(),
       ]);
 
       if (cancelled) return;
 
-      const [statsResult, auditResult, resourcesResult, sessionsResult, deviceReportsResult] = results;
+      const [statsResult, auditResult] = results;
       setStats(statsResult.status === 'fulfilled' && statsResult.value ? statsResult.value : {});
       setAudit(auditResult.status === 'fulfilled' ? asList(auditResult.value) : []);
-      setResources(resourcesResult.status === 'fulfilled' ? asList(resourcesResult.value) : []);
-      setSessions(sessionsResult.status === 'fulfilled' ? asList(sessionsResult.value) : []);
-      setDeviceReports(deviceReportsResult.status === 'fulfilled' ? asList(deviceReportsResult.value) : []);
 
       if (results.some((result) => result.status === 'rejected')) {
         setError('Some dashboard data could not be loaded.');
@@ -615,26 +416,7 @@ export default function Dashboard() {
   }, []);
 
   const decisionData = useMemo(() => makeDecisionData(audit, stats), [audit, stats]);
-  const deviceData = useMemo(() => makeDeviceData(deviceReports, stats), [deviceReports, stats]);
-  const resourceTypeData = useMemo(() => makeResourceTypeData(resources), [resources]);
-  const sessionData = useMemo(() => makeSessionData(sessions, stats), [sessions, stats]);
   const activityTrend = useMemo(() => makeActivityTrend(audit), [audit]);
-
-  const getDecisionValue = (label) => safeNumber(decisionData.find((item) => item.label === label)?.value);
-  const loadedDecisionEvents = totalValue(decisionData);
-  const allowedEvents = getDecisionValue('Allowed');
-  const stepUpEvents = getDecisionValue('Step-up');
-  const blockedEvents = getDecisionValue('Blocked') + getDecisionValue('Failed');
-  const allowedRate = loadedDecisionEvents > 0 ? Math.round((allowedEvents / loadedDecisionEvents) * 100) : 0;
-  const totalDevices = deviceReports.length || safeNumber(stats?.total_devices);
-  const recentDenials = safeNumber(stats?.recent_denials);
-  const mfaSignals = audit.filter((entry) => classifyAuditEntry(entry) === 'Step-up').length;
-
-  const riskData = [
-    { label: 'Recent denials', value: recentDenials, color: CHART_COLORS.danger },
-    { label: 'MFA step-ups', value: mfaSignals, color: CHART_COLORS.warning },
-    { label: 'Unhealthy devices', value: Math.max(totalDevices - safeNumber(stats?.healthy_devices), 0), color: CHART_COLORS.muted },
-  ];
 
   if (loading) {
     return (
@@ -655,18 +437,10 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={Activity} label="Access events" value={loadedDecisionEvents} detail={`${formatNumber(audit.length)} audit entries loaded`} tone="accent" />
-        <MetricCard icon={ShieldCheck} label="Allowed" value={allowedEvents} detail={`${allowedRate}% of decisions`} tone="success" />
-        <MetricCard icon={KeyRound} label="Step-up" value={stepUpEvents} detail="MFA challenges required" tone="warning" />
-        <MetricCard icon={AlertTriangle} label="Blocked" value={blockedEvents} detail={`${formatNumber(recentDenials)} recent denials`} tone={blockedEvents > 0 ? 'danger' : 'warning'} />
-      </div>
-
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
         <DashboardPanel
           icon={Activity}
           title="Access Activity"
-          right={<Badge variant="info">7 days</Badge>}
           className="xl:col-span-8"
           bodyClassName="px-3 py-4 sm:px-5"
         >
@@ -675,27 +449,10 @@ export default function Dashboard() {
 
         <DashboardPanel
           icon={PieChartIcon}
-          title="Decision Mix"
-          right={<Badge variant="accent">Last {formatNumber(audit.length)}</Badge>}
+          title="Decisions"
           className="xl:col-span-4"
         >
-          <DonutChart data={decisionData} centerLabel="Events" compact sideLegend />
-        </DashboardPanel>
-
-        <DashboardPanel icon={Monitor} title="Device Posture" right={<Badge variant={safeNumber(stats?.healthy_devices) === totalDevices ? 'success' : 'warning'}>{formatNumber(totalDevices)} devices</Badge>} className="xl:col-span-3">
-          <DonutChart data={deviceData} centerLabel="Devices" centerValue={totalDevices} compact />
-        </DashboardPanel>
-
-        <DashboardPanel icon={ShieldCheck} title="Risk Signals" className="xl:col-span-3">
-          <HorizontalBarChart data={riskData} height={210} axisWidth={116} />
-        </DashboardPanel>
-
-        <DashboardPanel icon={Server} title="Resource Types" className="xl:col-span-3">
-          <VerticalBarChart data={resourceTypeData} height={210} barSize={28} />
-        </DashboardPanel>
-
-        <DashboardPanel icon={Radio} title="Session State" right={<Badge variant="info">{formatNumber(totalValue(sessionData))} total</Badge>} className="xl:col-span-3">
-          <DonutChart data={sessionData} centerLabel="Sessions" compact />
+          <DonutChart data={decisionData} centerLabel="Events" compact />
         </DashboardPanel>
 
         <DashboardPanel

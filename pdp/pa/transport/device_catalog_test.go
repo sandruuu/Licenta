@@ -60,13 +60,14 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		UpdatedAt: time.Now(),
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assignment-device-data-1",
-		PolicyID:  "policy-device-data-1",
-		TenantID:  transportTestTenantID,
-		Level:     "organization",
-		Enabled:   true,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:         "assignment-device-data-1",
+		PolicyID:   "policy-device-data-1",
+		TenantID:   transportTestTenantID,
+		Level:      "resource",
+		ResourceID: "res-1",
+		Enabled:    true,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
 	})
 
 	service := &deviceCatalogGRPCService{server: server}

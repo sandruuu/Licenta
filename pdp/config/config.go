@@ -2,8 +2,22 @@ package config
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+)
+
+const (
+	PDPFQDNEnv                 = "PDP_FQDN"
+	PDPPublicHostEnv           = "PDP_PUBLIC_HOST"
+	PDPPublicOriginEnv         = "PDP_PUBLIC_ORIGIN"
+	PDPFederatedCallbackURLEnv = "PDP_FEDERATED_CALLBACK_URL"
+	PDPWebAuthnRPIDEnv         = "PDP_WEBAUTHN_RP_ID"
+	PDPWebAuthnRPOriginsEnv    = "PDP_WEBAUTHN_RP_ORIGINS"
+	PDPCORSOriginsEnv          = "PDP_CORS_ORIGINS"
+	PDPAdminRequireMFAEnv      = "PDP_ADMIN_REQUIRE_MFA"
 )
 
 // RuntimeConfig holds operational knobs that used to live as literals in code.
@@ -199,7 +213,92 @@ func LoadFromFile(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg.ApplyDefaults()
+	cfg.ApplyEnvironmentOverrides()
 	return &cfg, nil
+}
+
+// ApplyEnvironmentOverrides lets deployment overlays publish the PDP under a
+// public hostname without mutating the local lab config.json.
+func (c *Config) ApplyEnvironmentOverrides() {
+	if c == nil {
+		return
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPFQDNEnv)); value != "" {
+		c.PDPFQDN = value
+	}
+	if origin, rpHost := publicOriginFromEnvironment(); origin != "" {
+		c.applyPublicOrigin(origin, rpHost)
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPFederatedCallbackURLEnv)); value != "" {
+		c.Public.FederatedCallbackURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPWebAuthnRPIDEnv)); value != "" {
+		c.WebAuthnRPID = value
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPWebAuthnRPOriginsEnv)); value != "" {
+		c.WebAuthnRPOrigins = value
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPCORSOriginsEnv)); value != "" {
+		c.CORSOrigins = splitCSV(value)
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPAdminRequireMFAEnv)); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			c.AdminAuth.RequireMFA = &parsed
+		}
+	}
+}
+
+func publicOriginFromEnvironment() (string, string) {
+	if value := strings.TrimSpace(os.Getenv(PDPPublicOriginEnv)); value != "" {
+		return normalizePublicOrigin(value)
+	}
+	if value := strings.TrimSpace(os.Getenv(PDPPublicHostEnv)); value != "" {
+		return normalizePublicOrigin("https://" + value)
+	}
+	return "", ""
+}
+
+func normalizePublicOrigin(value string) (string, string) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", ""
+	}
+	if parsed.Scheme != "https" && parsed.Scheme != "http" {
+		return "", ""
+	}
+	return parsed.Scheme + "://" + parsed.Host, parsed.Hostname()
+}
+
+func (c *Config) applyPublicOrigin(origin, rpHost string) {
+	c.Public.FederatedCallbackURL = strings.TrimRight(origin, "/") + "/auth/federated/callback"
+	c.WebAuthnRPOrigins = origin
+	if rpHost != "" && (c.WebAuthnRPID == "" || c.WebAuthnRPID == "localhost") {
+		c.WebAuthnRPID = rpHost
+	}
+	c.CORSOrigins = appendUnique(c.CORSOrigins, origin)
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func appendUnique(values []string, value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // PublicConfig returns the subset of configuration safe for browser clients.

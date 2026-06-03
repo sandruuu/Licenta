@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Building2,
@@ -33,6 +33,7 @@ import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
 import StatusBadge from '../components/organizations/StatusBadge';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import { usePublicConfig } from '../config/publicConfig';
+import { navigateBack, navigateWithReturn } from '../utils/navigation';
 import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 const summaryItemClass = 'block w-full max-w-3xl  px-4 py-3 text-left';
@@ -41,6 +42,7 @@ export default function OrganizationDetail() {
   const { organizationId = '' } = useParams();
   const organizationID = decodeURIComponent(organizationId);
   const navigate = useNavigate();
+  const location = useLocation();
   const publicConfig = usePublicConfig();
 
   const [organization, setOrganization] = useState(null);
@@ -112,7 +114,7 @@ export default function OrganizationDetail() {
 
   const openAddIdP = () => {
     if (configuredIdP) {
-      navigate(`/dashboard/organizations/${encodeURIComponent(organization.id)}/idps/${encodeURIComponent(configuredIdP.id)}`);
+      navigateWithReturn(navigate, `/organizations/${encodeURIComponent(organization.id)}/idps/${encodeURIComponent(configuredIdP.id)}`, location);
       return;
     }
 
@@ -219,7 +221,7 @@ export default function OrganizationDetail() {
   if (!organization) {
     return (
       <div className="space-y-4">
-        <InlineBackButton onClick={() => navigate('/dashboard/organizations')}>
+        <InlineBackButton onClick={() => navigateBack(navigate, '/organizations', location)}>
           <ArrowLeft size={14} />
           Organizations
         </InlineBackButton>
@@ -243,7 +245,7 @@ export default function OrganizationDetail() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact onClick={() => navigate('/dashboard/organizations')}>
+                <BackIconButton compact onClick={() => navigateBack(navigate, '/organizations', location)}>
                   <ArrowLeft size={16} />
                 </BackIconButton>
                 <div className="min-w-0">
@@ -301,7 +303,7 @@ export default function OrganizationDetail() {
                     <button
                       key={gateway.id}
                       type="button"
-                      onClick={() => navigate(`/dashboard/gateways/${encodeURIComponent(gateway.id)}`)}
+                      onClick={() => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(gateway.id)}`, location)}
                       className={summaryItemClass}
                     >
                       <span className="flex min-w-0 flex-wrap items-center gap-2">
@@ -321,7 +323,7 @@ export default function OrganizationDetail() {
               )}
             </div>
             <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/dashboard/gateways?${organizationListFilter}`)}>
+              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/gateways?${organizationListFilter}`)}>
                 View all
               </Button>
               <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => gatewayCreate.openGatewayCreate(organization)}>
@@ -346,7 +348,7 @@ export default function OrganizationDetail() {
                     <button
                       key={resource.id}
                       type="button"
-                      onClick={() => navigate(`/dashboard/resources/${encodeURIComponent(resource.id)}`)}
+                      onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}
                       className={summaryItemClass}
                     >
                       <span className="flex min-w-0 flex-wrap items-center gap-2">
@@ -364,10 +366,10 @@ export default function OrganizationDetail() {
               )}
             </div>
             <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/dashboard/resources?${organizationListFilter}`)}>
+              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${organizationListFilter}`)}>
                 View all
               </Button>
-              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/dashboard/resources?${organizationListFilter}&create=1`)}>
+              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${organizationListFilter}&create=1`)}>
                 <Plus size={13} />
                 New
               </Button>

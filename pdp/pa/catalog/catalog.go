@@ -89,7 +89,7 @@ func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.Us
 	if service == nil || service.store == nil || user == nil || resource == nil {
 		return false
 	}
-	rules := service.store.ListPolicyRulesForAccessGroups(tenantID, resource.ID, groupIDs, groupNames)
+	rules := service.catalogRulesForResource(tenantID, user, groupIDs, groupNames, resource)
 	for _, rule := range rules {
 		if rule == nil || !rule.Enabled {
 			continue
@@ -108,6 +108,45 @@ func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.Us
 		}
 	}
 	return false
+}
+
+func (service *Service) catalogRulesForResource(tenantID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) []*models.PolicyRule {
+	if service == nil || service.store == nil || user == nil || resource == nil {
+		return nil
+	}
+	assignments := service.store.ListPolicyAssignmentsForAccessGroups(tenantID, resource.ID, groupIDs, groupNames)
+	rules := make([]*models.PolicyRule, 0, len(assignments))
+	for _, assignment := range assignments {
+		if assignment == nil || !assignment.Enabled {
+			continue
+		}
+		rule, ok := service.store.GetPolicyRule(assignment.PolicyID)
+		if !ok || rule == nil || !rule.Enabled {
+			continue
+		}
+		if !catalogAssignmentPublishesResource(assignment, rule, resource) {
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	return rules
+}
+
+func catalogAssignmentPublishesResource(assignment *models.PolicyAssignment, rule *models.PolicyRule, resource *models.Resource) bool {
+	if assignment == nil || rule == nil || resource == nil {
+		return false
+	}
+	if store.IsDefaultGlobalPolicyID(rule.ID) || store.IsDefaultGlobalAssignmentID(assignment.ID) {
+		return false
+	}
+	level := strings.ToLower(strings.TrimSpace(assignment.Level))
+	resourceID := strings.TrimSpace(resource.ID)
+	switch level {
+	case "resource", "resource_group":
+		return strings.EqualFold(strings.TrimSpace(assignment.ResourceID), resourceID)
+	}
+	return len(rule.Conditions.TargetResources) > 0 &&
+		containsAnyFold(rule.Conditions.TargetResources, resource.ID, resource.Name)
 }
 
 func catalogRuleMatchesIdentity(rule *models.PolicyRule, user *models.User, groupIDs, groupNames []string, resource *models.Resource) bool {
@@ -242,7 +281,7 @@ func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user 
 		if resource == nil || strings.TrimSpace(resource.ID) == "" {
 			continue
 		}
-		for _, rule := range dataStore.ListPolicyRulesForAccessGroups(tenantID, resource.ID, groupIDs, groupNames) {
+		for _, rule := range (&Service{store: dataStore}).catalogRulesForResource(tenantID, user, groupIDs, groupNames, resource) {
 			if rule == nil || !rule.Enabled || !deviceDataPolicyRuleAction(rule.Action) {
 				continue
 			}

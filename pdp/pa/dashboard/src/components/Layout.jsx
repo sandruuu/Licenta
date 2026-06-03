@@ -18,22 +18,22 @@ import {
 const navSections = [
   {
     items: [
-      { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard', end: true },
+      { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
     ],
   },
   {
     items: [
-      { to: '/dashboard/organizations', icon: Building2, label: 'Organizations' },
-      { to: '/dashboard/resources', icon: Server, label: 'Resources' },
-      { to: '/dashboard/policies', icon: ShieldCheck, label: 'Policies' },
-      { to: '/dashboard/gateways', icon: Router, label: 'Gateways' },
+      { to: '/organizations', icon: Building2, label: 'Organizations' },
+      { to: '/resources', icon: Server, label: 'Resources' },
+      { to: '/policies', icon: ShieldCheck, label: 'Policies' },
+      { to: '/gateways', icon: Router, label: 'Gateways' },
     ],
   },
   {
     items: [
-      { to: '/dashboard/sessions', icon: Radio, label: 'Sessions' },
-      { to: '/dashboard/device-health', icon: Activity, label: 'Devices' },
-      { to: '/dashboard/audit', icon: FileText, label: 'Audit Log' },
+      { to: '/sessions', icon: Radio, label: 'Sessions' },
+      { to: '/device-health', icon: Activity, label: 'Devices' },
+      { to: '/audit', icon: FileText, label: 'Audit' },
     ],
   },
 ];
@@ -43,7 +43,7 @@ export default function Layout() {
 
   const handleLogout = () => {
     clearToken();
-    navigate('/dashboard/login');
+    navigate('/login');
   };
 
   return (

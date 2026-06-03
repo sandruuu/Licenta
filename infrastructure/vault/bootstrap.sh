@@ -5,6 +5,8 @@ VAULT_ADDR="${VAULT_ADDR:-http://vault:8200}"
 APP_TOKEN="${TRUSTCLOUD_VAULT_TOKEN:-trustcloud-vault-token}"
 STATE_DIR="${TRUSTCLOUD_VAULT_STATE_DIR:-/vault/state}"
 INIT_FILE="$STATE_DIR/init.env"
+WATCH_INTERVAL="${TRUSTCLOUD_VAULT_WATCH_INTERVAL:-15}"
+BOOTSTRAP_MODE="${TRUSTCLOUD_VAULT_BOOTSTRAP_MODE:-watch}"
 
 export VAULT_ADDR
 mkdir -p "$STATE_DIR"
@@ -173,17 +175,42 @@ ensure_app_token() {
   fi
 }
 
-wait_for_vault
-init_vault_if_needed
-unseal_vault
+bootstrap_once() {
+  wait_for_vault
+  init_vault_if_needed
+  unseal_vault
 
-export VAULT_TOKEN="$ROOT_TOKEN"
-ensure_secret_engine "transit" "transit"
-ensure_transit_key
-ensure_secret_engine "pki_int" "pki"
-ensure_pki_ca
-write_pki_roles
-write_pdp_policy
-ensure_app_token
+  export VAULT_TOKEN="$ROOT_TOKEN"
+  ensure_secret_engine "transit" "transit"
+  ensure_transit_key
+  ensure_secret_engine "pki_int" "pki"
+  ensure_pki_ca
+  write_pki_roles
+  write_pdp_policy
+  ensure_app_token
 
-echo "Vault persistent PKI and Transit bootstrap completed."
+  echo "Vault persistent PKI and Transit bootstrap completed."
+}
+
+bootstrap_once
+
+if [ "$BOOTSTRAP_MODE" = "once" ]; then
+  exit 0
+fi
+
+echo "Vault bootstrap watcher active; checking seal state every ${WATCH_INTERVAL}s."
+while true; do
+  sleep "$WATCH_INTERVAL"
+
+  set +e
+  vault status >/tmp/vault-status.txt 2>&1
+  code=$?
+  set -e
+
+  if [ "$code" -eq 0 ]; then
+    continue
+  fi
+
+  echo "Vault needs bootstrap/unseal; running watcher recovery." >&2
+  bootstrap_once
+done

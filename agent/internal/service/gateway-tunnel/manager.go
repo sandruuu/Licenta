@@ -87,7 +87,19 @@ type Manager struct {
 	status            Status
 	conn              net.Conn
 	session           *yamux.Session
+	sessions          map[tunnelKey]*tunnelConnection
 	statusMu          sync.RWMutex
+}
+
+type tunnelKey struct {
+	address    string
+	serverName string
+}
+
+type tunnelConnection struct {
+	conn        net.Conn
+	session     *yamux.Session
+	connectedAt time.Time
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -164,12 +176,7 @@ func (manager *Manager) Connect(ctx context.Context) error {
 	if manager == nil {
 		return errors.New("gateway tunnel manager is nil")
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if manager.session != nil && !manager.session.IsClosed() {
-		return nil
-	}
-	return manager.connectLocked(ctx)
+	return manager.ConnectToServerName(ctx, manager.options.GatewayAddress, manager.options.ServerName)
 }
 
 func (manager *Manager) ConnectTo(ctx context.Context, gatewayAddress string) error {
@@ -185,18 +192,16 @@ func (manager *Manager) ConnectToServerName(ctx context.Context, gatewayAddress,
 		return errors.New("gateway endpoint is required")
 	}
 	serverName = strings.TrimSpace(serverName)
-	if serverName == "" {
-		serverName = manager.defaultServerName
-	}
+	key := manager.tunnelKey(gatewayAddress, serverName)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.session != nil && !manager.session.IsClosed() && strings.EqualFold(manager.options.GatewayAddress, gatewayAddress) && strings.EqualFold(strings.TrimSpace(manager.options.ServerName), serverName) {
+	if session := manager.sessionForKeyLocked(key); session != nil && !session.IsClosed() {
+		manager.options.GatewayAddress = key.address
+		manager.options.ServerName = key.serverName
+		manager.setStatus(Status{State: StatusReady, GatewayAddress: key.address, ServerName: key.serverName, LastError: ""})
 		return nil
 	}
-	manager.closeSessionLocked()
-	manager.options.GatewayAddress = gatewayAddress
-	manager.options.ServerName = serverName
-	return manager.connectLocked(ctx)
+	return manager.connectToLocked(ctx, key)
 }
 
 func (manager *Manager) OpenResourceStream(ctx context.Context, request ResourceStreamRequest) (net.Conn, error) {
@@ -216,11 +221,14 @@ func (manager *Manager) OpenResourceStream(ctx context.Context, request Resource
 	if strings.TrimSpace(request.SessionID) == "" || strings.TrimSpace(request.SessionToken) == "" {
 		return nil, errors.New("Gateway stream requires PDP-provisioned session material")
 	}
-	if err := manager.ConnectToServerName(ctx, firstNonEmpty(request.GatewayEndpoint, manager.options.GatewayAddress), request.GatewayServerName); err != nil {
+	gatewayAddress := firstNonEmpty(request.GatewayEndpoint, manager.options.GatewayAddress)
+	gatewayServerName := strings.TrimSpace(request.GatewayServerName)
+	if err := manager.ConnectToServerName(ctx, gatewayAddress, gatewayServerName); err != nil {
 		return nil, err
 	}
+	key := manager.tunnelKey(gatewayAddress, gatewayServerName)
 	manager.mu.Lock()
-	session := manager.session
+	session := manager.sessionForKeyLocked(key)
 	manager.mu.Unlock()
 	if session == nil || session.IsClosed() {
 		return nil, errors.New("Gateway tunnel is not connected")
@@ -276,12 +284,19 @@ func (manager *Manager) Status() Status {
 }
 
 func (manager *Manager) connectLocked(ctx context.Context) error {
-	tlsConfig, err := manager.tlsConfig(ctx)
+	return manager.connectToLocked(ctx, manager.tunnelKey(manager.options.GatewayAddress, manager.options.ServerName))
+}
+
+func (manager *Manager) connectToLocked(ctx context.Context, key tunnelKey) error {
+	if key.address == "" {
+		return errors.New("gateway endpoint is required")
+	}
+	tlsConfig, err := manager.tlsConfigFor(ctx, key.address, key.serverName)
 	if err != nil {
 		return err
 	}
 	dialer := &net.Dialer{Timeout: manager.options.Timeout}
-	rawConn, err := dialer.DialContext(ctx, "tcp", manager.options.GatewayAddress)
+	rawConn, err := dialer.DialContext(ctx, "tcp", key.address)
 	if err != nil {
 		return fmt.Errorf("dial Gateway: %w", err)
 	}
@@ -298,19 +313,33 @@ func (manager *Manager) connectLocked(ctx context.Context) error {
 		_ = tlsConn.Close()
 		return fmt.Errorf("create yamux session: %w", err)
 	}
-	manager.conn = tlsConn
-	manager.session = session
-	if err := manager.helloLocked(); err != nil {
-		manager.closeSessionLocked()
+	if err := manager.helloLocked(session); err != nil {
+		_ = session.Close()
+		_ = tlsConn.Close()
 		return err
 	}
-	manager.setStatus(Status{State: StatusReady, ConnectedAt: time.Now().UTC(), LastError: ""})
-	manager.logger.Info("TrustAgent Gateway tunnel connected", "gateway", manager.options.GatewayAddress)
+	if manager.sessions == nil {
+		manager.sessions = make(map[tunnelKey]*tunnelConnection)
+	}
+	if previous := manager.sessions[key]; previous != nil {
+		closeTunnelConnection(previous)
+	}
+	connectedAt := time.Now().UTC()
+	manager.sessions[key] = &tunnelConnection{conn: tlsConn, session: session, connectedAt: connectedAt}
+	manager.conn = tlsConn
+	manager.session = session
+	manager.options.GatewayAddress = key.address
+	manager.options.ServerName = key.serverName
+	manager.setStatus(Status{State: StatusReady, GatewayAddress: key.address, ServerName: key.serverName, ConnectedAt: connectedAt, LastError: ""})
+	manager.logger.Info("TrustAgent Gateway tunnel connected", "gateway", key.address)
 	return nil
 }
 
-func (manager *Manager) helloLocked() error {
-	stream, err := manager.session.Open()
+func (manager *Manager) helloLocked(session *yamux.Session) error {
+	if session == nil || session.IsClosed() {
+		return errors.New("Gateway yamux session is not connected")
+	}
+	stream, err := session.Open()
 	if err != nil {
 		return fmt.Errorf("open Gateway hello stream: %w", err)
 	}
@@ -335,6 +364,10 @@ func (manager *Manager) helloLocked() error {
 }
 
 func (manager *Manager) tlsConfig(ctx context.Context) (*tls.Config, error) {
+	return manager.tlsConfigFor(ctx, manager.options.GatewayAddress, manager.options.ServerName)
+}
+
+func (manager *Manager) tlsConfigFor(ctx context.Context, gatewayAddress, serverName string) (*tls.Config, error) {
 	certificate, err := manager.options.ClientCertificateProvider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load Gateway client certificate: %w", err)
@@ -343,9 +376,9 @@ func (manager *Manager) tlsConfig(ctx context.Context) (*tls.Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	serverName := manager.options.ServerName
+	serverName = strings.TrimSpace(serverName)
 	if serverName == "" {
-		host, _, splitErr := net.SplitHostPort(manager.options.GatewayAddress)
+		host, _, splitErr := net.SplitHostPort(strings.TrimSpace(gatewayAddress))
 		if splitErr == nil {
 			serverName = host
 		}
@@ -393,7 +426,9 @@ func (manager *Manager) waitForDisconnect(ctx context.Context) {
 			return
 		case <-ticker.C:
 			manager.mu.Lock()
-			closed := manager.session == nil || manager.session.IsClosed()
+			key := manager.tunnelKey(manager.options.GatewayAddress, manager.options.ServerName)
+			session := manager.sessionForKeyLocked(key)
+			closed := session == nil || session.IsClosed()
 			manager.mu.Unlock()
 			if closed {
 				manager.setStatus(Status{State: StatusError, LastError: "Gateway yamux session closed"})
@@ -410,6 +445,10 @@ func (manager *Manager) closeSession() {
 }
 
 func (manager *Manager) closeSessionLocked() {
+	for key, connection := range manager.sessions {
+		closeTunnelConnection(connection)
+		delete(manager.sessions, key)
+	}
 	if manager.session != nil {
 		_ = manager.session.Close()
 	}
@@ -418,6 +457,54 @@ func (manager *Manager) closeSessionLocked() {
 	}
 	manager.session = nil
 	manager.conn = nil
+}
+
+func (manager *Manager) tunnelKey(gatewayAddress, serverName string) tunnelKey {
+	address := strings.TrimSpace(gatewayAddress)
+	name := strings.TrimSpace(serverName)
+	if name == "" && strings.EqualFold(address, strings.TrimSpace(manager.options.GatewayAddress)) {
+		name = strings.TrimSpace(manager.options.ServerName)
+	}
+	if name == "" {
+		host, _, err := net.SplitHostPort(address)
+		if err == nil {
+			name = host
+		}
+	}
+	if name == "" {
+		name = strings.TrimSpace(manager.defaultServerName)
+	}
+	return tunnelKey{address: address, serverName: name}
+}
+
+func (manager *Manager) sessionForKeyLocked(key tunnelKey) *yamux.Session {
+	if manager.sessions != nil {
+		connection := manager.sessions[key]
+		if connection != nil {
+			if connection.session != nil && !connection.session.IsClosed() {
+				return connection.session
+			}
+			closeTunnelConnection(connection)
+			delete(manager.sessions, key)
+		}
+	}
+	legacyKey := manager.tunnelKey(manager.options.GatewayAddress, manager.options.ServerName)
+	if manager.session != nil && !manager.session.IsClosed() && legacyKey == key {
+		return manager.session
+	}
+	return nil
+}
+
+func closeTunnelConnection(connection *tunnelConnection) {
+	if connection == nil {
+		return
+	}
+	if connection.session != nil {
+		_ = connection.session.Close()
+	}
+	if connection.conn != nil {
+		_ = connection.conn.Close()
+	}
 }
 
 func (manager *Manager) setStatus(update Status) {

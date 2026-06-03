@@ -87,7 +87,7 @@ function AdminLogin() {
 
       if (data.token || data.auth_token) {
         setToken(data.token || data.auth_token);
-        navigate('/dashboard');
+        navigate('/');
       } else if (data.challenge_id && data.mfa_required) {
         setChallenge(data);
         setMFACode('');
@@ -118,7 +118,7 @@ function AdminLogin() {
       const data = await verifyMFA(challenge?.challenge_id, normalizedCode);
       if (data.token || data.auth_token) {
         setToken(data.token || data.auth_token);
-        navigate('/dashboard');
+        navigate('/');
       } else {
         setError(data.message || data.error || 'MFA verification failed');
       }

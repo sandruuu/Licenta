@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Handle,
   Position,
@@ -13,11 +13,12 @@ import {
   Router,
   Server,
 } from 'lucide-react';
+import { currentLocationPath, navigateWithReturn } from '../../utils/navigation';
 
 const NODE_WIDTH = 280;
-const NODE_HEIGHT = 82;
+const NODE_HEIGHT = 104;
 const NODE_X_GAP = 360;
-const NODE_Y_GAP = 118;
+const NODE_Y_GAP = 126;
 const CANVAS_PADDING = 48;
 
 const iconMap = {
@@ -81,7 +82,7 @@ function ArchitectureNode({ data }) {
   const avatarTone = avatarClass[data.tone] || avatarClass.neutral;
   const statusTone = statusClass[statusVariant(data.badge)] || statusClass.neutral;
   const showTarget = !data.isRoot;
-  const showSource = data.hasChildren || data.tailLabel;
+  const showSource = data.hasChildren;
 
   return (
     <div
@@ -125,15 +126,6 @@ function ArchitectureNode({ data }) {
         </div>
       )}
 
-      {data.tailLabel && (
-        <div className="pointer-events-none absolute -right-[66px] top-1/2 flex -translate-y-1/2 items-center">
-          <span className="h-[2px] w-7 bg-text-secondary" />
-          <span className="flex h-10 min-w-10 items-center justify-center rounded-full bg-graphite px-3 text-sm font-bold text-white-smoke shadow-panel">
-            {data.tailLabel}
-          </span>
-        </div>
-      )}
-
       <Handle
         type="source"
         position={Position.Right}
@@ -151,11 +143,6 @@ function ArchitectureNode({ data }) {
 }
 
 const nodeTypes = { architecture: ArchitectureNode };
-
-function resourceTailLabel(resource) {
-  if (resource.port) return String(resource.port);
-  return String(resource.type || '').toUpperCase() || null;
-}
 
 function resourceSubtitle(resource) {
   const type = String(resource.type || 'resource').toUpperCase();
@@ -179,7 +166,7 @@ function withNodeFlags(node, isRoot = false) {
 }
 
 function buildTree({ organization, gateways, resources }) {
-  const organizationHref = `/dashboard/organizations/${encode(organization.id)}`;
+  const organizationHref = `/organizations/${encode(organization.id)}`;
   const resourcesByGatewayID = new Map(gateways.map((gateway) => [gateway.id, []]));
   resources.forEach((resource) => {
     if (!resourcesByGatewayID.has(resource.gateway_id)) {
@@ -200,7 +187,7 @@ function buildTree({ organization, gateways, resources }) {
       badge: gateway.status,
       icon: 'gateway',
       tone: 'gateway',
-      href: `/dashboard/gateways/${encode(gateway.id)}`,
+      href: `/gateways/${encode(gateway.id)}`,
       children: gatewayResources.length > 0
         ? gatewayResources.map((resource) => ({
             id: `resource:${resource.id}`,
@@ -210,10 +197,9 @@ function buildTree({ organization, gateways, resources }) {
             meta: resourceMeta(resource),
             metric: '',
             badge: resource.enabled ? 'enabled' : 'disabled',
-            tailLabel: resourceTailLabel(resource),
             icon: 'resource',
             tone: 'resource',
-            href: `/dashboard/resources/${encode(resource.id)}`,
+            href: `/resources/${encode(resource.id)}`,
           }))
         : [
             {
@@ -224,7 +210,7 @@ function buildTree({ organization, gateways, resources }) {
               meta: 'Open gateway details',
               icon: 'empty',
               tone: 'neutral',
-              href: `/dashboard/gateways/${encode(gateway.id)}`,
+              href: `/gateways/${encode(gateway.id)}`,
             },
           ],
     };
@@ -313,6 +299,7 @@ export default function OrganizationHierarchyFlow({
   resources,
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { nodes, edges, height } = useMemo(() => layoutTree(buildTree({
     organization,
     gateways,
@@ -337,7 +324,9 @@ export default function OrganizationHierarchyFlow({
         maxZoom={1.2}
         proOptions={{ hideAttribution: true }}
         onNodeClick={(_, node) => {
-          if (node.data?.href) navigate(node.data.href);
+          if (node.data?.href && node.data.href !== currentLocationPath(location)) {
+            navigateWithReturn(navigate, node.data.href, location);
+          }
         }}
         style={{ width: '100%', height: '100%' }}
       />

@@ -42,6 +42,7 @@ func (client *GRPCEnrollmentClient) StartSession(ctx context.Context, request En
 		"csr_sha256":     request.CSRHash,
 		"spki_sha256":    request.SPKIHash,
 		"device_nonce":   request.DeviceNonce,
+		"hostname":       request.Hostname,
 		"agent_platform": request.AgentPlatform,
 		"agent_name":     request.AgentName,
 	})

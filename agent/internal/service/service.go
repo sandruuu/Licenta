@@ -34,6 +34,9 @@ type Config struct {
 	PDPCAFile                        string
 	EnrollmentTimeout                time.Duration
 	EnrollmentPollInterval           time.Duration
+	CertificateRenewBefore           time.Duration
+	CertificateRenewCheckInterval    time.Duration
+	CertificateRenewTimeout          time.Duration
 	LoginTimeout                     time.Duration
 	LoginPollInterval                time.Duration
 	DeviceDataSyncInterval           time.Duration
@@ -56,6 +59,7 @@ type Dependencies struct {
 	DeviceDataCollector         DeviceDataCollector
 	DeviceDataWatcher           DeviceDataWatcher
 	EnrollmentClient            enrollment.Client
+	EnrollmentRenewalClient     enrollment.RenewalClient
 	DeviceDataSyncClientFactory DeviceDataSyncClientFactory
 	AgentEventsClientFactory    AgentEventsClientFactory
 	ProtectedResources          ProtectedResourcesManager
@@ -136,6 +140,9 @@ const (
 	defaultDeviceKeyName                    = enrollment.DefaultDeviceKeyName
 	defaultEnrollmentTimeout                = enrollment.DefaultTimeout
 	defaultEnrollmentPollInterval           = enrollment.DefaultPollInterval
+	defaultCertificateRenewBefore           = enrollment.DefaultCertificateRenewBefore
+	defaultCertificateRenewCheckInterval    = enrollment.DefaultCertificateRenewCheckInterval
+	defaultCertificateRenewTimeout          = enrollment.DefaultCertificateRenewTimeout
 	defaultLoginTimeout                     = usersession.DefaultTimeout
 	defaultLoginPollInterval                = usersession.DefaultPollInterval
 	defaultDeviceDataSyncInterval           = devicedatasync.DefaultInterval

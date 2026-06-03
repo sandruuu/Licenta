@@ -138,6 +138,77 @@ func TestOpenResourceStreamIncludesProvisionedSessionFields(t *testing.T) {
 	}
 }
 
+func TestOpenResourceStreamKeepsSeparateSessionsPerGateway(t *testing.T) {
+	gw1Client, gw1Server := yamuxPair(t)
+	defer gw1Client.Close()
+	defer gw1Server.Close()
+	gw2Client, gw2Server := yamuxPair(t)
+	defer gw2Client.Close()
+	defer gw2Server.Close()
+
+	gw1Captured := captureConnectRequest(t, gw1Server)
+	gw2Captured := captureConnectRequest(t, gw2Server)
+
+	manager := &Manager{
+		options: Options{
+			Timeout: time.Second,
+			DeviceIDProvider: func() string {
+				return "device-1"
+			},
+		},
+		logger: loggerOrDefault(nil),
+		status: Status{State: StatusReady},
+		sessions: map[tunnelKey]*tunnelConnection{
+			{address: "gateway-one.example.test:9443", serverName: "gateway-one.example.test"}: {session: gw1Client},
+			{address: "gateway-two.example.test:9443", serverName: "gateway-two.example.test"}: {session: gw2Client},
+		},
+	}
+
+	stream1, err := manager.OpenResourceStream(context.Background(), ResourceStreamRequest{
+		TargetHost:        "100.64.0.10",
+		TargetPort:        3389,
+		SessionID:         "sess-rdp",
+		SessionToken:      "rdp-token",
+		ResourceID:        "res-rdp",
+		Protocol:          "rdp",
+		GatewayEndpoint:   "gateway-one.example.test:9443",
+		GatewayServerName: "gateway-one.example.test",
+	})
+	if err != nil {
+		t.Fatalf("first OpenResourceStream returned error: %v", err)
+	}
+	defer stream1.Close()
+
+	stream2, err := manager.OpenResourceStream(context.Background(), ResourceStreamRequest{
+		TargetHost:        "100.64.0.20",
+		TargetPort:        22,
+		SessionID:         "sess-ssh",
+		SessionToken:      "ssh-token",
+		ResourceID:        "res-ssh",
+		Protocol:          "ssh",
+		GatewayEndpoint:   "gateway-two.example.test:9443",
+		GatewayServerName: "gateway-two.example.test",
+	})
+	if err != nil {
+		t.Fatalf("second OpenResourceStream returned error: %v", err)
+	}
+	defer stream2.Close()
+
+	if gw1Client.IsClosed() {
+		t.Fatalf("opening a stream to gateway two closed gateway one's yamux session")
+	}
+	if gw2Client.IsClosed() {
+		t.Fatalf("gateway two yamux session is closed")
+	}
+
+	if request := awaitConnectRequest(t, gw1Captured); request.SessionID != "sess-rdp" || request.ResourceID != "res-rdp" || request.RemotePort != 3389 {
+		t.Fatalf("gateway one connect request = %+v", request)
+	}
+	if request := awaitConnectRequest(t, gw2Captured); request.SessionID != "sess-ssh" || request.ResourceID != "res-ssh" || request.RemotePort != 22 {
+		t.Fatalf("gateway two connect request = %+v", request)
+	}
+}
+
 func TestOpenResourceStreamRequiresProvisionedSessionFields(t *testing.T) {
 	manager := &Manager{
 		options: Options{
@@ -153,6 +224,50 @@ func TestOpenResourceStreamRequiresProvisionedSessionFields(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "PDP-provisioned session material") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func yamuxPair(t *testing.T) (*yamux.Session, *yamux.Session) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	clientSession, err := yamux.Client(clientConn, nil)
+	if err != nil {
+		t.Fatalf("yamux client: %v", err)
+	}
+	serverSession, err := yamux.Server(serverConn, nil)
+	if err != nil {
+		t.Fatalf("yamux server: %v", err)
+	}
+	return clientSession, serverSession
+}
+
+func captureConnectRequest(t *testing.T, session *yamux.Session) <-chan ConnectRequest {
+	t.Helper()
+	captured := make(chan ConnectRequest, 1)
+	go func() {
+		stream, err := session.Accept()
+		if err != nil {
+			return
+		}
+		defer stream.Close()
+		var request ConnectRequest
+		if err := json.NewDecoder(stream).Decode(&request); err != nil {
+			return
+		}
+		captured <- request
+		_ = json.NewEncoder(stream).Encode(ConnectResponse{Type: "connect_response", Status: "connected", Code: CodeOK})
+	}()
+	return captured
+}
+
+func awaitConnectRequest(t *testing.T, captured <-chan ConnectRequest) ConnectRequest {
+	t.Helper()
+	select {
+	case request := <-captured:
+		return request
+	case <-time.After(time.Second):
+		t.Fatalf("connect request was not captured")
+		return ConnectRequest{}
 	}
 }
 

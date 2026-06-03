@@ -33,6 +33,7 @@ type InteractiveStartRequest struct {
 	CSRHash     string
 	SPKIHash    string
 	DeviceNonce string
+	Hostname    string
 	AuthURL     string
 }
 
@@ -49,6 +50,7 @@ type InteractiveSession struct {
 	CSRHash         string
 	SPKIHash        string
 	DeviceNonce     string
+	Hostname        string
 	DeviceChallenge string
 	PollSecretHash  string
 	Status          string
@@ -147,6 +149,7 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 		CSRHash:         normalizeHex(req.CSRHash),
 		SPKIHash:        normalizeHex(req.SPKIHash),
 		DeviceNonce:     strings.TrimSpace(req.DeviceNonce),
+		Hostname:        strings.TrimSpace(req.Hostname),
 		DeviceChallenge: deviceChallenge,
 		PollSecretHash:  sha256HexString(pollSecret),
 		Status:          InteractiveStatusWaitingForIDPDiscovery,
@@ -395,6 +398,7 @@ func (s *Service) CompleteInteractiveSession(req InteractiveCompleteRequest) (*I
 		ID:                   session.ID,
 		DeviceID:             deviceID,
 		Component:            "endpoint",
+		Hostname:             session.Hostname,
 		PublicKeyFingerprint: spkiHash,
 		CertFingerprint:      certThumbprint,
 		CertSerial:           certSerial,

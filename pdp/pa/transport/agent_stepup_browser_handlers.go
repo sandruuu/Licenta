@@ -251,21 +251,148 @@ func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challe
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TrustCloud verification</title><style>
-body{font-family:Segoe UI,Arial,sans-serif;background:#f6f8fb;color:#172033;margin:0;display:grid;min-height:100vh;place-items:center}
-.panel{width:min(560px,calc(100vw - 32px));background:white;border:1px solid #d9e0ea;border-radius:8px;padding:28px;box-shadow:0 16px 50px rgba(20,35,60,.12)}
-h1{font-size:24px;margin:0 0 8px}p{color:#56657a;line-height:1.5;margin:0 0 14px}.meta{font-size:13px;color:#6d7a8c;margin-bottom:18px}
-.method{border:1px solid #d9e0ea;border-radius:8px;margin-top:12px;overflow:hidden}.method.active{border-color:#1f6feb;box-shadow:0 0 0 1px #1f6feb}
-.method-link{display:block;padding:16px;color:inherit;text-decoration:none}.method h2{font-size:16px;margin:0 0 6px}.method p{margin-bottom:0}
-.method-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.badge{border-radius:999px;background:#eef3f9;color:#31465f;font-size:12px;font-weight:700;padding:4px 8px;white-space:nowrap}.badge.setup{background:#fff3cd;color:#765700}
-.method-body{border-top:1px solid #d9e0ea;background:#fbfcfe;padding:16px}
-form{display:grid;gap:12px;margin-top:14px}input{height:42px;border:1px solid #b9c3d0;border-radius:6px;padding:0 12px;font-size:16px;letter-spacing:0}
-.otp{display:grid;grid-template-columns:repeat(6,minmax(34px,42px));gap:10px;justify-content:start}.otp input{width:100%;height:42px;padding:0;text-align:center;font-size:18px;font-weight:700;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-button,.button-link{height:42px;border:0;border-radius:6px;background:#1f6feb;color:white;font-weight:700;cursor:pointer;padding:0 16px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
-button:disabled{opacity:.65;cursor:wait}.alert{border:1px solid #f1a6a6;background:#fff1f1;color:#a31313;border-radius:6px;padding:10px 12px;margin:14px 0;font-weight:600}
-.notice{border:1px solid #e0c56b;background:#fff9df;color:#6d5200;border-radius:6px;padding:12px;margin-top:14px;line-height:1.5}
-.setup-key{display:grid;gap:6px;margin-top:12px}.setup-key summary{cursor:pointer;color:#1f6feb;font-size:13px;font-weight:700}.setup-key code{display:block;border:1px solid #c7d1dd;border-radius:6px;background:white;padding:10px;word-break:break-all;color:#172033}
-.status{margin-top:12px;color:#56657a;font-size:13px;min-height:18px}
-</style></head><body><main id="stepup-root" class="panel" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `"><h1>Additional verification</h1><p>PDP requires a step-up check before this resource can be accessed.</p><div class="meta">User: ` + html.EscapeString(challenge.Username) + `</div>` + alert + methodCards.String() + `<div id="webauthn-status" class="status"></div></main><script src="/browser/step-up/assets/stepup.js" defer></script></body></html>`))
+` + browserPageStyles + `
+.stepup-panel{width:min(400px,100%)}
+.stepup-copy{margin-bottom:14px}
+.meta{margin-bottom:18px;color:var(--color-text-muted);font-size:12px}
+.methods{
+  display:grid;
+  gap:12px;
+}
+.method{
+  overflow:hidden;
+  border:1px solid var(--color-border);
+  border-radius:6px;
+  background:var(--color-surface);
+}
+.method.active{
+  border-color:var(--color-accent);
+  box-shadow:0 0 0 1px var(--color-accent),0 0 0 4px var(--color-accent-muted);
+}
+.method-link{
+  display:block;
+  padding:16px;
+  color:inherit;
+  text-decoration:none;
+}
+.method-link:hover{color:inherit;background:var(--color-surface-hover)}
+.method-link p{margin-bottom:0}
+.method-head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+}
+.badge{
+  flex:none;
+  border-radius:999px;
+  background:var(--color-surface-secondary);
+  color:var(--color-text-secondary);
+  padding:4px 8px;
+  font-size:12px;
+  font-weight:700;
+  line-height:1;
+  white-space:nowrap;
+}
+.badge.setup{
+  background:var(--color-warning-muted);
+  color:var(--color-warning);
+}
+.method-body{
+  border-top:1px solid var(--color-border);
+  background:var(--color-surface-card);
+  padding:16px;
+}
+.mfa-help{
+  margin-bottom:16px;
+  color:var(--color-text-secondary);
+  font-size:14px;
+}
+.mfa-setup{
+  margin-bottom:16px;
+  color:var(--color-text-secondary);
+  font-size:14px;
+}
+.mfa-setup-title{
+  margin-bottom:8px;
+  color:var(--color-text-primary);
+  font-size:14px;
+  font-weight:700;
+}
+.mfa-form{
+  gap:12px;
+  margin-top:0;
+}
+.otp-field{
+  display:grid;
+  gap:8px;
+}
+.otp-label{
+  margin:0;
+  color:var(--color-text-primary);
+  font-size:14px;
+  font-weight:700;
+  line-height:1.4;
+  text-transform:uppercase;
+  letter-spacing:0;
+}
+.otp{
+  display:grid;
+  grid-template-columns:repeat(6,minmax(0,1fr));
+  gap:8px;
+}
+.otp input{
+  width:100%;
+  min-width:0;
+  height:44px;
+  padding:0;
+  text-align:center;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:18px;
+  font-weight:600;
+}
+.qr-code{
+  display:block;
+  width:176px;
+  height:176px;
+  margin:12px auto 14px;
+  border:1px solid var(--color-border);
+  border-radius:6px;
+  background:#fff;
+  padding:8px;
+}
+.setup-key{
+  display:grid;
+  gap:8px;
+  margin-top:12px;
+  text-align:left;
+}
+.setup-key summary{
+  cursor:pointer;
+  color:var(--color-text-secondary);
+  font-size:12px;
+  font-weight:700;
+  list-style:none;
+}
+.setup-key summary::-webkit-details-marker{display:none}
+.setup-key summary:hover{color:var(--color-text-primary)}
+.setup-key code{
+  display:block;
+  min-height:20px;
+  border:0;
+  background:transparent;
+  color:var(--color-text-primary);
+  padding:0;
+  font-size:12px;
+  line-height:1.5;
+  word-break:break-all;
+}
+.method-body button,.method-body .button-link{
+  width:100%;
+  justify-content:center;
+  margin-top:8px;
+}
+</style></head><body><main id="stepup-root" class="panel stepup-panel" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `">` + browserBrandMarkup + `<h1>Additional verification</h1><p class="stepup-copy">PDP requires a step-up check before this resource can be accessed.</p><div class="meta">User: ` + html.EscapeString(challenge.Username) + `</div>` + alert + `<div class="methods">` + methodCards.String() + `</div><div id="webauthn-status" class="status"></div></main><script src="/browser/step-up/assets/stepup.js" defer></script></body></html>`))
 }
 
 func (s *Server) renderStepUpMethodCard(challenge *pa.StepUpChallenge, method stepUpPageMethod, setup *models.MFAEnrollResponse, csrfToken string) string {
@@ -301,16 +428,16 @@ func (s *Server) renderStepUpMethodCard(challenge *pa.StepUpChallenge, method st
 
 func renderTOTPMethodBody(challengeID string, method stepUpPageMethod, setup *models.MFAEnrollResponse, csrfToken string) string {
 	if method.Configured {
-		return `<p>Enter the current code from your authenticator app.</p><form method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">` + renderTOTPCodeInputs() + `<button type="submit">Verify code</button></form>`
+		return `<p class="mfa-help">Enter the current code from your authenticator app.</p><form class="mfa-form" method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">` + renderTOTPCodeInputs() + `<button type="submit">Verify code</button></form>`
 	}
 	if !method.EnrollmentAuthorized {
 		return renderStepUpReauthBody(challengeID, method.ID, method.ReauthMode, csrfToken)
 	}
 	var body strings.Builder
-	body.WriteString(`<p>Set up an authenticator app, then enter the first code to verify this resource request.</p>`)
+	body.WriteString(`<div class="mfa-setup"><p class="mfa-setup-title">Set up authenticator app</p><p>Scan the QR code with your authenticator app, then enter the first code to verify this resource request.</p>`)
 	if setup != nil {
 		if strings.TrimSpace(setup.QRCodeImage) != "" {
-			body.WriteString(`<img alt="TOTP QR code" style="display:block;width:180px;height:180px;background:#fff;border:1px solid #d7deea;border-radius:8px;padding:8px;margin:12px auto" src="`)
+			body.WriteString(`<img alt="TOTP QR code" class="qr-code" src="`)
 			body.WriteString(html.EscapeString(setup.QRCodeImage))
 			body.WriteString(`">`)
 		}
@@ -318,7 +445,8 @@ func renderTOTPMethodBody(challengeID string, method stepUpPageMethod, setup *mo
 		body.WriteString(html.EscapeString(setup.Secret))
 		body.WriteString(`</code></details>`)
 	}
-	body.WriteString(`<form method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">`)
+	body.WriteString(`</div>`)
+	body.WriteString(`<form class="mfa-form" method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">`)
 	body.WriteString(renderTOTPCodeInputs())
 	body.WriteString(`<button type="submit">Set up and verify</button></form>`)
 	return body.String()
@@ -326,13 +454,21 @@ func renderTOTPMethodBody(challengeID string, method stepUpPageMethod, setup *mo
 
 func renderTOTPCodeInputs() string {
 	var body strings.Builder
-	body.WriteString(`<input type="hidden" name="totp_code" class="otp-value"><div class="otp" data-otp-length="6">`)
+	body.WriteString(`<div class="otp-field"><label class="otp-label" for="stepup-totp-code-0">CODE</label><input type="hidden" name="totp_code" class="otp-value"><div class="otp" data-otp-length="6">`)
 	for i := 0; i < 6; i++ {
 		index := strconv.Itoa(i)
 		label := strconv.Itoa(i + 1)
-		body.WriteString(`<input class="otp-digit" name="totp_digit_`)
+		body.WriteString(`<input id="stepup-totp-code-`)
 		body.WriteString(index)
-		body.WriteString(`" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="1" aria-label="TOTP digit `)
+		body.WriteString(`" class="otp-digit" name="totp_digit_`)
+		body.WriteString(index)
+		body.WriteString(`" type="text" inputmode="numeric" autocomplete="`)
+		if i == 0 {
+			body.WriteString(`one-time-code`)
+		} else {
+			body.WriteString(`off`)
+		}
+		body.WriteString(`" pattern="[0-9]*" maxlength="6" aria-label="TOTP digit `)
 		body.WriteString(label)
 		body.WriteString(`" required`)
 		if i == 0 {
@@ -340,7 +476,7 @@ func renderTOTPCodeInputs() string {
 		}
 		body.WriteString(`>`)
 	}
-	body.WriteString(`</div>`)
+	body.WriteString(`</div></div>`)
 	return body.String()
 }
 

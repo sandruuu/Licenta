@@ -30,21 +30,29 @@ const (
 	DefaultDeviceKeyName = "TrustAgentDeviceKey"
 	DefaultTimeout       = 10 * time.Minute
 	DefaultPollInterval  = 3 * time.Second
+
+	DefaultCertificateRenewBefore        = 12 * time.Hour
+	DefaultCertificateRenewCheckInterval = time.Hour
+	DefaultCertificateRenewTimeout       = 20 * time.Second
 )
 
 type Config struct {
-	PDPGRPCEndpoint        string
-	PDPTLSServerName       string
-	PDPCAFile              string
-	EnrollmentTimeout      time.Duration
-	EnrollmentPollInterval time.Duration
-	EnrollmentStatePath    string
-	DeviceKeyName          string
+	PDPGRPCEndpoint               string
+	PDPTLSServerName              string
+	PDPCAFile                     string
+	EnrollmentTimeout             time.Duration
+	EnrollmentPollInterval        time.Duration
+	CertificateRenewBefore        time.Duration
+	CertificateRenewCheckInterval time.Duration
+	CertificateRenewTimeout       time.Duration
+	EnrollmentStatePath           string
+	DeviceKeyName                 string
 }
 
 type Dependencies struct {
 	Logger         *slog.Logger
 	Client         Client
+	RenewalClient  RenewalClient
 	DeviceIdentity DeviceIdentity
 	Store          Store
 	Clock          func() time.Time
@@ -58,8 +66,13 @@ type Client interface {
 	Close() error
 }
 
+type RenewalClient interface {
+	RenewCertificate(context.Context, EnrollmentRecord, tls.Certificate, CertificateRenewalRequest) (CertificateRenewalResponse, error)
+}
+
 type DeviceIdentity interface {
 	CreateEnrollmentCSR(context.Context, string) (EnrollmentCSR, error)
+	CreateCertificateRenewalCSR(context.Context, string, string) (EnrollmentCSR, error)
 	SignEnrollmentProof(context.Context, string, []byte) ([]byte, error)
 	InstallDeviceCertificate(context.Context, InstallCertificateRequest) (InstalledCertificate, error)
 	CheckLocalEnrollment(context.Context, EnrollmentRecord) (LocalEnrollmentCheck, error)
@@ -115,6 +128,7 @@ type EnrollmentStartSessionRequest struct {
 	CSRHash       string
 	SPKIHash      string
 	DeviceNonce   string
+	Hostname      string
 	AgentPlatform string
 	AgentName     string
 }
@@ -160,6 +174,21 @@ type EnrollmentCompleteSessionResponse struct {
 	PDPEndpoint            string
 	GatewayEndpoints       []string
 	EnrolledByIDPProfileID string
+}
+
+type CertificateRenewalRequest struct {
+	DeviceID             string
+	Component            string
+	Hostname             string
+	CSRPEM               string
+	PublicKeyFingerprint string
+}
+
+type CertificateRenewalResponse struct {
+	CertificatePEM        string
+	CertificateChainPEM   string
+	CertificateThumbprint string
+	ExpiresAt             time.Time
 }
 
 type InstallCertificateRequest struct {
@@ -278,4 +307,3 @@ func firstPEMCertificate(rawPEM string) ([]byte, error) {
 func canonicalEnrollmentProof(payload enrollmentProofPayload) ([]byte, error) {
 	return json.Marshal(payload)
 }
-

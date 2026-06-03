@@ -70,10 +70,48 @@ function Find-InnoSetupCompiler {
     return ""
 }
 
+function Resolve-ConfigReferencedPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$BaseDir
+    )
+
+    $trimmed = $Path.Trim()
+    if ([System.IO.Path]::IsPathRooted($trimmed)) {
+        return $trimmed
+    }
+    return Join-Path $BaseDir $trimmed
+}
+
+function Copy-AgentConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceConfigPath,
+        [Parameter(Mandatory = $true)][string]$DestinationDir
+    )
+
+    $destinationConfigPath = Join-Path $DestinationDir "config.json"
+    $config = Get-Content -Raw -LiteralPath $SourceConfigPath | ConvertFrom-Json
+    $caValue = [string]$config.pdp_ca_file
+    if ($caValue.Trim() -ne "") {
+        $sourceCAPath = Resolve-ConfigReferencedPath -Path $caValue -BaseDir (Split-Path -Parent $SourceConfigPath)
+        if (-not (Test-Path -LiteralPath $sourceCAPath)) {
+            throw "Configured pdp_ca_file does not exist: $sourceCAPath"
+        }
+        Copy-Item -LiteralPath $sourceCAPath -Destination (Join-Path $DestinationDir "pdp-ca.pem") -Force
+        $config.pdp_ca_file = "pdp-ca.pem"
+    }
+    $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $destinationConfigPath -Encoding UTF8
+    return $destinationConfigPath
+}
+
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $staleOutputs = @(
     "trust-agent.exe",
-    "TrustAgent-Setup.exe"
+    "TrustAgent-Setup.exe",
+    "config.json",
+    "pdp-ca.pem",
+    "install-service.ps1",
+    "Test-AgentConfig.ps1"
 )
 foreach ($staleOutput in $staleOutputs) {
     $stalePath = Join-Path $OutputDir $staleOutput
@@ -103,6 +141,7 @@ try {
 }
 
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination (Join-Path $OutputDir "install-service.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $scriptDir "Test-AgentConfig.ps1") -Destination (Join-Path $OutputDir "Test-AgentConfig.ps1") -Force
 
 $resolvedConfigPath = $ConfigPath.Trim()
 if ($resolvedConfigPath -eq "") {
@@ -111,9 +150,12 @@ if ($resolvedConfigPath -eq "") {
         $resolvedConfigPath = $candidateConfig
     }
 }
-if ($resolvedConfigPath -ne "") {
-    Copy-Item -LiteralPath $resolvedConfigPath -Destination (Join-Path $OutputDir "config.json") -Force
+if ($resolvedConfigPath -eq "") {
+    throw "TrustAgent config.json is required. Pass -ConfigPath or keep config.json in the agent root."
 }
+$resolvedConfigPath = (Resolve-Path -LiteralPath $resolvedConfigPath).ProviderPath
+Copy-AgentConfig -SourceConfigPath $resolvedConfigPath -DestinationDir $OutputDir | Out-Null
+& (Join-Path $OutputDir "Test-AgentConfig.ps1") -RuntimePath (Join-Path $OutputDir "trust-agent.exe") -SkipEnvironmentChecks
 
 $iscc = Find-InnoSetupCompiler
 if ($iscc.Trim() -ne "") {

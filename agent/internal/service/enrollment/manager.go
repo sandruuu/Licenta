@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +20,14 @@ type Manager struct {
 	logger           *slog.Logger
 	config           Config
 	client           Client
+	renewalClient    RenewalClient
 	deviceIdentity   DeviceIdentity
 	store            Store
 	clock            func() time.Time
 	onEnrolled       func()
 	enrollment       RuntimeState
 	enrollmentCancel context.CancelFunc
+	renewalMu        sync.Mutex
 }
 
 func NewManager(config Config, dependencies Dependencies) *Manager {
@@ -34,6 +37,7 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 		logger:         dependencies.Logger,
 		config:         config,
 		client:         dependencies.Client,
+		renewalClient:  dependencies.RenewalClient,
 		deviceIdentity: dependencies.DeviceIdentity,
 		store:          dependencies.Store,
 		clock:          dependencies.Clock,
@@ -56,6 +60,15 @@ func normalizeConfig(config Config) Config {
 	}
 	if config.EnrollmentPollInterval <= 0 {
 		config.EnrollmentPollInterval = DefaultPollInterval
+	}
+	if config.CertificateRenewBefore <= 0 {
+		config.CertificateRenewBefore = DefaultCertificateRenewBefore
+	}
+	if config.CertificateRenewCheckInterval <= 0 {
+		config.CertificateRenewCheckInterval = DefaultCertificateRenewCheckInterval
+	}
+	if config.CertificateRenewTimeout <= 0 {
+		config.CertificateRenewTimeout = DefaultCertificateRenewTimeout
 	}
 	return config
 }
@@ -142,6 +155,24 @@ func (manager *Manager) ensureEnrollmentClient(ctx context.Context) (Client, err
 	return client, nil
 }
 
+func (manager *Manager) ensureRenewalClient() RenewalClient {
+	manager.mu.RLock()
+	client := manager.renewalClient
+	manager.mu.RUnlock()
+	if client != nil {
+		return client
+	}
+	client = NewHTTPRenewalClient(manager.config)
+	manager.mu.Lock()
+	if manager.renewalClient == nil {
+		manager.renewalClient = client
+	} else {
+		client = manager.renewalClient
+	}
+	manager.mu.Unlock()
+	return client
+}
+
 func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollmentInteractiveResponse, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -194,10 +225,12 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 			return ipc.StartEnrollmentInteractiveResponse{}, ipc.ErrorCodeInternal, err
 		}
 	}
+	hostname, _ := os.Hostname()
 	startResponse, err := client.StartSession(ctx, EnrollmentStartSessionRequest{
 		CSRHash:       csr.CSRHash,
 		SPKIHash:      csr.SPKIHash,
 		DeviceNonce:   csr.DeviceNonce,
+		Hostname:      hostname,
 		AgentPlatform: "windows",
 		AgentName:     "TrustAgent",
 	})
@@ -478,8 +511,152 @@ func (manager *Manager) Refresh(ctx context.Context) {
 		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", check.Reason)
 		return
 	}
+	manager.mu.RLock()
+	previous := manager.enrollment
+	manager.mu.RUnlock()
 	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled", "")
+	if previous.State != ipc.EnrollmentStateEnrolled || previous.DeviceID != record.DeviceID {
+		manager.notifyEnrolled()
+	}
+}
+
+func (manager *Manager) RunCertificateRenewal(ctx context.Context) {
+	if manager == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	manager.renewCertificateWithLogging(ctx, "startup")
+	ticker := time.NewTicker(manager.config.CertificateRenewCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			manager.renewCertificateWithLogging(ctx, "periodic")
+		}
+	}
+}
+
+func (manager *Manager) renewCertificateWithLogging(ctx context.Context, reason string) {
+	renewed, err := manager.RenewCertificateIfNeeded(ctx)
+	if err != nil {
+		manager.logger.Warn("Device certificate renewal failed", "reason", strings.TrimSpace(reason), "error", err)
+		return
+	}
+	if renewed {
+		manager.logger.Info("Device certificate renewed", "reason", strings.TrimSpace(reason))
+	}
+}
+
+func (manager *Manager) RenewCertificateIfNeeded(ctx context.Context) (bool, error) {
+	if manager == nil {
+		return false, fmt.Errorf("enrollment manager is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	manager.renewalMu.Lock()
+	defer manager.renewalMu.Unlock()
+
+	record, err := manager.store.Load(ctx)
+	if err != nil {
+		return false, err
+	}
+	if record.EnrollmentState != ipc.EnrollmentStateEnrolled {
+		return false, nil
+	}
+	check, err := manager.deviceIdentity.CheckLocalEnrollment(ctx, record)
+	if err != nil {
+		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", err.Error())
+		return false, err
+	}
+	if !check.Enrolled {
+		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", check.Reason)
+		return false, nil
+	}
+
+	expiresAt := record.CertificateExpiry.UTC()
+	if expiresAt.IsZero() {
+		return false, nil
+	}
+	now := manager.clock().UTC()
+	if !now.Before(expiresAt) {
+		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", "device certificate is expired")
+		return false, nil
+	}
+	if now.Before(expiresAt.Add(-manager.config.CertificateRenewBefore)) {
+		return false, nil
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, manager.config.CertificateRenewTimeout)
+	defer cancel()
+	updated, err := manager.renewCertificate(callCtx, record)
+	if err != nil {
+		manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled; certificate renewal failed", err.Error())
+		return false, err
+	}
+	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, updated.DeviceID, "Device certificate renewed", "")
 	manager.notifyEnrolled()
+	return true, nil
+}
+
+func (manager *Manager) renewCertificate(ctx context.Context, record EnrollmentRecord) (EnrollmentRecord, error) {
+	certificate, cleanup, err := manager.deviceIdentity.ClientCertificate(ctx, record)
+	if err != nil {
+		return EnrollmentRecord{}, fmt.Errorf("load current device certificate: %w", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	keyName := firstNonEmpty(record.DeviceKeyName, manager.config.DeviceKeyName)
+	csr, err := manager.deviceIdentity.CreateCertificateRenewalCSR(ctx, keyName, record.DeviceID)
+	if err != nil {
+		return EnrollmentRecord{}, fmt.Errorf("create renewal CSR: %w", err)
+	}
+	hostname, _ := os.Hostname()
+	response, err := manager.ensureRenewalClient().RenewCertificate(ctx, record, certificate, CertificateRenewalRequest{
+		DeviceID:             record.DeviceID,
+		Component:            "endpoint",
+		Hostname:             hostname,
+		CSRPEM:               csr.CSRPEM,
+		PublicKeyFingerprint: csr.SPKIHash,
+	})
+	if err != nil {
+		return EnrollmentRecord{}, err
+	}
+	installed, err := manager.deviceIdentity.InstallDeviceCertificate(ctx, InstallCertificateRequest{
+		KeyName:             csr.KeyName,
+		KeyProvider:         csr.Provider,
+		CertificatePEM:      response.CertificatePEM,
+		CertificateChainPEM: response.CertificateChainPEM,
+	})
+	if err != nil {
+		return EnrollmentRecord{}, fmt.Errorf("install renewed certificate: %w", err)
+	}
+
+	updated := record
+	updated.DeviceKeyName = firstNonEmpty(csr.KeyName, record.DeviceKeyName, manager.config.DeviceKeyName)
+	updated.DeviceKeyProvider = firstNonEmpty(csr.Provider, record.DeviceKeyProvider)
+	updated.DeviceCertThumbprint = firstNonEmpty(response.CertificateThumbprint, installed.Thumbprint)
+	updated.DeviceCertificateChainPEM = firstNonEmpty(response.CertificateChainPEM, record.DeviceCertificateChainPEM)
+	updated.CertificateExpiry = response.ExpiresAt
+	if updated.CertificateExpiry.IsZero() {
+		updated.CertificateExpiry = installed.ExpiresAt
+	}
+	updated.UpdatedAt = manager.clock().UTC()
+	if strings.TrimSpace(updated.DeviceCertThumbprint) == "" {
+		return EnrollmentRecord{}, fmt.Errorf("renewed certificate thumbprint is missing")
+	}
+	if updated.CertificateExpiry.IsZero() {
+		return EnrollmentRecord{}, fmt.Errorf("renewed certificate expiry is missing")
+	}
+	if err := manager.store.Save(ctx, updated); err != nil {
+		return EnrollmentRecord{}, err
+	}
+	return updated, nil
 }
 
 func (manager *Manager) setEnrollmentRuntime(state ipc.EnrollmentState, deviceID, message, lastError string) {
@@ -510,4 +687,3 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
-

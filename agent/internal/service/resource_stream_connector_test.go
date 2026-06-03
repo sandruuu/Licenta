@@ -181,6 +181,76 @@ func TestResourceStreamConnectorReusesCachedResourceSession(t *testing.T) {
 	}
 }
 
+func TestResourceStreamConnectorSharesRenewalForSameProvisionedSession(t *testing.T) {
+	sessionProvider := &fakeAuthenticatedSessionProvider{
+		session: usersession.AuthenticatedSession{
+			AgentSessionID:    "agent-session",
+			AgentSessionToken: "agent-token",
+			ExpiresAt:         time.Now().Add(time.Hour),
+		},
+		found: true,
+	}
+	authorizer := &fakeFlowAuthorizer{response: flowauthorization.AuthorizeResponse{
+		Decision:          flowauthorization.DecisionAllow,
+		SessionID:         "sess-1",
+		SessionToken:      "session-token",
+		GatewayID:         "gw-1",
+		GatewayEndpoint:   "gateway.example.test:9443",
+		GatewayServerName: "gateway.example.test",
+		ResourceID:        "res-web",
+		Protocol:          "https",
+		Port:              443,
+		ExpiresAt:         time.Now().Add(5 * time.Minute),
+	}}
+	connector := &resourceStreamConnector{
+		enrollment: &fakeEnrollmentRecordProvider{record: enrollment.EnrollmentRecord{
+			DeviceID:             "device-1",
+			DeviceCertThumbprint: "thumbprint",
+		}},
+		userSessions: sessionProvider,
+		authorizer:   authorizer,
+		tunnel:       &fakeGatewayTunnel{},
+	}
+
+	first, err := connector.OpenResourceStream(context.Background(), trafficinterception.StreamRequest{
+		ResourceID:  "res-web",
+		FQDN:        "wapp.com",
+		Protocol:    "https",
+		Port:        443,
+		SyntheticIP: "100.64.0.3",
+		Process:     &trafficinterception.ProcessIdentity{PID: 101, Name: "browser.exe", SHA256: "hash-one"},
+	})
+	if err != nil {
+		t.Fatalf("first OpenResourceStream returned error: %v", err)
+	}
+	second, err := connector.OpenResourceStream(context.Background(), trafficinterception.StreamRequest{
+		ResourceID:  "res-web",
+		FQDN:        "wapp.com",
+		Protocol:    "https",
+		Port:        443,
+		SyntheticIP: "100.64.0.3",
+		Process:     &trafficinterception.ProcessIdentity{PID: 202, Name: "browser-helper.exe", SHA256: "hash-two"},
+	})
+	if err != nil {
+		t.Fatalf("second OpenResourceStream returned error: %v", err)
+	}
+
+	if authorizer.count != 2 {
+		t.Fatalf("AuthorizeResource count = %d, want 2 for distinct process cache keys", authorizer.count)
+	}
+	if count, refs := connector.activeRenewalStats(); count != 1 || refs != 2 {
+		t.Fatalf("active renewal stats = count:%d refs:%d, want count:1 refs:2", count, refs)
+	}
+	_ = first.Close()
+	if count, refs := connector.activeRenewalStats(); count != 1 || refs != 1 {
+		t.Fatalf("active renewal stats after first close = count:%d refs:%d, want count:1 refs:1", count, refs)
+	}
+	_ = second.Close()
+	if count, refs := connector.activeRenewalStats(); count != 0 || refs != 0 {
+		t.Fatalf("active renewal stats after second close = count:%d refs:%d, want count:0 refs:0", count, refs)
+	}
+}
+
 func TestResourceStreamConnectorDoesNotReuseCachedSessionAcrossProcesses(t *testing.T) {
 	sessionProvider := &fakeAuthenticatedSessionProvider{
 		session: usersession.AuthenticatedSession{
@@ -369,4 +439,17 @@ func (tunnel *fakeGatewayTunnel) Status() gatewaytunnel.Status {
 		return gatewaytunnel.Status{State: gatewaytunnel.StatusError, LastError: tunnel.err.Error()}
 	}
 	return gatewaytunnel.Status{State: gatewaytunnel.StatusReady}
+}
+
+func (connector *resourceStreamConnector) activeRenewalStats() (int, int) {
+	connector.mu.Lock()
+	defer connector.mu.Unlock()
+	count := len(connector.resourceSessionRenewals)
+	refs := 0
+	for _, renewal := range connector.resourceSessionRenewals {
+		if renewal != nil {
+			refs += renewal.refs
+		}
+	}
+	return count, refs
 }

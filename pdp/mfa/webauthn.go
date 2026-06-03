@@ -91,12 +91,10 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 	}
 
 	wa, err := webauthn.New(&webauthn.Config{
-		RPID:          cfg.WebAuthnRPID,
-		RPDisplayName: rpName,
-		RPOrigins:     origins,
-		AuthenticatorSelection: protocol.AuthenticatorSelection{
-			UserVerification: protocol.VerificationRequired,
-		},
+		RPID:                   cfg.WebAuthnRPID,
+		RPDisplayName:          rpName,
+		RPOrigins:              origins,
+		AuthenticatorSelection: passkeyAuthenticatorSelection(),
 	})
 	if err != nil {
 		log.Printf("[MFA] WebAuthn init failed: %v", err)
@@ -126,9 +124,7 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 func (p *WebAuthnProvider) BeginRegistration(user *models.User, existingCreds []webauthn.Credential, contextID string) (json.RawMessage, error) {
 	wUser := &WebAuthnUser{User: user, Credentials: existingCreds}
 
-	creation, session, err := p.wa.BeginRegistration(wUser, webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-		UserVerification: protocol.VerificationRequired,
-	}))
+	creation, session, err := p.wa.BeginRegistration(wUser, webauthn.WithAuthenticatorSelection(passkeyAuthenticatorSelection()))
 	if err != nil {
 		return nil, fmt.Errorf("begin registration: %w", err)
 	}
@@ -142,6 +138,15 @@ func (p *WebAuthnProvider) BeginRegistration(user *models.User, existingCreds []
 
 	log.Printf("[MFA] WebAuthn registration started for user %s", user.Username)
 	return opts, nil
+}
+
+func passkeyAuthenticatorSelection() protocol.AuthenticatorSelection {
+	requireResidentKey := true
+	return protocol.AuthenticatorSelection{
+		RequireResidentKey: &requireResidentKey,
+		ResidentKey:        protocol.ResidentKeyRequirementRequired,
+		UserVerification:   protocol.VerificationRequired,
+	}
 }
 
 // FinishRegistration completes the registration ceremony.

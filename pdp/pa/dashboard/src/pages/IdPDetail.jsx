@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Building2,
@@ -23,6 +23,7 @@ import {
   InlineBackButton,
 } from '../components/ui/Detail';
 import { formatDateTime } from '../utils/format';
+import { navigateBack } from '../utils/navigation';
 
 function DetailValue({ label, value, mono = false }) {
   return (
@@ -54,6 +55,8 @@ export default function IdPDetail() {
   const organizationID = decodeURIComponent(organizationId);
   const idpID = decodeURIComponent(idpId);
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTarget = `/organizations/${encodeURIComponent(organizationID)}`;
 
   const [organization, setOrganization] = useState(null);
   const [idp, setIdP] = useState(null);
@@ -186,7 +189,7 @@ export default function IdPDetail() {
   if (!idp) {
     return (
       <div className="space-y-4">
-        <InlineBackButton onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}>
+        <InlineBackButton onClick={() => navigateBack(navigate, backTarget, location)}>
           <ArrowLeft size={15} />
           Organization
         </InlineBackButton>
@@ -204,7 +207,7 @@ export default function IdPDetail() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back to organization" onClick={() => navigate(`/dashboard/organizations/${encodeURIComponent(organizationID)}`)}>
+                <BackIconButton compact title="Back to organization" onClick={() => navigateBack(navigate, backTarget, location)}>
                   <ArrowLeft size={16} />
                 </BackIconButton>
                 <div className="min-w-0">

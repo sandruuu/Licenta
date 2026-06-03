@@ -18,7 +18,7 @@ import GatewayDetail from './pages/GatewayDetail';
 function PrivateRoute({ children }) {
   const token = localStorage.getItem('admin_token');
   if (!token) {
-    return <Navigate to="/dashboard/login" replace />;
+    return <Navigate to="/login" replace />;
   }
   return children;
 }
@@ -27,8 +27,8 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/dashboard/login" element={<Login />} />
-        <Route path="/dashboard" element={<PrivateRoute><Layout /></PrivateRoute>}>
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="organizations" element={<Organizations />} />
           <Route path="organizations/:organizationId" element={<OrganizationDetail />} />
@@ -43,7 +43,7 @@ function App() {
           <Route path="device-health" element={<DeviceHealth />} />
           <Route path="audit" element={<Audit />} />
         </Route>
-        <Route path="*" element={<Navigate to="/dashboard" />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );

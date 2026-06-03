@@ -203,6 +203,26 @@ func (store *Store) ListSessions() []Session {
 	return sessions
 }
 
+func (store *Store) PurgeExpired() []Session {
+	if store == nil {
+		return nil
+	}
+	now := store.now()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	expired := make([]Session, 0)
+	for id, session := range store.sessions {
+		if session.ExpiresAt.IsZero() || session.ExpiresAt.After(now) {
+			continue
+		}
+		delete(store.sessions, id)
+		copy := session
+		copy.Constraints = append([]string(nil), session.Constraints...)
+		expired = append(expired, copy)
+	}
+	return expired
+}
+
 func (store *Store) Revoke(sessionID, reason string) (*Session, bool) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Ban, Edit2, RotateCcw, Server, Trash2 } from 'lucide-react';
 import {
   createResource,
@@ -20,6 +20,7 @@ import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui
 import Pagination from '../components/ui/Pagination';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { usePublicConfig } from '../config/publicConfig';
+import { navigateWithReturn } from '../utils/navigation';
 import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 const typeMeta = [
@@ -42,6 +43,7 @@ function catalogHost(resource) {
 
 export default function Resources() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const publicConfig = usePublicConfig();
   const [resources, setResources] = useState([]);
@@ -371,7 +373,7 @@ export default function Resources() {
         emptyIcon={Server}
         emptyTitle={hasFilters ? 'No resources match filters' : 'No resources configured'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find resources.' : 'Create a gateway first, then attach protected resources to it.'}
-        onRowClick={(row) => navigate(`/dashboard/resources/${encodeURIComponent(row.id)}`)}
+        onRowClick={(row) => navigateWithReturn(navigate, `/resources/${encodeURIComponent(row.id)}`, location)}
       />
 
       {/* <div className="pt-6">

@@ -39,6 +39,7 @@ const (
 	yamuxStreamOpenTimeout     = 30 * time.Second
 	yamuxStreamCloseTimeout    = 5 * time.Minute
 	revocationSyncInterval     = time.Minute
+	sessionCleanupInterval     = time.Minute
 	sessionRevalidationTimeout = 10 * time.Second
 	certExpiryCheckInterval    = 12 * time.Hour
 	certExpiryCriticalWindow   = 7 * 24 * time.Hour
@@ -145,7 +146,9 @@ func (gateway *Gateway) ListenAndServe() error {
 	}()
 
 	gateway.syncRevokedSerials()
+	gateway.cleanupExpiredProvisionedSessions()
 	go gateway.revocationSyncLoop()
+	go gateway.provisionedSessionCleanupLoop()
 	go gateway.sessionRevalidationLoop()
 	go gateway.certExpiryLoop()
 
@@ -525,6 +528,40 @@ func (gateway *Gateway) sessionRevalidationLoop() {
 			return
 		}
 	}
+}
+
+func (gateway *Gateway) provisionedSessionCleanupLoop() {
+	ticker := time.NewTicker(sessionCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			gateway.cleanupExpiredProvisionedSessions()
+		case <-gateway.ctx.Done():
+			return
+		}
+	}
+}
+
+func (gateway *Gateway) cleanupExpiredProvisionedSessions() {
+	if gateway == nil || gateway.provisioned == nil {
+		return
+	}
+	expired := gateway.provisioned.PurgeExpired()
+	if len(expired) == 0 {
+		return
+	}
+	expiredIDs := make(map[string]struct{}, len(expired))
+	for _, session := range expired {
+		if strings.TrimSpace(session.ID) != "" {
+			expiredIDs[session.ID] = struct{}{}
+		}
+	}
+	gateway.terminateRelays(func(relay *activeRelay) bool {
+		_, ok := expiredIDs[relay.sessionID]
+		return ok
+	}, "session.expired")
+	log.Printf("[GATEWAY] purged %d expired provisioned session(s)", len(expired))
 }
 
 func (gateway *Gateway) revalidateProvisionedSessions() {

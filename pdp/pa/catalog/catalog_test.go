@@ -113,3 +113,50 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildForTenantUserDoesNotPublishResourcesFromOrganizationPolicies(t *testing.T) {
+	dataStore := store.New(t.TempDir())
+	if err := dataStore.InitDB(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	t.Cleanup(func() { _ = dataStore.Close() })
+
+	now := time.Now()
+	for _, resource := range []*models.Resource{
+		{ID: "res-web", Name: "Web", Type: "web", ExternalURL: "https://web.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-ssh", Name: "SSH", Type: "ssh", ExternalURL: "ssh.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-rdp", Name: "RDP", Type: "rdp", ExternalURL: "rdp.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+	} {
+		dataStore.SaveResource(resource)
+	}
+
+	dataStore.EnsureDefaultGlobalPolicyForTenant("tenant-1")
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:        "policy-org-baseline",
+		Name:      "Organization baseline",
+		Enabled:   true,
+		Action:    models.DecisionStepUpRequired,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:        "assign-org-baseline",
+		PolicyID:  "policy-org-baseline",
+		TenantID:  "tenant-1",
+		Level:     "organization",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+
+	snapshot := NewService(dataStore).BuildForTenantUser("tenant-1", &models.User{
+		ID:       "user-1",
+		Username: "user@example.test",
+		Email:    "user@example.test",
+		Role:     "user",
+		TenantID: "tenant-1",
+	}, nil, nil)
+	if len(snapshot.Resources) != 0 {
+		t.Fatalf("resources = %+v, want none without an explicit resource policy", snapshot.Resources)
+	}
+}

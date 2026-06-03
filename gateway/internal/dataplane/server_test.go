@@ -172,6 +172,46 @@ func TestProvisionSessionRenewsActiveRelays(t *testing.T) {
 	}
 }
 
+func TestCleanupExpiredProvisionedSessionsRemovesSessionsAndTerminatesRelays(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	gateway := &Gateway{provisioned: provisioning.NewStoreWithClock(func() time.Time { return now })}
+	if err := gateway.ProvisionSession(provisioning.Session{
+		ID:           "sess-expiring",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-ssh",
+		InternalHost: "10.10.0.10",
+		InternalPort: 22,
+		Protocol:     "ssh",
+		ExpiresAt:    now.Add(time.Minute),
+	}, "session-secret"); err != nil {
+		t.Fatalf("ProvisionSession() error = %v", err)
+	}
+	closed := make(chan string, 1)
+	gateway.activeRelays.Store("relay-expiring", &activeRelay{
+		id:        "relay-expiring",
+		sessionID: "sess-expiring",
+		cancel: func(reason string) {
+			closed <- reason
+		},
+	})
+
+	now = now.Add(2 * time.Minute)
+	gateway.cleanupExpiredProvisionedSessions()
+
+	if count := gateway.ProvisionedSessionCount(); count != 0 {
+		t.Fatalf("ProvisionedSessionCount() = %d, want 0", count)
+	}
+	select {
+	case reason := <-closed:
+		if reason != "session.expired" {
+			t.Fatalf("relay close reason = %q, want session.expired", reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired relay was not terminated")
+	}
+}
+
 func TestDNSResolveIsNotAcceptedByStrictGateway(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()

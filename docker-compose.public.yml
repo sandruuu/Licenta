@@ -1,0 +1,36 @@
+services:
+  pdp:
+    environment:
+      - PDP_PUBLIC_HOST=${PDP_PUBLIC_HOST:?Set PDP_PUBLIC_HOST, for example policy-admin.remote-access-demo.xyz}
+      - PDP_PUBLIC_ORIGIN=https://${PDP_PUBLIC_HOST}
+      - PDP_ADMIN_REQUIRE_MFA=${PDP_ADMIN_REQUIRE_MFA:-true}
+      - PDP_CORS_ORIGINS=https://${PDP_PUBLIC_HOST}
+      - PDP_FEDERATED_CALLBACK_URL=${PDP_FEDERATED_CALLBACK_URL:-}
+      - PDP_WEBAUTHN_RP_ID=${PDP_WEBAUTHN_RP_ID:-}
+      - PDP_WEBAUTHN_RP_ORIGINS=${PDP_WEBAUTHN_RP_ORIGINS:-}
+
+  public-proxy:
+    image: caddy:2.8-alpine
+    container_name: trustcloud-public-proxy
+    depends_on:
+      pdp:
+        condition: service_healthy
+    networks:
+      - public
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - PDP_PUBLIC_HOST=${PDP_PUBLIC_HOST:?Set PDP_PUBLIC_HOST, for example policy-admin.remote-access-demo.xyz}
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local

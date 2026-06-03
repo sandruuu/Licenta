@@ -55,6 +55,10 @@ func (identity fakeDeviceIdentity) CreateEnrollmentCSR(context.Context, string) 
 	return enrollment.EnrollmentCSR{}, nil
 }
 
+func (identity fakeDeviceIdentity) CreateCertificateRenewalCSR(context.Context, string, string) (enrollment.EnrollmentCSR, error) {
+	return enrollment.EnrollmentCSR{}, nil
+}
+
 func (identity fakeDeviceIdentity) SignEnrollmentProof(context.Context, string, []byte) ([]byte, error) {
 	return nil, nil
 }

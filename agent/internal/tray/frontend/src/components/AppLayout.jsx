@@ -1,6 +1,5 @@
 import {
   AlertCircle,
-  CircleUserRound,
   Database,
   LogOut,
   Minus,
@@ -39,7 +38,7 @@ function AppLayout({
 
   return (
     <div className="flex h-full w-full flex-col bg-[var(--surface)]">
-      <WindowTitleBar dashboard={dashboard} onClose={onHide} />
+      <WindowTitleBar onClose={onHide} />
 
       <div className="relative min-h-0 flex-1">
         {waitingForDashboard ? (
@@ -92,6 +91,9 @@ function EnrolledScreen({
   const displayError = loginError || userSession.last_error || error;
   const stepUpURL = userSession.step_up_url || '';
   const stepUpMessage = stepUpURL ? (userSession.message || 'Additional verification is required.') : '';
+  const sessionMessage = !stepUpURL && userSession.message && userSession.message !== 'Authenticated'
+    ? userSession.message
+    : '';
   const openedStepUpURLRef = useRef('');
 
   useEffect(() => {
@@ -115,6 +117,15 @@ function EnrolledScreen({
           <div className="flex gap-2 rounded-md border border-[color-mix(in_srgb,var(--accent)_28%,transparent)] bg-[var(--accent-muted)] px-3 py-2 text-sm font-semibold text-[var(--accent)]">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span className="min-w-0 break-words leading-5">{stepUpMessage}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {sessionMessage ? (
+        <div className="ml-[76px] px-5 pt-4">
+          <div className="flex gap-2 rounded-md border border-[color-mix(in_srgb,var(--danger)_28%,transparent)] bg-[var(--danger-muted)] px-3 py-2 text-sm font-semibold text-[var(--danger)]">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span className="min-w-0 break-words leading-5">{sessionMessage}</span>
           </div>
         </div>
       ) : null}
@@ -224,12 +235,7 @@ function EnrolledSignInScreen({
   );
 }
 
-function WindowTitleBar({ dashboard, onClose }) {
-  const userSession = dashboard?.user_session || {};
-  const accountName = userSession.display_name || userSession.email || '';
-  const authenticated = String(userSession.state || '').toUpperCase() === 'AUTHENTICATED';
-  const initials = accountInitials(accountName);
-
+function WindowTitleBar({ onClose }) {
   return (
     <header
       className="flex h-8 shrink-0 items-center justify-between border-b text-[#111111]"
@@ -249,18 +255,6 @@ function WindowTitleBar({ dashboard, onClose }) {
         </div>
       </div>
       <div className="flex h-full shrink-0 items-center">
-        {authenticated ? (
-          <div
-            className="flex h-full max-w-[245px] items-center gap-2 px-3 text-xs font-semibold text-[#53595d]"
-            title={accountName}
-          >
-            <span className="min-w-0 truncate">My Account</span>
-            <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#74b6ef] text-[10px] font-bold uppercase leading-none text-white">
-              {initials}
-            </span>
-            <CircleUserRound className="h-[19px] w-[19px] shrink-0 text-[#555b60]" strokeWidth={2} />
-          </div>
-        ) : null}
         <button
           type="button"
           className="grid h-full w-12 cursor-pointer place-items-center bg-transparent text-[#111111] transition-colors duration-150 hover:bg-[#efe9e7]"
@@ -280,20 +274,6 @@ function WindowTitleBar({ dashboard, onClose }) {
       </div>
     </header>
   );
-}
-
-function accountInitials(name) {
-  const clean = String(name || '').trim();
-  if (!clean) return 'U';
-  const localPart = clean.includes('@') ? clean.split('@')[0] : clean;
-  const parts = localPart
-    .split(/[\s._-]+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length >= 2) {
-    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  }
-  return localPart.slice(0, 2).toUpperCase();
 }
 
 function AgentLoadingScreen() {

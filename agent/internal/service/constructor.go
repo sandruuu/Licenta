@@ -40,6 +40,15 @@ func normalizeConfig(config Config) Config {
 	if config.EnrollmentPollInterval <= 0 {
 		config.EnrollmentPollInterval = defaultEnrollmentPollInterval
 	}
+	if config.CertificateRenewBefore <= 0 {
+		config.CertificateRenewBefore = defaultCertificateRenewBefore
+	}
+	if config.CertificateRenewCheckInterval <= 0 {
+		config.CertificateRenewCheckInterval = defaultCertificateRenewCheckInterval
+	}
+	if config.CertificateRenewTimeout <= 0 {
+		config.CertificateRenewTimeout = defaultCertificateRenewTimeout
+	}
 	if config.LoginTimeout <= 0 {
 		config.LoginTimeout = defaultLoginTimeout
 	}
@@ -91,6 +100,7 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 	enrollmentManager := enrollment.NewManager(enrollmentConfig(config), enrollment.Dependencies{
 		Logger:         dependencies.Logger,
 		Client:         dependencies.EnrollmentClient,
+		RenewalClient:  dependencies.EnrollmentRenewalClient,
 		DeviceIdentity: deviceIdentity,
 		Store:          dependencies.EnrollmentStore,
 		Clock:          dependencies.Clock,
@@ -288,13 +298,16 @@ func deviceDataCollectorFromDependencies(dependencies Dependencies) DeviceDataCo
 
 func enrollmentConfig(config Config) enrollment.Config {
 	return enrollment.Config{
-		PDPGRPCEndpoint:        config.PDPGRPCEndpoint,
-		PDPTLSServerName:       config.PDPTLSServerName,
-		PDPCAFile:              config.PDPCAFile,
-		EnrollmentTimeout:      config.EnrollmentTimeout,
-		EnrollmentPollInterval: config.EnrollmentPollInterval,
-		EnrollmentStatePath:    config.EnrollmentStatePath,
-		DeviceKeyName:          config.DeviceKeyName,
+		PDPGRPCEndpoint:               config.PDPGRPCEndpoint,
+		PDPTLSServerName:              config.PDPTLSServerName,
+		PDPCAFile:                     config.PDPCAFile,
+		EnrollmentTimeout:             config.EnrollmentTimeout,
+		EnrollmentPollInterval:        config.EnrollmentPollInterval,
+		CertificateRenewBefore:        config.CertificateRenewBefore,
+		CertificateRenewCheckInterval: config.CertificateRenewCheckInterval,
+		CertificateRenewTimeout:       config.CertificateRenewTimeout,
+		EnrollmentStatePath:           config.EnrollmentStatePath,
+		DeviceKeyName:                 config.DeviceKeyName,
 	}
 }
 

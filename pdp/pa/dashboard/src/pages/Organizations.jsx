@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
 import OrganizationFormModal from '../components/organizations/OrganizationFormModal';
 import OrganizationTable from '../components/organizations/OrganizationTable';
@@ -10,9 +10,11 @@ import ListToolbar from '../components/ui/ListToolbar';
 import PageHeader from '../components/ui/PageHeader';
 import Pagination from '../components/ui/Pagination';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
+import { navigateWithReturn } from '../utils/navigation';
 
 export default function Organizations() {
   const navigate = useNavigate();
+  const location = useLocation();
   const organizationDirectory = useOrganizationDirectory();
   const gatewayCreate = useGatewayCreate(organizationDirectory.load);
   const [query, setQuery] = useState('');
@@ -21,7 +23,7 @@ export default function Organizations() {
   const [reactivateOrganizationTarget, setReactivateOrganizationTarget] = useState(null);
 
   const openOrganization = (organization) => {
-    if (organization?.id) navigate(`/dashboard/organizations/${encodeURIComponent(organization.id)}`);
+    if (organization?.id) navigateWithReturn(navigate, `/organizations/${encodeURIComponent(organization.id)}`, location);
   };
 
   const filteredOrganizations = useMemo(() => {

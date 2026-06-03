@@ -31,8 +31,10 @@ Name: "startatlogin"; Description: "Start TrustAgent when I sign in"; GroupDescr
 
 [Files]
 Source: "{#SourceDir}\trust-agent.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#SourceDir}\config.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#SourceDir}\config.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\pdp-ca.pem"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SourceDir}\install-service.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "{#SourceDir}\Test-AgentConfig.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Registry]
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "TrustAgent"; ValueData: """{app}\trust-agent.exe"""; Tasks: startatlogin; Flags: uninsdeletevalue

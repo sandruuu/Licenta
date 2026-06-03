@@ -30,6 +30,7 @@ func (service *Service) Run(ctx context.Context) error {
 	go service.runProtectedResources(ctx)
 	go service.runDeviceDataSync(ctx)
 	go service.runAgentEvents(ctx)
+	go service.runCertificateRenewal(ctx)
 	service.logger.Info("TrustAgent service running", "pipe", ipc.PipePath(), "protocol", ipc.ProtocolVersion)
 	service.transition(StateRunning)
 
@@ -71,4 +72,11 @@ func (service *Service) runDeviceDataSync(ctx context.Context) {
 		return
 	}
 	service.deviceDataSync.Run(ctx)
+}
+
+func (service *Service) runCertificateRenewal(ctx context.Context) {
+	if service == nil || service.enrollment == nil {
+		return
+	}
+	service.enrollment.RunCertificateRenewal(ctx)
 }

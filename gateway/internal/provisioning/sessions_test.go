@@ -141,3 +141,48 @@ func TestStoreListSessionsReturnsCopies(t *testing.T) {
 		t.Fatalf("ListSessions() leaked mutable constraints: %+v", again[0].Constraints)
 	}
 }
+
+func TestStorePurgeExpiredRemovesExpiredSessions(t *testing.T) {
+	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
+	store := NewStoreWithClock(func() time.Time { return now })
+	if err := store.Provision(Session{
+		ID:           "expired-soon",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-ssh",
+		InternalHost: "10.10.0.10",
+		InternalPort: 22,
+		Protocol:     "ssh",
+		ExpiresAt:    now.Add(time.Minute),
+		Constraints:  []string{"policy:one"},
+	}, "session-secret"); err != nil {
+		t.Fatalf("Provision() expired-soon error = %v", err)
+	}
+	if err := store.Provision(Session{
+		ID:           "still-valid",
+		DeviceID:     "device-1",
+		UserID:       "user-1",
+		ResourceID:   "res-rdp",
+		InternalHost: "10.10.0.11",
+		InternalPort: 3389,
+		Protocol:     "rdp",
+		ExpiresAt:    now.Add(time.Hour),
+	}, "other-secret"); err != nil {
+		t.Fatalf("Provision() still-valid error = %v", err)
+	}
+
+	now = now.Add(2 * time.Minute)
+	expired := store.PurgeExpired()
+	if len(expired) != 1 || expired[0].ID != "expired-soon" {
+		t.Fatalf("PurgeExpired() = %+v, want expired-soon", expired)
+	}
+	if store.Count() != 1 {
+		t.Fatalf("Count() = %d, want 1", store.Count())
+	}
+	if _, err := store.Validate(ConnectCheck{SessionID: "expired-soon", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "ssh", Port: 22}); err == nil {
+		t.Fatal("Validate() accepted purged session")
+	}
+	if _, err := store.Validate(ConnectCheck{SessionID: "still-valid", SessionToken: "other-secret", DeviceID: "device-1", ResourceID: "res-rdp", Protocol: "rdp", Port: 3389}); err != nil {
+		t.Fatalf("Validate() valid session error = %v", err)
+	}
+}

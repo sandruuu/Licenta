@@ -676,6 +676,35 @@ func TestServiceDashboardPromptsSignInWhenEnrolledAndSignedOut(t *testing.T) {
 	}
 }
 
+func TestServiceDashboardRefreshesUnusableEnrollment(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	localCheck := enrollment.LocalEnrollmentCheck{Enrolled: true}
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	service := New(Config{}, Dependencies{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:           func() time.Time { return now },
+		EnrollmentStore: store,
+		DeviceIdentity:  fakeDeviceIdentity{localCheck: &localCheck},
+	})
+	service.enrollment.Refresh(context.Background())
+
+	localCheck.Enrolled = false
+	localCheck.Reason = "device certificate is expired"
+	dashboard := service.dashboard(context.Background())
+	if dashboard.Connection.State != "unenrolled" || dashboard.Enrollment.State != ipc.EnrollmentStateUnenrolled {
+		t.Fatalf("dashboard enrollment = connection=%+v enrollment=%+v", dashboard.Connection, dashboard.Enrollment)
+	}
+	if !strings.Contains(dashboard.Enrollment.LastError, "expired") {
+		t.Fatalf("dashboard enrollment last error = %q", dashboard.Enrollment.LastError)
+	}
+}
+
 func waitForUserSessionState(t *testing.T, service *Service, ctx context.Context, expected string) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -983,10 +1012,15 @@ func (client *fakeDeviceDataSyncClient) waitForReports(t *testing.T, count int) 
 }
 
 type fakeDeviceIdentity struct {
-	csr enrollment.EnrollmentCSR
+	csr        enrollment.EnrollmentCSR
+	localCheck *enrollment.LocalEnrollmentCheck
 }
 
 func (identity fakeDeviceIdentity) CreateEnrollmentCSR(context.Context, string) (enrollment.EnrollmentCSR, error) {
+	return identity.csr, nil
+}
+
+func (identity fakeDeviceIdentity) CreateCertificateRenewalCSR(context.Context, string, string) (enrollment.EnrollmentCSR, error) {
 	return identity.csr, nil
 }
 
@@ -999,6 +1033,9 @@ func (identity fakeDeviceIdentity) InstallDeviceCertificate(context.Context, enr
 }
 
 func (identity fakeDeviceIdentity) CheckLocalEnrollment(context.Context, enrollment.EnrollmentRecord) (enrollment.LocalEnrollmentCheck, error) {
+	if identity.localCheck != nil {
+		return *identity.localCheck, nil
+	}
 	return enrollment.LocalEnrollmentCheck{Enrolled: true}, nil
 }
 

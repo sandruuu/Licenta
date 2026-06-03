@@ -8,6 +8,9 @@ type ServiceConfig struct {
 	PDPCAFile                        string
 	EnrollmentTimeout                time.Duration
 	EnrollmentPollInterval           time.Duration
+	CertificateRenewBefore           time.Duration
+	CertificateRenewCheckInterval    time.Duration
+	CertificateRenewTimeout          time.Duration
 	DeviceDataSyncInterval           time.Duration
 	DeviceDataSyncChangeScanInterval time.Duration
 	EnrollmentStatePath              string

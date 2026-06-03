@@ -161,6 +161,7 @@ func (s *Server) handleAdminDeviceData(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reports := filterDeviceDataByOrganization(s.pa.Store.ListDeviceData(), s.allowedOrganizationIDs(r))
+	reports = s.filterActiveEndpointDeviceData(reports)
 	if reports == nil {
 		reports = []*models.DeviceDataReport{}
 	}
@@ -188,6 +189,10 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
 		return
 	}
+	if !s.activeEndpointDeviceData(report) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
+		return
+	}
 	if !s.requireOrganizationAccess(w, r, report.TenantID) {
 		return
 	}
@@ -198,6 +203,27 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 // ─────────────────────────────────────────────
 // Dashboard stats endpoint
 // ─────────────────────────────────────────────
+
+func (s *Server) filterActiveEndpointDeviceData(reports []*models.DeviceDataReport) []*models.DeviceDataReport {
+	filtered := make([]*models.DeviceDataReport, 0, len(reports))
+	for _, report := range reports {
+		if s.activeEndpointDeviceData(report) {
+			filtered = append(filtered, report)
+		}
+	}
+	return filtered
+}
+
+func (s *Server) activeEndpointDeviceData(report *models.DeviceDataReport) bool {
+	if report == nil || s == nil || s.pa == nil || s.pa.Store == nil {
+		return false
+	}
+	enrollment, found := s.pa.Store.GetDeviceEnrollmentByComponent(report.DeviceID, "endpoint")
+	if !found {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(enrollment.Status), "approved")
+}
 
 func (s *Server) handleDashboardStats(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -289,6 +315,11 @@ func applyOrganizationAliasToFields(fields map[string]json.RawMessage) {
 // ─────────────────────────────────────────────
 
 func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
+	if isReservedServerPath(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
+
 	// Serve from pdp/pa/dashboard/dist/ during development or /app/dashboard/dist in containers.
 	distDir := findDashboardDir()
 	if distDir == "" {
@@ -296,8 +327,7 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strip /dashboard/ prefix and sanitize against path traversal
-	filePath := strings.TrimPrefix(r.URL.Path, "/dashboard/")
+	filePath := dashboardFilePath(r.URL.Path)
 	if filePath == "" {
 		filePath = "index.html"
 	}
@@ -331,6 +361,36 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.ServeFile(w, r, fullPath)
+}
+
+func (s *Server) redirectLegacyDashboardRoute(w http.ResponseWriter, r *http.Request) {
+	target := strings.TrimPrefix(r.URL.Path, "/dashboard")
+	if target == "" {
+		target = "/"
+	}
+	if !strings.HasPrefix(target, "/") {
+		target = "/" + target
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
+}
+
+func dashboardFilePath(urlPath string) string {
+	if strings.HasPrefix(urlPath, "/dashboard/") {
+		return strings.TrimPrefix(urlPath, "/dashboard/")
+	}
+	return strings.TrimPrefix(urlPath, "/")
+}
+
+func isReservedServerPath(urlPath string) bool {
+	for _, prefix := range []string{"/api", "/auth", "/browser", "/scim", "/.well-known", "/health"} {
+		if urlPath == prefix || strings.HasPrefix(urlPath, prefix+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) serveDashboardIndex(w http.ResponseWriter, r *http.Request) {

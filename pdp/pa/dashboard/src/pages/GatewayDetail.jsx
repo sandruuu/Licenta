@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Ban,
@@ -24,6 +24,7 @@ import {
 } from '../components/ui/Detail';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { formatDateTime } from '../utils/format';
+import { navigateBack, navigateWithReturn } from '../utils/navigation';
 import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 function gatewayStatusVariant(status) {
@@ -51,6 +52,7 @@ export default function GatewayDetail() {
   const { gatewayId = '' } = useParams();
   const gatewayID = decodeURIComponent(gatewayId);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [gateway, setGateway] = useState(null);
   const [organization, setOrganization] = useState(null);
@@ -91,8 +93,9 @@ export default function GatewayDetail() {
   }, [load]);
 
   const backTarget = organization?.id
-    ? `/dashboard/organizations/${encodeURIComponent(organization.id)}`
-    : '/dashboard/gateways';
+    ? `/organizations/${encodeURIComponent(organization.id)}`
+    : '/gateways';
+  const handleBack = () => navigateBack(navigate, backTarget, location);
 
   const openEdit = () => {
     setEditForm({
@@ -145,7 +148,7 @@ export default function GatewayDetail() {
   if (!gateway) {
     return (
       <div className="space-y-4">
-        <InlineBackButton onClick={() => navigate('/dashboard/gateways')}>
+        <InlineBackButton onClick={() => navigateBack(navigate, '/gateways', location)}>
           <ArrowLeft size={15} />
           Gateways
         </InlineBackButton>
@@ -166,7 +169,7 @@ export default function GatewayDetail() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back" onClick={() => navigate(backTarget)}>
+                <BackIconButton compact title="Back" onClick={handleBack}>
                   <ArrowLeft size={16} />
                 </BackIconButton>
                 <div className="min-w-0">
@@ -212,7 +215,7 @@ export default function GatewayDetail() {
               ) : (
                 <div className="mt-2 space-y-2">
                   {resources.map((resource) => (
-                    <DetailSummaryItem key={resource.id} onClick={() => navigate(`/dashboard/resources/${encodeURIComponent(resource.id)}`)}>
+                    <DetailSummaryItem key={resource.id} onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}>
                       <span className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="truncate text-base font-semibold text-text-primary hover:text-accent">{resource.name || resource.id}</span>
                         <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
@@ -227,10 +230,10 @@ export default function GatewayDetail() {
               )}
             </div>
             <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/dashboard/resources?${resourceListFilter}`)}>
+              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}`)}>
                 View all
               </Button>
-              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/dashboard/resources?${resourceListFilter}&create=1`)}>
+              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}&create=1`)}>
                 <Plus size={13} />
                 New
               </Button>

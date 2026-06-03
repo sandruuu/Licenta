@@ -27,7 +27,7 @@ services:
       - IPC_LOCK
     entrypoint: ["vault"]
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"
     command: ["server", "-config", "/vault/config/vault.hcl"]
     networks:
       security:
@@ -62,7 +62,13 @@ services:
       - VAULT_ADDR=http://vault:8200
       - TRUSTCLOUD_VAULT_TOKEN=${TRUSTCLOUD_VAULT_TOKEN:-trustcloud-vault-token}
     entrypoint: ["/bin/sh", "/vault/bootstrap/bootstrap.sh"]
-    restart: "no"
+    healthcheck:
+      test: ["CMD-SHELL", "vault status >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.1
@@ -73,7 +79,7 @@ services:
       - --hostname=http://keycloak:8080
       - --hostname-strict=false
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     networks:
       public:
         ipv4_address: 172.30.0.30
@@ -93,7 +99,7 @@ services:
       dockerfile: Dockerfile
     container_name: trustcloud
     ports:
-      - "8443:8443"
+      - "127.0.0.1:8443:8443"
     networks:
       public:
         ipv4_address: 172.30.0.20
@@ -111,7 +117,7 @@ services:
       - ./pdp/pa/dashboard/dist:/app/dashboard/dist:ro
     depends_on:
       vault-init:
-        condition: service_completed_successfully
+        condition: service_healthy
       keycloak:
         condition: service_started
     restart: unless-stopped
@@ -158,8 +164,8 @@ services:
     image: coredns/coredns:1.11.1
     container_name: trustcloud-public-dns
     ports:
-      - "1053:53/udp"
-      - "1053:53/tcp"
+      - "127.0.0.1:1053:53/udp"
+      - "127.0.0.1:1053:53/tcp"
     networks:
       public:
         ipv4_address: 172.30.0.53

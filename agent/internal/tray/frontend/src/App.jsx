@@ -13,6 +13,13 @@ import {
   isWailsRuntimeReady,
 } from './lib/dashboard';
 
+function errorMessage(error, fallback) {
+  if (typeof error === 'string') {
+    return error || fallback;
+  }
+  return error?.message || fallback;
+}
+
 function App() {
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -35,7 +42,7 @@ function App() {
       setDashboard(nextDashboard);
       setError('');
     } catch (err) {
-      setError(err?.message || 'Agent dashboard is unavailable');
+      setError(errorMessage(err, 'Agent dashboard is unavailable'));
     } finally {
       setLoading(false);
     }
@@ -72,7 +79,7 @@ function App() {
       }
       await loadDashboard();
     } catch (err) {
-      setEnrollmentError(err?.message || 'Enrollment could not be started');
+      setEnrollmentError(errorMessage(err, 'Enrollment could not be started'));
     } finally {
       setEnrollmentLoading(false);
     }
@@ -88,7 +95,7 @@ function App() {
       }
       await loadDashboard();
     } catch (err) {
-      setLoginError(err?.message || 'Login could not be started');
+      setLoginError(errorMessage(err, 'Login could not be started'));
     } finally {
       setLoginLoading(false);
     }
@@ -101,7 +108,7 @@ function App() {
       await LogoutUserSession();
       await loadDashboard();
     } catch (err) {
-      setLoginError(err?.message || 'Logout failed');
+      setLoginError(errorMessage(err, 'Logout failed'));
     } finally {
       setLoginLoading(false);
     }

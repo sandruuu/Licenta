@@ -60,15 +60,21 @@ try {
     $BuildDir = Join-Path $PSScriptRoot "build"
     $BuildExe = Join-Path $BuildDir "trust-agent.exe"
     $BuildConfig = Join-Path $BuildDir "config.json"
+    $BuildCA = Join-Path $BuildDir "pdp-ca.pem"
+    $PreflightScript = Join-Path $PSScriptRoot "packaging\Test-AgentConfig.ps1"
     foreach ($path in @($BuildExe, $BuildConfig)) {
         if (-not (Test-Path -LiteralPath $path)) {
             throw "Required build artifact is missing: $path"
         }
     }
+    if (-not (Test-Path -LiteralPath $PreflightScript)) {
+        throw "Required preflight script is missing: $PreflightScript"
+    }
 
     $InstallDir = Get-ServiceExecutableDirectory -Name $ServiceName
     $InstallExe = Join-Path $InstallDir "trust-agent.exe"
     $InstallConfig = Join-Path $InstallDir "config.json"
+    $InstallCA = Join-Path $InstallDir "pdp-ca.pem"
 
     Write-Host "Stopping $ServiceName"
     Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
@@ -85,10 +91,18 @@ try {
     Copy-WithRetry -Source $BuildExe -Destination $InstallExe
     Write-Host "Copying $BuildConfig -> $InstallConfig"
     Copy-WithRetry -Source $BuildConfig -Destination $InstallConfig
-
-    if (Get-Service -Name trustagent_wfp -ErrorAction SilentlyContinue) {
-        Start-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $BuildCA) {
+        Write-Host "Copying $BuildCA -> $InstallCA"
+        Copy-WithRetry -Source $BuildCA -Destination $InstallCA
     }
+
+    $wfpService = Get-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
+    if ($null -ne $wfpService -and $wfpService.Status -ne "Running") {
+        Start-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
+        (Get-Service -Name trustagent_wfp).WaitForStatus("Running", [TimeSpan]::FromSeconds(15))
+    }
+
+    & $PreflightScript -RuntimePath $InstallExe -RepairPaths
 
     Write-Host "Starting $ServiceName"
     Start-Service -Name $ServiceName

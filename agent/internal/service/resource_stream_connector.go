@@ -59,6 +59,7 @@ type resourceStreamConnector struct {
 	authorizerThumbprint     string
 	tunnel                   gatewayTunnel
 	resourceSessions         map[resourceSessionCacheKey]flowauthorization.AuthorizeResponse
+	resourceSessionRenewals  map[string]*resourceSessionRenewal
 	onAuthenticationRequired func(trafficinterception.StreamRequest)
 	onStepUpRequired         func(trafficinterception.StreamRequest, flowauthorization.AuthorizeResponse)
 	onResourceAllowed        func(trafficinterception.StreamRequest, flowauthorization.AuthorizeResponse)
@@ -70,6 +71,11 @@ type resourceSessionCacheKey struct {
 	Protocol       string
 	Port           int
 	ProcessKey     string
+}
+
+type resourceSessionRenewal struct {
+	cancel context.CancelFunc
+	refs   int
 }
 
 func newResourceStreamConnector(config resourceStreamConnectorConfig, dependencies Dependencies, enrollmentManager *enrollment.Manager, userSessionManager *usersession.Manager, deviceIdentity enrollment.DeviceIdentity, pdpClient *pdpclient.Client) *resourceStreamConnector {
@@ -251,22 +257,144 @@ func (connector *resourceStreamConnector) forgetResourceSession(key resourceSess
 	if connector == nil || !key.cacheable() {
 		return
 	}
+	var cancel context.CancelFunc
+	var sessionID string
 	connector.mu.Lock()
-	defer connector.mu.Unlock()
-	delete(connector.resourceSessions, key)
+	if connector.resourceSessions != nil {
+		sessionID = strings.TrimSpace(connector.resourceSessions[key].SessionID)
+		delete(connector.resourceSessions, key)
+	}
+	if connector.resourceSessionRenewals != nil && sessionID != "" {
+		if renewal := connector.resourceSessionRenewals[sessionID]; renewal != nil {
+			cancel = renewal.cancel
+			delete(connector.resourceSessionRenewals, sessionID)
+		}
+	}
+	connector.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (connector *resourceStreamConnector) forgetResourceSessionID(sessionID string) {
+	if connector == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	var cancel context.CancelFunc
+	connector.mu.Lock()
+	for key, session := range connector.resourceSessions {
+		if strings.TrimSpace(session.SessionID) == sessionID {
+			delete(connector.resourceSessions, key)
+		}
+	}
+	if connector.resourceSessionRenewals != nil {
+		if renewal := connector.resourceSessionRenewals[sessionID]; renewal != nil {
+			cancel = renewal.cancel
+			delete(connector.resourceSessionRenewals, sessionID)
+		}
+	}
+	connector.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (connector *resourceStreamConnector) refreshResourceSessionID(sessionID string, refreshed flowauthorization.AuthorizeResponse) {
+	if connector == nil || !resourceSessionUsable(refreshed, time.Now()) {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || strings.TrimSpace(refreshed.SessionID) != sessionID {
+		return
+	}
+	connector.mu.Lock()
+	for key, session := range connector.resourceSessions {
+		if strings.TrimSpace(session.SessionID) == sessionID {
+			connector.resourceSessions[key] = refreshed
+		}
+	}
+	connector.mu.Unlock()
 }
 
 func (connector *resourceStreamConnector) withResourceSessionRenewal(stream net.Conn, key resourceSessionCacheKey, authorizer flowAuthorizer, request flowauthorization.AuthorizeRequest, authorization flowauthorization.AuthorizeResponse) net.Conn {
 	if stream == nil || connector == nil || !key.cacheable() || !resourceSessionUsable(authorization, time.Now()) {
 		return stream
 	}
-	renewCtx, cancel := context.WithCancel(context.Background())
-	wrapped := &resourceSessionRenewConn{Conn: stream, cancel: cancel}
-	go connector.renewResourceSessionUntilClosed(renewCtx, key, authorizer, request, authorization)
+	release := connector.acquireResourceSessionRenewal(key, authorizer, request, authorization)
+	if release == nil {
+		return stream
+	}
+	wrapped := &resourceSessionRenewConn{Conn: stream, release: release}
 	return wrapped
 }
 
-func (connector *resourceStreamConnector) renewResourceSessionUntilClosed(ctx context.Context, key resourceSessionCacheKey, authorizer flowAuthorizer, request flowauthorization.AuthorizeRequest, authorization flowauthorization.AuthorizeResponse) {
+func (connector *resourceStreamConnector) acquireResourceSessionRenewal(key resourceSessionCacheKey, authorizer flowAuthorizer, request flowauthorization.AuthorizeRequest, authorization flowauthorization.AuthorizeResponse) func() {
+	if connector == nil || !key.cacheable() || !resourceSessionUsable(authorization, time.Now()) {
+		return nil
+	}
+	sessionID := strings.TrimSpace(authorization.SessionID)
+	if sessionID == "" {
+		return nil
+	}
+	renewCtx, cancel := context.WithCancel(context.Background())
+	renewal := &resourceSessionRenewal{cancel: cancel, refs: 1}
+
+	connector.mu.Lock()
+	if connector.resourceSessionRenewals == nil {
+		connector.resourceSessionRenewals = make(map[string]*resourceSessionRenewal)
+	}
+	if existing := connector.resourceSessionRenewals[sessionID]; existing != nil {
+		existing.refs++
+		connector.mu.Unlock()
+		cancel()
+		return func() { connector.releaseResourceSessionRenewal(sessionID, existing) }
+	}
+	connector.resourceSessionRenewals[sessionID] = renewal
+	connector.mu.Unlock()
+
+	go connector.renewResourceSessionUntilReleased(renewCtx, key, authorizer, request, authorization, renewal)
+	return func() { connector.releaseResourceSessionRenewal(sessionID, renewal) }
+}
+
+func (connector *resourceStreamConnector) releaseResourceSessionRenewal(sessionID string, renewal *resourceSessionRenewal) {
+	if connector == nil || renewal == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	var cancel context.CancelFunc
+	connector.mu.Lock()
+	if connector.resourceSessionRenewals != nil && connector.resourceSessionRenewals[sessionID] == renewal {
+		renewal.refs--
+		if renewal.refs <= 0 {
+			cancel = renewal.cancel
+			delete(connector.resourceSessionRenewals, sessionID)
+		}
+	}
+	connector.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (connector *resourceStreamConnector) finishResourceSessionRenewal(sessionID string, renewal *resourceSessionRenewal) {
+	if connector == nil || renewal == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	connector.mu.Lock()
+	if connector.resourceSessionRenewals != nil && connector.resourceSessionRenewals[sessionID] == renewal {
+		delete(connector.resourceSessionRenewals, sessionID)
+	}
+	connector.mu.Unlock()
+}
+
+func (connector *resourceStreamConnector) renewResourceSessionUntilReleased(ctx context.Context, key resourceSessionCacheKey, authorizer flowAuthorizer, request flowauthorization.AuthorizeRequest, authorization flowauthorization.AuthorizeResponse, renewal *resourceSessionRenewal) {
+	sessionID := strings.TrimSpace(authorization.SessionID)
+	defer connector.finishResourceSessionRenewal(sessionID, renewal)
 	current := authorization
 	for {
 		wait := time.Until(current.ExpiresAt.Add(-resourceSessionRenewBefore))
@@ -288,10 +416,15 @@ func (connector *resourceStreamConnector) renewResourceSessionUntilClosed(ctx co
 			return
 		}
 		if err := validateAllowedResourceAuthorization(key.ResourceID, renewed); err != nil {
-			connector.forgetResourceSession(key)
+			connector.forgetResourceSessionID(current.SessionID)
 			connector.warnResourceSession("resource session renew rejected", key, current.SessionID, err)
 			return
 		}
+		if strings.TrimSpace(renewed.SessionID) != strings.TrimSpace(current.SessionID) {
+			connector.warnResourceSession("resource session renew returned replacement session", key, current.SessionID, fmt.Errorf("new_session_id=%s", strings.TrimSpace(renewed.SessionID)))
+			return
+		}
+		connector.refreshResourceSessionID(current.SessionID, renewed)
 		current = renewed
 	}
 }
@@ -354,8 +487,8 @@ func isRetryableGatewaySessionError(err error) bool {
 
 type resourceSessionRenewConn struct {
 	net.Conn
-	cancel func()
-	once   sync.Once
+	release func()
+	once    sync.Once
 }
 
 func (conn *resourceSessionRenewConn) Close() error {
@@ -363,8 +496,8 @@ func (conn *resourceSessionRenewConn) Close() error {
 		return nil
 	}
 	conn.once.Do(func() {
-		if conn.cancel != nil {
-			conn.cancel()
+		if conn.release != nil {
+			conn.release()
 		}
 	})
 	return conn.Conn.Close()

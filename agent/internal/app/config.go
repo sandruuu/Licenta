@@ -15,24 +15,27 @@ const configFilename = "config.json"
 var executablePath = os.Executable
 
 type configFile struct {
-	TrayTimeout                            string `json:"tray_timeout,omitempty"`
-	DashboardRefreshInterval               string `json:"dashboard_refresh_interval,omitempty"`
-	PDPGRPCEndpoint                        string `json:"pdp_grpc_endpoint,omitempty"`
-	PDPTLSServerName                       string `json:"pdp_tls_server_name,omitempty"`
-	PDPCAFile                              string `json:"pdp_ca_file,omitempty"`
-	EnrollmentTimeout                      string `json:"enrollment_timeout,omitempty"`
-	EnrollmentPollInterval                 string `json:"enrollment_poll_interval,omitempty"`
-	DeviceDataSyncInterval                 string `json:"device_data_sync_interval,omitempty"`
-	DeviceDataSyncChangeScanInterval       string `json:"device_data_sync_change_scan_interval,omitempty"`
-	EnrollmentStatePath                    string `json:"enrollment_state_path,omitempty"`
-	LocalDNSListenAddress                  string `json:"local_dns_listen_address,omitempty"`
-	LocalDNSServer                         string `json:"local_dns_server,omitempty"`
-	SyntheticIPCIDR                        string `json:"synthetic_ip_cidr,omitempty"`
-	HardenBrowserDoH                       bool   `json:"harden_browser_doh,omitempty"`
-	TrafficInterceptionEnabled             *bool  `json:"traffic_interception_enabled,omitempty"`
-	TrafficProxyListenAddress              string `json:"traffic_proxy_listen_address,omitempty"`
-	WFPDriverDevicePath                    string `json:"wfp_driver_device_path,omitempty"`
-	WFPFailClosed                          *bool  `json:"wfp_fail_closed,omitempty"`
+	TrayTimeout                      string `json:"tray_timeout,omitempty"`
+	DashboardRefreshInterval         string `json:"dashboard_refresh_interval,omitempty"`
+	PDPGRPCEndpoint                  string `json:"pdp_grpc_endpoint,omitempty"`
+	PDPTLSServerName                 string `json:"pdp_tls_server_name,omitempty"`
+	PDPCAFile                        string `json:"pdp_ca_file,omitempty"`
+	EnrollmentTimeout                string `json:"enrollment_timeout,omitempty"`
+	EnrollmentPollInterval           string `json:"enrollment_poll_interval,omitempty"`
+	CertificateRenewBefore           string `json:"certificate_renew_before,omitempty"`
+	CertificateRenewCheckInterval    string `json:"certificate_renew_check_interval,omitempty"`
+	CertificateRenewTimeout          string `json:"certificate_renew_timeout,omitempty"`
+	DeviceDataSyncInterval           string `json:"device_data_sync_interval,omitempty"`
+	DeviceDataSyncChangeScanInterval string `json:"device_data_sync_change_scan_interval,omitempty"`
+	EnrollmentStatePath              string `json:"enrollment_state_path,omitempty"`
+	LocalDNSListenAddress            string `json:"local_dns_listen_address,omitempty"`
+	LocalDNSServer                   string `json:"local_dns_server,omitempty"`
+	SyntheticIPCIDR                  string `json:"synthetic_ip_cidr,omitempty"`
+	HardenBrowserDoH                 bool   `json:"harden_browser_doh,omitempty"`
+	TrafficInterceptionEnabled       *bool  `json:"traffic_interception_enabled,omitempty"`
+	TrafficProxyListenAddress        string `json:"traffic_proxy_listen_address,omitempty"`
+	WFPDriverDevicePath              string `json:"wfp_driver_device_path,omitempty"`
+	WFPFailClosed                    *bool  `json:"wfp_fail_closed,omitempty"`
 }
 
 func loadServiceConfig(serviceConfig ServiceConfig) (ServiceConfig, error) {
@@ -74,6 +77,15 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 		return options, err
 	}
 	if options.EnrollmentPollInterval, err = optionalConfigDuration("enrollment_poll_interval", config.EnrollmentPollInterval); err != nil {
+		return options, err
+	}
+	if options.CertificateRenewBefore, err = optionalConfigDuration("certificate_renew_before", config.CertificateRenewBefore); err != nil {
+		return options, err
+	}
+	if options.CertificateRenewCheckInterval, err = optionalConfigDuration("certificate_renew_check_interval", config.CertificateRenewCheckInterval); err != nil {
+		return options, err
+	}
+	if options.CertificateRenewTimeout, err = optionalConfigDuration("certificate_renew_timeout", config.CertificateRenewTimeout); err != nil {
 		return options, err
 	}
 	if options.DeviceDataSyncInterval, err = optionalConfigDuration("device_data_sync_interval", config.DeviceDataSyncInterval); err != nil {

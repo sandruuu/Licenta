@@ -12,6 +12,10 @@ $description = "Privileged TrustAgent endpoint service."
 
 $runtime = (Resolve-Path -LiteralPath $RuntimePath).ProviderPath
 $binaryPath = '"' + $runtime + '"'
+$preflightScript = Join-Path $PSScriptRoot "Test-AgentConfig.ps1"
+if (-not (Test-Path -LiteralPath $preflightScript)) {
+    throw "TrustAgent config preflight script is missing: $preflightScript"
+}
 
 $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -ne $existing) {
@@ -23,6 +27,14 @@ if ($null -ne $existing) {
 } else {
     New-Service -Name $serviceName -BinaryPathName $binaryPath -DisplayName $displayName -StartupType Automatic | Out-Null
 }
+
+$wfpService = Get-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
+if ($null -ne $wfpService -and $wfpService.Status -ne "Running") {
+    Start-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
+    (Get-Service -Name trustagent_wfp).WaitForStatus("Running", [TimeSpan]::FromSeconds(15))
+}
+
+& $preflightScript -RuntimePath $runtime -RepairPaths
 
 & sc.exe description $serviceName $description | Out-Null
 & sc.exe config $serviceName start= delayed-auto | Out-Null

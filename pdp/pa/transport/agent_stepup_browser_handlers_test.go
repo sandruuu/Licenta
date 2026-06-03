@@ -222,7 +222,10 @@ func completeStepUpReauth(t *testing.T, server *Server, challenge *pa.StepUpChal
 		t.Fatalf("reauth status = %d, want 303 body=%s", rr.Code, rr.Body.String())
 	}
 	for _, cookie := range rr.Result().Cookies() {
-		if cookie.Name == stepUpAuthCookieName {
+		if cookie.Name == stepUpAuthCookieName && cookie.MaxAge > 0 {
+			if cookie.Path != "/" {
+				t.Fatalf("%s path = %q, want / so passkey setup API receives it", stepUpAuthCookieName, cookie.Path)
+			}
 			return cookie
 		}
 	}

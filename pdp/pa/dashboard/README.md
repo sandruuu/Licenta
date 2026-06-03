@@ -1,6 +1,6 @@
 # TrustCloud Admin Dashboard
 
-`pdp/pa/dashboard` este interfata React/Vite servita de PDP la `/dashboard`.
+`pdp/pa/dashboard` este interfata React/Vite servita de PDP la `/`.
 Dashboard-ul este consola administrativa pentru organizatii, IdP-uri, resurse,
 Gateway-uri, politici, sesiuni, device health si audit.
 
@@ -12,7 +12,7 @@ Gateway-uri, politici, sesiuni, device health si audit.
 - Autentificare: token administrativ salvat in `localStorage` sub
   `admin_token`.
 - Rutele protejate folosesc `PrivateRoute`; fara token, utilizatorul este
-  trimis la `/dashboard/login`.
+  trimis la `/login`.
 
 Comenzi:
 
@@ -24,22 +24,25 @@ npm run build
 
 ## Rute
 
-Rutele definite in `src/App.jsx`:
+Rutele canonice definite in `src/App.jsx`:
 
-- `/dashboard/login`: login administrator.
-- `/dashboard`: overview.
-- `/dashboard/organizations`: lista organizatii.
-- `/dashboard/organizations/:organizationId`: detalii organizatie.
-- `/dashboard/organizations/:organizationId/idps/:idpId`: detalii IdP.
-- `/dashboard/resources`: resurse protejate.
-- `/dashboard/resources/:resourceId`: detalii resursa.
-- `/dashboard/policies`: politici si assignments.
-- `/dashboard/gateways`: Gateway-uri.
-- `/dashboard/gateways/:gatewayId`: detalii Gateway.
-- `/dashboard/protect-app`: flow ghidat pentru protejarea unei aplicatii.
-- `/dashboard/sessions`: sesiuni active.
-- `/dashboard/device-health`: rapoarte device-data/device-health.
-- `/dashboard/audit`: audit log.
+- `/login`: login administrator.
+- `/`: overview.
+- `/organizations`: lista organizatii.
+- `/organizations/:organizationId`: detalii organizatie.
+- `/organizations/:organizationId/idps/:idpId`: detalii IdP.
+- `/resources`: resurse protejate.
+- `/resources/:resourceId`: detalii resursa.
+- `/policies`: politici si assignments.
+- `/gateways`: Gateway-uri.
+- `/gateways/:gatewayId`: detalii Gateway.
+- `/protect-app`: flow ghidat pentru protejarea unei aplicatii.
+- `/sessions`: sesiuni active.
+- `/device-health`: rapoarte device-data/device-health.
+- `/audit`: audit log.
+
+Rutele vechi `/dashboard...` sunt pastrate ca redirect catre URL-urile
+canonice de la radacina.
 
 ## API Client
 
@@ -105,7 +108,7 @@ enrollment. Detaliile Gateway includ starea de conectare si resursele asociate.
 
 ## Policies
 
-Pagina `/dashboard/policies` este editorul pentru conditional access.
+Pagina `/policies` este editorul pentru conditional access.
 
 O politica este un `PolicyRule` reutilizabil. Aplicarea pe organizatie, grup,
 resursa sau combinatie resursa+grup se face separat prin `PolicyAssignment`.

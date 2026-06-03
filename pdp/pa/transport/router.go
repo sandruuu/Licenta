@@ -267,10 +267,9 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Dashboard SPA (serve React build)
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/dashboard/", s.handleDashboardSPA)
-	s.mux.HandleFunc("/dashboard", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dashboard/", http.StatusMovedPermanently)
-	})
+	s.mux.HandleFunc("/dashboard/", s.redirectLegacyDashboardRoute)
+	s.mux.HandleFunc("/dashboard", s.redirectLegacyDashboardRoute)
+	s.mux.HandleFunc("/", s.handleDashboardSPA)
 }
 
 // StartTLS begins listening for HTTPS requests using an in-memory certificate provider.

@@ -43,6 +43,7 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 		CSRHash:     strings.TrimSpace(structFieldString(request, "csr_sha256")),
 		SPKIHash:    strings.TrimSpace(structFieldString(request, "spki_sha256")),
 		DeviceNonce: strings.TrimSpace(structFieldString(request, "device_nonce")),
+		Hostname:    strings.TrimSpace(structFieldString(request, "hostname")),
 		AuthURL:     service.server.publicOrigin(),
 	})
 	if err != nil {

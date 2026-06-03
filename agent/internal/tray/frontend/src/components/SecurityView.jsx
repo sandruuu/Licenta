@@ -123,13 +123,6 @@ const REMEDIATIONS = {
   },
 };
 
-const DETAIL_LABELS_TO_HIDE = new Set([
-  'compliance',
-  'expected status',
-  'observed status',
-  'policy required',
-]);
-
 function SecurityView({ dashboard, error = '', loading = false }) {
   const [selectedId, setSelectedId] = useState('');
   const pipeUnavailable = useMemo(() => isPipeUnavailable(dashboard, error), [dashboard, error]);
@@ -285,7 +278,6 @@ function HealthFooter({ dashboard, checking }) {
 
 function RemediationView({ row, onBack }) {
   const remediation = getRemediation(row);
-  const details = detailEntries(row.details);
 
   return (
     <div className="flex h-full flex-col">
@@ -326,22 +318,6 @@ function RemediationView({ row, onBack }) {
 
         <p className="mt-6 text-sm font-semibold text-[var(--accent)]">{remediation.why}</p>
 
-        {row.description ? (
-          <p className="mt-5 rounded-md border border-[#d5d9da] bg-[#f0f2f2] px-4 py-3 text-sm font-semibold text-[#1f262b]">
-            {row.description}
-          </p>
-        ) : null}
-
-        {details.length > 0 ? (
-          <div className="mt-4 grid gap-2">
-            {details.map(([label, value]) => (
-              <div key={label} className="rounded-md border border-[#d5d9da] bg-[#fbfbfb] px-4 py-2">
-                <p className="text-xs font-bold uppercase tracking-normal text-[#6e767d]">{label}</p>
-                <p className="truncate text-sm font-semibold text-[#1f262b]">{value}</p>
-              </div>
-            ))}
-          </div>
-        ) : null}
       </div>
     </div>
   );
@@ -520,15 +496,6 @@ function getRemediation(row) {
     steps: ['Review the reported status and apply the required organization policy.'],
     why: 'This device data check must be healthy before the device can be considered compliant.',
   };
-}
-
-function detailEntries(details) {
-  return Object.entries(details || {})
-    .filter(([label, value]) => {
-      const normalizedLabel = normalizeName(label);
-      return value && !DETAIL_LABELS_TO_HIDE.has(normalizedLabel);
-    })
-    .slice(0, 6);
 }
 
 function openRemediationUri(uri) {

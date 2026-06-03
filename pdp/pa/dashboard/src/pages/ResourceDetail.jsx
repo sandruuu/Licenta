@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Edit2,
@@ -30,6 +30,7 @@ import Modal from '../components/ui/Modal';
 import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '../components/ui/FormField';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { formatDateTime } from '../utils/format';
+import { navigateBack } from '../utils/navigation';
 import { actionMeta } from '../components/policies/policyModel';
 import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
@@ -88,6 +89,7 @@ export default function ResourceDetail() {
   const { resourceId = '' } = useParams();
   const resourceID = decodeURIComponent(resourceId);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [resource, setResource] = useState(null);
   const [gateway, setGateway] = useState(null);
@@ -143,10 +145,11 @@ export default function ResourceDetail() {
   }, [load]);
 
   const backTarget = gateway?.id
-    ? `/dashboard/gateways/${encodeURIComponent(gateway.id)}`
+    ? `/gateways/${encodeURIComponent(gateway.id)}`
     : organization?.id
-      ? `/dashboard/organizations/${encodeURIComponent(organization.id)}`
-      : '/dashboard/resources';
+      ? `/organizations/${encodeURIComponent(organization.id)}`
+      : '/resources';
+  const handleBack = () => navigateBack(navigate, backTarget, location);
 
   const openEdit = () => {
     setEditForm({ ...resource });
@@ -193,7 +196,7 @@ export default function ResourceDetail() {
   if (!resource) {
     return (
       <div className="space-y-4">
-        <InlineBackButton onClick={() => navigate('/dashboard/resources')}>
+        <InlineBackButton onClick={() => navigateBack(navigate, '/resources', location)}>
           <ArrowLeft size={15} />
           Resources
         </InlineBackButton>
@@ -240,7 +243,7 @@ export default function ResourceDetail() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back" onClick={() => navigate(backTarget)}>
+                <BackIconButton compact title="Back" onClick={handleBack}>
                   <ArrowLeft size={16} />
                 </BackIconButton>
                 <div className="min-w-0">

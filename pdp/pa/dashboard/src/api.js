@@ -32,7 +32,7 @@ async function apiFetch(path, options = {}) {
 
   if (res.status === 401) {
     clearToken();
-    window.location.href = '/dashboard/login';
+    window.location.href = '/login';
     throw new Error('Unauthorized');
   }
 

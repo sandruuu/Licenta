@@ -46,7 +46,11 @@ function timeValue(ts) {
 }
 
 function isEndpointEnrollment(enrollment) {
-  return enrollment?.device_id && enrollment.component === 'endpoint' && enrollment.status === 'approved';
+  return enrollment?.device_id && enrollment.component === 'endpoint';
+}
+
+function isApprovedEndpointEnrollment(enrollment) {
+  return isEndpointEnrollment(enrollment) && enrollment.status === 'approved';
 }
 
 function enrollmentToDeviceRow(enrollment) {
@@ -62,20 +66,87 @@ function enrollmentToDeviceRow(enrollment) {
     expires_at: enrollment.expires_at || '',
     username: enrollment.username || '',
     enrollment_status: enrollment.status || '',
+    tenant_id: enrollment.tenant_id || '',
     has_report: false,
   };
 }
 
+function rowLogicalKey(row) {
+  const host = normalize(row.hostname).trim();
+  const tenant = normalize(row.tenant_id).trim();
+  if (host) return `${tenant}|hostname|${host}`;
+  return `device|${row.device_id || row.enrollment_id || ''}`;
+}
+
+function newerTime(a, b) {
+  return timeValue(a) >= timeValue(b) ? a : b;
+}
+
+function preferredReportRow(a, b) {
+  if (!a?.has_report) return b?.has_report ? b : a;
+  if (!b?.has_report) return a;
+  return timeValue(b.reported_at) > timeValue(a.reported_at) ? b : a;
+}
+
+function preferredEnrollmentRow(a, b) {
+  const aApproved = a?.enrollment_status === 'approved';
+  const bApproved = b?.enrollment_status === 'approved';
+  if (aApproved !== bApproved) return bApproved ? b : a;
+  return timeValue(b?.enrolled_at || b?.expires_at) > timeValue(a?.enrolled_at || a?.expires_at) ? b : a;
+}
+
+function mergeDuplicateDeviceRow(a, b) {
+  const report = preferredReportRow(a, b) || a || b;
+  const enrollment = preferredEnrollmentRow(a, b) || report;
+  return {
+    ...report,
+    id: enrollment.enrollment_id || report.id,
+    enrollment_id: enrollment.enrollment_id || report.enrollment_id,
+    hostname: report.hostname || enrollment.hostname || '',
+    username: enrollment.username || report.username || '',
+    enrolled_at: newerTime(enrollment.enrolled_at, report.enrolled_at),
+    expires_at: newerTime(enrollment.expires_at, report.expires_at),
+    enrollment_status: enrollment.enrollment_status || report.enrollment_status || '',
+    tenant_id: report.tenant_id || enrollment.tenant_id || '',
+  };
+}
+
+function dedupeDeviceRows(rows) {
+  const byLogicalDevice = new Map();
+  for (const row of rows) {
+    const key = rowLogicalKey(row);
+    const existing = byLogicalDevice.get(key);
+    byLogicalDevice.set(key, existing ? mergeDuplicateDeviceRow(existing, row) : row);
+  }
+  return Array.from(byLogicalDevice.values());
+}
+
 function mergeDeviceRows(deviceDataReports, enrollments) {
   const byDeviceID = new Map();
-
-  for (const report of deviceDataReports) {
-    if (!report?.device_id) continue;
-    byDeviceID.set(report.device_id, { ...report, has_report: true });
-  }
+  const enrollmentsByDeviceID = new Map();
 
   for (const enrollment of enrollments) {
     if (!isEndpointEnrollment(enrollment)) continue;
+    enrollmentsByDeviceID.set(enrollment.device_id, enrollment);
+  }
+
+  for (const report of deviceDataReports) {
+    if (!report?.device_id) continue;
+    const enrollment = enrollmentsByDeviceID.get(report.device_id);
+    byDeviceID.set(report.device_id, {
+      ...report,
+      enrollment_id: enrollment?.id || '',
+      username: enrollment?.username || '',
+      enrolled_at: enrollment?.enrolled_at || '',
+      expires_at: enrollment?.expires_at || '',
+      enrollment_status: enrollment?.status || '',
+      tenant_id: report.tenant_id || enrollment?.tenant_id || '',
+      has_report: true,
+    });
+  }
+
+  for (const enrollment of enrollments) {
+    if (!isApprovedEndpointEnrollment(enrollment)) continue;
 
     const existing = byDeviceID.get(enrollment.device_id);
     if (existing) {
@@ -87,6 +158,7 @@ function mergeDeviceRows(deviceDataReports, enrollments) {
         enrolled_at: existing.enrolled_at || enrollment.enrolled_at || '',
         expires_at: existing.expires_at || enrollment.expires_at || '',
         enrollment_status: existing.enrollment_status || enrollment.status || '',
+        tenant_id: existing.tenant_id || enrollment.tenant_id || '',
       });
       continue;
     }
@@ -94,7 +166,7 @@ function mergeDeviceRows(deviceDataReports, enrollments) {
     byDeviceID.set(enrollment.device_id, enrollmentToDeviceRow(enrollment));
   }
 
-  return Array.from(byDeviceID.values()).sort((a, b) => (
+  return dedupeDeviceRows(Array.from(byDeviceID.values())).sort((a, b) => (
     timeValue(b.reported_at || b.enrolled_at) - timeValue(a.reported_at || a.enrolled_at)
   ));
 }
@@ -150,27 +222,16 @@ function HealthChecksSkeleton() {
   return (
     <div className="divide-y divide-border-light">
       {Array.from({ length: 3 }, (_, index) => (
-        <div key={`check-skeleton-${index}`} className="grid gap-3 py-4 lg:grid-cols-[220px_120px_1fr] lg:items-start">
+        <div key={`check-skeleton-${index}`} className="grid gap-3 py-4 lg:grid-cols-[minmax(0,1fr)_120px] lg:items-start">
           <div className="space-y-2">
             <div className="h-4 w-36 animate-pulse rounded bg-border-light" />
             <div className="h-3 w-44 animate-pulse rounded bg-border-light" />
           </div>
           <div className="h-5 w-20 animate-pulse rounded-full bg-border-light" />
-          <div className="space-y-2">
-            <div className="h-4 w-full animate-pulse rounded bg-border-light" />
-            <div className="h-4 w-2/3 animate-pulse rounded bg-border-light" />
-          </div>
         </div>
       ))}
     </div>
   );
-}
-
-function formatCheckDetails(details) {
-  if (!details) return '-';
-  const entries = Object.entries(details);
-  if (entries.length === 0) return '-';
-  return entries.map(([key, value]) => `${key}: ${value}`).join(', ');
 }
 
 function DeviceListItem({ report, selected, onClick }) {
@@ -224,15 +285,12 @@ function HealthChecksList({ checks, hasReport, loading }) {
   return (
     <div className="divide-y divide-border-light">
       {checks.map((check, index) => (
-        <div key={`${check.name || 'check'}-${index}`} className="grid gap-3 py-4 lg:grid-cols-[220px_120px_1fr] lg:items-start">
+        <div key={`${check.name || 'check'}-${index}`} className="grid gap-3 py-4 lg:grid-cols-[minmax(0,1fr)_120px] lg:items-start">
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-text-primary">{check.name || '-'}</p>
             <p className="mt-1 truncate text-xs font-semibold text-text-muted">{check.description || '-'}</p>
           </div>
           <Badge variant={checkVariant(check.status)}>{check.status || '-'}</Badge>
-          <p className="min-w-0 break-words text-sm font-semibold text-text-secondary">
-            {formatCheckDetails(check.details)}
-          </p>
         </div>
       ))}
     </div>

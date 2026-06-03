@@ -11,12 +11,14 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
+	"net/url"
 	"strings"
 	"syscall"
 	"time"
@@ -67,7 +69,30 @@ func (identity windowsDeviceIdentity) CreateEnrollmentCSR(ctx context.Context, k
 		return EnrollmentCSR{}, err
 	}
 	defer signer.Close()
-	csrTemplate := &x509.CertificateRequest{}
+	return createCSRWithSigner(signer, &x509.CertificateRequest{})
+}
+
+func (identity windowsDeviceIdentity) CreateCertificateRenewalCSR(ctx context.Context, keyName, deviceID string) (EnrollmentCSR, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return EnrollmentCSR{}, fmt.Errorf("device_id is required for certificate renewal CSR")
+	}
+	signer, err := openNCryptSigner(strings.TrimSpace(keyName))
+	if err != nil {
+		return EnrollmentCSR{}, err
+	}
+	defer signer.Close()
+	identityURI, err := deviceIdentityURI(deviceID)
+	if err != nil {
+		return EnrollmentCSR{}, err
+	}
+	return createCSRWithSigner(signer, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: deviceID},
+		URIs:    []*url.URL{identityURI},
+	})
+}
+
+func createCSRWithSigner(signer *ncryptSigner, csrTemplate *x509.CertificateRequest) (EnrollmentCSR, error) {
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)
 	if err != nil {
 		return EnrollmentCSR{}, fmt.Errorf("create enrollment CSR: %w", err)
@@ -90,6 +115,10 @@ func (identity windowsDeviceIdentity) CreateEnrollmentCSR(ctx context.Context, k
 		SPKIHash:    sha256Hex(parsed.RawSubjectPublicKeyInfo),
 		DeviceNonce: nonce,
 	}, nil
+}
+
+func deviceIdentityURI(deviceID string) (*url.URL, error) {
+	return url.Parse("spiffe://agent/device/" + url.PathEscape(strings.TrimSpace(deviceID)))
 }
 
 func (identity windowsDeviceIdentity) SignEnrollmentProof(ctx context.Context, keyName string, payload []byte) ([]byte, error) {

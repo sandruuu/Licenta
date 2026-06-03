@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Ban, Copy, Edit2, RotateCcw, Router, Trash2 } from 'lucide-react';
 import {
   deleteGateway,
@@ -22,6 +22,7 @@ import FormField, { FormInput, FormSelect } from '../components/ui/FormField';
 import Pagination from '../components/ui/Pagination';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { formatDateTime } from '../utils/format';
+import { navigateWithReturn } from '../utils/navigation';
 
 function statusVariant(status) {
   const value = (status || '').toLowerCase();
@@ -44,6 +45,7 @@ function invalidatedValue(row, value) {
 
 export default function Gateways() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const [gateways, setGateways] = useState([]);
   const [organizations, setOrganizations] = useState([]);
@@ -318,7 +320,7 @@ export default function Gateways() {
         emptyIcon={Router}
         emptyTitle={hasFilters ? 'No gateways match filters' : 'No gateways created yet'}
         emptyMessage={hasFilters ? 'Adjust search or filters to find gateways.' : 'Create an organization first, then enroll its first gateway.'}
-        onRowClick={(row) => navigate(`/dashboard/gateways/${encodeURIComponent(row.id)}`)}
+        onRowClick={(row) => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(row.id)}`, location)}
       />
 
       {/* <div className="pt-6">
