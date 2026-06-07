@@ -14,10 +14,10 @@ type guiWindowConfig struct {
 }
 
 var defaultGUIWindowConfig = guiWindowConfig{
-	Title:            "TRUSTAGENT",
+	Title:            "TRUSTAgent",
 	Width:            680,
 	Height:           560,
-	BackgroundColour: options.RGBA{R: 245, G: 247, B: 250, A: 1},
+	BackgroundColour: options.RGBA{R: 242, G: 242, B: 240, A: 1},
 }
 
 func wailsAppOptions(app *GUIApp, config guiWindowConfig) *options.App {

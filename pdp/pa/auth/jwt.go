@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	AgentTokenAudience      = "trustcloud"
-	AgentSessionAudience    = "trustagent-api"
-	AgentSessionPurpose     = "trustagent.session"
-	EnrollmentTokenAudience = "trustcloud-enrollment"
-	EnrollmentTokenPurpose  = "device_enrollment"
-	EnrollmentTokenTTL      = 5 * time.Minute
+	AgentTokenAudience       = "trustcloud"
+	AgentSessionAudience     = "trustagent-api"
+	AgentSessionPurpose      = "trustagent.session"
+	EnrollmentTokenAudience  = "trustcloud-enrollment"
+	EnrollmentTokenPurpose   = "device_enrollment"
+	PasskeyEnrollmentPurpose = "passkey_enrollment"
+	EnrollmentTokenTTL       = 5 * time.Minute
 )
 
 // JWTManager handles creation and validation of JSON Web Tokens using ES256 (ECDSA P-256).
@@ -141,6 +142,10 @@ func GenerateJWTSigningKey() (*ecdsa.PrivateKey, error) {
 // The nonce parameter is optional — when non-empty, it is included in the token for OIDC
 // replay protection per OIDC Core 1.0 §3.1.2.1.
 func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce string, mfaDone bool) (string, error) {
+	return j.GenerateAuthTokenWithPurpose(userID, username, role, deviceID, nonce, mfaDone, "")
+}
+
+func (j *JWTManager) GenerateAuthTokenWithPurpose(userID, username, role, deviceID, nonce string, mfaDone bool, purpose string) (string, error) {
 	now := time.Now()
 	jti, err := generateJTI()
 	if err != nil {
@@ -167,6 +172,7 @@ func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce s
 		Username: username,
 		Role:     role,
 		DeviceID: deviceID,
+		Purpose:  strings.TrimSpace(purpose),
 		Nonce:    nonce,
 		MFADone:  mfaDone,
 		ACR:      acr,

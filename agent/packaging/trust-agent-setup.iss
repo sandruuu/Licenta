@@ -13,6 +13,7 @@ DefaultDirName={autopf}\TrustAgent
 DefaultGroupName=TrustAgent
 DisableProgramGroupPage=yes
 OutputBaseFilename=TrustAgent-Setup
+SetupIconFile={#SourceDir}\trust-agent.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

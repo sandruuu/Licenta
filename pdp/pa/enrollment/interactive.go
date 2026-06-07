@@ -54,6 +54,7 @@ type InteractiveSession struct {
 	DeviceChallenge string
 	PollSecretHash  string
 	Status          string
+	Reason          string
 	AuthURL         string
 	CreatedAt       time.Time
 	ExpiresAt       time.Time
@@ -320,6 +321,29 @@ func (s *Service) CompleteInteractiveIDPLogin(sessionID, subject, email, issuer,
 	return &copy, nil
 }
 
+func (s *Service) DenyInteractiveSession(sessionID, reason string) (*InteractiveSession, error) {
+	if s == nil {
+		return nil, fmt.Errorf("enrollment service not initialized")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.interactiveSessions[strings.TrimSpace(sessionID)]
+	if !ok || session == nil {
+		return nil, ErrNotFound
+	}
+	if time.Now().UTC().After(session.ExpiresAt) {
+		delete(s.interactiveSessions, session.ID)
+		return nil, ErrExpiredSession
+	}
+	if session.Status == InteractiveStatusEnrolled {
+		return nil, fmt.Errorf("%w: enrollment is already completed", ErrInvalidState)
+	}
+	session.Status = InteractiveStatusDenied
+	session.Reason = strings.TrimSpace(reason)
+	copy := *session
+	return &copy, nil
+}
+
 func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret string) (*InteractiveSessionStatus, error) {
 	if s == nil {
 		return nil, fmt.Errorf("enrollment service not initialized")
@@ -337,7 +361,7 @@ func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret st
 		delete(s.interactiveSessions, session.ID)
 		return &InteractiveSessionStatus{Status: InteractiveStatusDenied, Reason: "enrollment_session_expired"}, nil
 	}
-	return &InteractiveSessionStatus{Status: session.Status}, nil
+	return &InteractiveSessionStatus{Status: session.Status, Reason: session.Reason}, nil
 }
 
 func (s *Service) CompleteInteractiveSession(req InteractiveCompleteRequest) (*InteractiveCompleteResult, error) {

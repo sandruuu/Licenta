@@ -15,7 +15,7 @@ func (service *Service) recordAuthenticationRequired(request trafficinterception
 		return
 	}
 	message := signedOutAccessMessage
-	target := firstNonEmpty(request.FQDN, request.ResourceID)
+	target := accessPromptTarget(request)
 	if target != "" {
 		message = "Sign in required to access " + target + "."
 	}
@@ -49,20 +49,32 @@ func (service *Service) recordStepUpRequired(request trafficinterception.StreamR
 	if service == nil || service.userSessions == nil {
 		return
 	}
-	target := firstNonEmpty(request.FQDN, request.ResourceID)
-	message := "Additional verification is required to access protected resources."
+	target := accessPromptTarget(request)
+	message := "Additional security verification is required to access protected resources."
 	if target != "" {
-		message = "Additional verification is required to access " + target + "."
+		message = "Additional security verification is required to access " + target + "."
 	}
-	if reason := strings.TrimSpace(authorization.Reason); reason != "" {
-		message = message + " " + reason
-	}
-	service.userSessions.SetAuthenticatedStepUp(message, authorization.StepUpURL)
+	service.userSessions.SetAuthenticatedStepUp(message, authorization.StepUpURL, request.ResourceID, target, authorization.StepUpExpiresAt)
 }
 
-func (service *Service) recordResourceAllowed(_ trafficinterception.StreamRequest, _ flowauthorization.AuthorizeResponse) {
+func (service *Service) recordResourceAllowed(request trafficinterception.StreamRequest, _ flowauthorization.AuthorizeResponse) {
 	if service == nil || service.userSessions == nil {
 		return
 	}
-	service.userSessions.ClearAuthenticatedStepUp()
+	service.userSessions.MarkAuthenticatedStepUpAllowed(request.ResourceID, accessPromptTarget(request))
+}
+
+func (service *Service) recordResourceDenied(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse, err error) {
+	if service == nil || service.userSessions == nil {
+		return
+	}
+	reason := firstNonEmpty(authorization.Reason)
+	if reason == "" && err != nil {
+		reason = err.Error()
+	}
+	service.userSessions.MarkAuthenticatedResourceDenied(request.ResourceID, accessPromptTarget(request), reason)
+}
+
+func accessPromptTarget(request trafficinterception.StreamRequest) string {
+	return firstNonEmpty(request.FQDN, request.ResourceID)
 }

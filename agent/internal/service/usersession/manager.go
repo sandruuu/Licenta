@@ -111,12 +111,15 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 		authURL:          start.AuthURL,
 		expiresAt:        start.ExpiresAt,
 		pollInterval:     pollInterval,
-		message:          "Complete login in your browser",
+		message:          "Open your browser to sign in.",
 		cancel:           cancel,
 	}
 	manager.mu.Lock()
-	if previous := manager.sessions[key]; previous != nil && previous.cancel != nil {
-		previous.cancel()
+	if previous := manager.sessions[key]; previous != nil {
+		clearStepUpLocked(previous)
+		if previous.cancel != nil {
+			previous.cancel()
+		}
 	}
 	manager.sessions[key] = state
 	manager.mu.Unlock()
@@ -127,7 +130,7 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 		AuthURL:             start.AuthURL,
 		SessionRequestID:    start.SessionRequestID,
 		State:               ipc.UserSessionStateAuthenticating,
-		Message:             "Complete login in your browser",
+		Message:             "Open your browser to sign in.",
 		ExpiresAt:           start.ExpiresAt,
 		PollIntervalSeconds: int(pollInterval.Seconds()),
 		ReportedAt:          now,
@@ -137,17 +140,51 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 func (manager *Manager) Snapshot(peer ipc.PeerIdentity) RuntimeState {
 	key, err := localUserKey(peer)
 	if err != nil {
-		return RuntimeState{UserSession: ipc.UserSessionInfo{State: ipc.UserSessionStateSignedOut}}
+		return signedOutRuntime("")
 	}
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
+	return manager.snapshotByKeyLocked(key)
+}
+
+func (manager *Manager) DashboardSnapshot(peer ipc.PeerIdentity) RuntimeState {
+	key, err := localUserKey(peer)
+	if err == nil {
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		return manager.snapshotByKeyLocked(key)
+	}
+	if !peer.Verified || strings.TrimSpace(peer.UserSID) == "" {
+		return signedOutRuntime("")
+	}
+	now := manager.clock().UTC()
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	var fallback *sessionState
+	for _, session := range manager.sessions {
+		if !matchesDashboardFallbackSession(session, peer, now) {
+			continue
+		}
+		if fallback != nil {
+			return signedOutRuntime("")
+		}
+		fallback = session
+	}
+	if fallback == nil {
+		return signedOutRuntime("")
+	}
+	return runtimeForSession(fallback)
+}
+
+func (manager *Manager) snapshotByKeyLocked(key string) RuntimeState {
 	session := manager.sessions[key]
 	if session == nil {
-		return RuntimeState{UserSession: ipc.UserSessionInfo{
-			State:   ipc.UserSessionStateSignedOut,
-			Message: manager.signedOutMessages[key],
-		}}
+		return signedOutRuntime(manager.signedOutMessages[key])
 	}
+	return runtimeForSession(session)
+}
+
+func runtimeForSession(session *sessionState) RuntimeState {
 	return RuntimeState{
 		UserSession: ipc.UserSessionInfo{
 			State:       session.state,
@@ -161,6 +198,33 @@ func (manager *Manager) Snapshot(peer ipc.PeerIdentity) RuntimeState {
 		},
 		Catalog: session.catalog,
 	}
+}
+
+func signedOutRuntime(message string) RuntimeState {
+	return RuntimeState{UserSession: ipc.UserSessionInfo{
+		State:   ipc.UserSessionStateSignedOut,
+		Message: strings.TrimSpace(message),
+	}}
+}
+
+func matchesDashboardFallbackSession(session *sessionState, peer ipc.PeerIdentity, now time.Time) bool {
+	if session == nil {
+		return false
+	}
+	if session.state != ipc.UserSessionStateAuthenticated && session.state != ipc.UserSessionStateAuthenticating {
+		return false
+	}
+	if !session.expiresAt.IsZero() && now.After(session.expiresAt.UTC()) {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.peer.UserSID), strings.TrimSpace(peer.UserSID)) {
+		return false
+	}
+	peerWindowsSessionID := strings.TrimSpace(peer.WindowsSessionID)
+	if peerWindowsSessionID != "" && strings.TrimSpace(session.peer.WindowsSessionID) != peerWindowsSessionID {
+		return false
+	}
+	return true
 }
 
 func (manager *Manager) ActiveAuthenticatedSession() (AuthenticatedSession, bool, error) {
@@ -212,6 +276,7 @@ func (manager *Manager) Logout(ctx context.Context, peer ipc.PeerIdentity) (ipc.
 	}
 	manager.mu.Lock()
 	session := manager.sessions[key]
+	clearStepUpLocked(session)
 	delete(manager.sessions, key)
 	delete(manager.signedOutMessages, key)
 	manager.mu.Unlock()
@@ -259,6 +324,7 @@ func (manager *Manager) RevokeRemote(ctx context.Context, sessionID, message str
 		if sessionID != "" && session.agentSessionID != sessionID {
 			continue
 		}
+		clearStepUpLocked(session)
 		delete(manager.sessions, key)
 		manager.signedOutMessages[key] = message
 		revoked = append(revoked, revokedSession{
@@ -367,12 +433,12 @@ func (manager *Manager) runSession(ctx context.Context, client Client, session *
 func (manager *Manager) pollSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) bool {
 	status, err := client.SessionStatus(ctx, SessionStatusRequest{SessionRequestID: session.sessionRequestID, ClaimSecret: session.claimSecret})
 	if err != nil {
-		manager.setMessage(session.key, "Waiting for browser authentication status")
+		manager.setMessage(session.key, "Checking sign-in status...")
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(status.Status)) {
 	case StatusWaitingForUserLogin:
-		manager.setMessage(session.key, "Waiting for browser login")
+		manager.setMessage(session.key, "Sign-in is in progress.")
 		return false
 	case StatusReadyToClaim:
 		if err := manager.claimSession(ctx, client, session, localSIDHash, deviceDataRevision); err != nil {
@@ -387,7 +453,7 @@ func (manager *Manager) pollSession(ctx context.Context, client Client, session 
 		manager.setFailure(session.key, reason)
 		return true
 	default:
-		manager.setMessage(session.key, "Waiting for PDP authentication decision")
+		manager.setMessage(session.key, "Finalizing sign in...")
 		return false
 	}
 }
@@ -438,7 +504,7 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 		current.expiresAt = claimed.ExpiresAt
 		current.message = "Authenticated"
 		current.lastError = ""
-		current.stepUpURL = ""
+		clearStepUpLocked(current)
 		current.catalog = catalogInfo
 		startExpiryWatcher = true
 	}
@@ -491,6 +557,7 @@ func (manager *Manager) expireAuthenticatedSession(ctx context.Context, key, ses
 		return
 	}
 	delete(manager.sessions, key)
+	clearStepUpLocked(session)
 	manager.signedOutMessages[key] = "Your session expired. Sign in again to access protected resources."
 	manager.mu.Unlock()
 
@@ -553,11 +620,12 @@ func (manager *Manager) SetAuthenticatedMessage(message string) {
 			continue
 		}
 		session.message = message
-		session.stepUpURL = ""
+		session.lastError = ""
+		clearStepUpLocked(session)
 	}
 }
 
-func (manager *Manager) SetAuthenticatedStepUp(message, url string) {
+func (manager *Manager) SetAuthenticatedStepUp(message, url, resourceID, target string, expiresAt time.Time) {
 	if manager == nil {
 		return
 	}
@@ -573,8 +641,16 @@ func (manager *Manager) SetAuthenticatedStepUp(message, url string) {
 		if session == nil || session.state != ipc.UserSessionStateAuthenticated {
 			continue
 		}
+		clearStepUpLocked(session)
 		session.message = firstNonEmpty(message, "Additional verification is required to access this resource.")
+		session.lastError = ""
 		session.stepUpURL = url
+		session.stepUpResourceID = strings.TrimSpace(resourceID)
+		session.stepUpTarget = firstNonEmpty(target, resourceID, "this resource")
+		session.stepUpExpiresAt = expiresAt.UTC()
+		if !expiresAt.IsZero() {
+			session.stepUpCancel = manager.startStepUpExpiryWatcherLocked(session.key, url, expiresAt)
+		}
 	}
 }
 
@@ -633,24 +709,196 @@ func (manager *Manager) ClearAuthenticatedStepUp() {
 			continue
 		}
 		if strings.TrimSpace(session.stepUpURL) != "" {
-			session.stepUpURL = ""
+			clearStepUpLocked(session)
 			session.message = "Authenticated"
 		}
 	}
 }
 
+func (manager *Manager) MarkAuthenticatedStepUpAllowed(resourceID, target string) {
+	if manager == nil {
+		return
+	}
+	resourceID = strings.TrimSpace(resourceID)
+	target = strings.TrimSpace(target)
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for _, session := range manager.sessions {
+		if session == nil || session.state != ipc.UserSessionStateAuthenticated || strings.TrimSpace(session.stepUpURL) == "" {
+			continue
+		}
+		if !stepUpMatches(session, resourceID, target) {
+			continue
+		}
+		displayTarget := stepUpDisplayTarget(session, resourceID, target)
+		clearStepUpLocked(session)
+		session.lastError = ""
+		session.message = "Access granted to " + displayTarget + "."
+	}
+}
+
+func (manager *Manager) MarkAuthenticatedResourceDenied(resourceID, target, reason string) {
+	if manager == nil {
+		return
+	}
+	resourceID = strings.TrimSpace(resourceID)
+	target = strings.TrimSpace(target)
+	reason = strings.TrimSpace(reason)
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for _, session := range manager.sessions {
+		if session == nil || session.state != ipc.UserSessionStateAuthenticated {
+			continue
+		}
+		displayTarget := firstNonEmpty(target, resourceID, "this resource")
+		if strings.TrimSpace(session.stepUpURL) != "" && stepUpMatches(session, resourceID, target) {
+			displayTarget = stepUpDisplayTarget(session, resourceID, target)
+			clearStepUpLocked(session)
+			session.message = "Authenticated"
+			session.lastError = securityVerificationFailedMessage(displayTarget, reason)
+			continue
+		}
+		session.lastError = resourceAccessDeniedMessage(displayTarget, reason)
+	}
+}
+
 func (manager *Manager) setFailure(key, message string) {
+	originalMessage := strings.TrimSpace(message)
+	displayMessage := userSessionFailureMessage(originalMessage)
+	if displayMessage != originalMessage && manager != nil && manager.logger != nil {
+		manager.logger.Warn("agent authentication failed because local traffic protection is unavailable", "error", originalMessage)
+	}
+
 	manager.mu.Lock()
 	if session := manager.sessions[key]; session != nil {
 		session.state = ipc.UserSessionStateFailed
 		session.message = "Authentication failed"
-		session.lastError = strings.TrimSpace(message)
+		session.lastError = displayMessage
+		clearStepUpLocked(session)
 		if session.cancel != nil {
 			session.cancel()
 			session.cancel = nil
 		}
 	}
 	manager.mu.Unlock()
+}
+
+func (manager *Manager) startStepUpExpiryWatcherLocked(key, url string, expiresAt time.Time) context.CancelFunc {
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := time.Until(expiresAt.UTC())
+	if wait < 0 {
+		wait = 0
+	}
+	go func() {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		manager.markStepUpExpired(key, url)
+	}()
+	return cancel
+}
+
+func (manager *Manager) markStepUpExpired(key, url string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	session := manager.sessions[key]
+	if session == nil || session.state != ipc.UserSessionStateAuthenticated || strings.TrimSpace(session.stepUpURL) != strings.TrimSpace(url) {
+		return
+	}
+	target := stepUpDisplayTarget(session, "", "")
+	clearStepUpLocked(session)
+	session.message = "Authenticated"
+	session.lastError = securityVerificationExpiredMessage(target)
+}
+
+func clearStepUpLocked(session *sessionState) {
+	if session == nil {
+		return
+	}
+	if session.stepUpCancel != nil {
+		session.stepUpCancel()
+		session.stepUpCancel = nil
+	}
+	session.stepUpURL = ""
+	session.stepUpResourceID = ""
+	session.stepUpTarget = ""
+	session.stepUpExpiresAt = time.Time{}
+}
+
+func stepUpMatches(session *sessionState, resourceID, target string) bool {
+	if session == nil {
+		return false
+	}
+	resourceID = strings.TrimSpace(resourceID)
+	target = strings.TrimSpace(target)
+	if resourceID != "" && strings.TrimSpace(session.stepUpResourceID) != "" {
+		return strings.EqualFold(resourceID, strings.TrimSpace(session.stepUpResourceID))
+	}
+	if target != "" && strings.TrimSpace(session.stepUpTarget) != "" {
+		return strings.EqualFold(target, strings.TrimSpace(session.stepUpTarget))
+	}
+	return true
+}
+
+func stepUpDisplayTarget(session *sessionState, resourceID, target string) string {
+	if session == nil {
+		return firstNonEmpty(target, resourceID, "this resource")
+	}
+	return firstNonEmpty(target, session.stepUpTarget, resourceID, session.stepUpResourceID, "this resource")
+}
+
+func securityVerificationExpiredMessage(target string) string {
+	target = firstNonEmpty(target, "this resource")
+	return "Security verification expired for " + target + ". Additional security verification is required to access " + target + "."
+}
+
+func securityVerificationFailedMessage(target, reason string) string {
+	target = firstNonEmpty(target, "this resource")
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(reason, "expired"):
+		return securityVerificationExpiredMessage(target)
+	case strings.Contains(reason, "cancelled"), strings.Contains(reason, "canceled"), strings.Contains(reason, "abort"):
+		return "Security verification was canceled for " + target + ". Additional security verification is required to access " + target + "."
+	case strings.Contains(reason, "denied"), strings.Contains(reason, "reject"), strings.Contains(reason, "failed"):
+		return "Security verification was rejected for " + target + ". Additional security verification is required to access " + target + "."
+	default:
+		return "Security verification was not completed for " + target + ". Additional security verification is required to access " + target + "."
+	}
+}
+
+func resourceAccessDeniedMessage(target, reason string) string {
+	target = firstNonEmpty(target, "this resource")
+	if strings.TrimSpace(reason) == "" {
+		return "Access to " + target + " was denied."
+	}
+	return "Access to " + target + " was denied. " + strings.TrimSpace(reason)
+}
+
+func userSessionFailureMessage(message string) string {
+	if isLocalTrafficProtectionUnavailable(message) {
+		return "Local traffic protection is not available. Reinstall TRUSTAgent, then sign in again."
+	}
+	return strings.TrimSpace(message)
+}
+
+func isLocalTrafficProtectionUnavailable(message string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "" {
+		return false
+	}
+	if strings.Contains(normalized, "trustagentwfp") {
+		return true
+	}
+	if strings.Contains(normalized, "wfp redirect rules") {
+		return true
+	}
+	return strings.Contains(normalized, "apply traffic interception rules") &&
+		strings.Contains(normalized, "system cannot find the file specified")
 }
 
 func (manager *Manager) deviceDataRevision(deviceID string) string {

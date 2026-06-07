@@ -75,6 +75,16 @@ func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error
 // Authenticate validates the user's password.
 func (um *UserManager) Authenticate(username, password string) (*models.User, error) {
 	user, exists := um.store.GetUserByUsername(username)
+	return um.authenticateUser(user, exists, password)
+}
+
+// AuthenticateByEmail validates the user's password using their email address.
+func (um *UserManager) AuthenticateByEmail(email, password string) (*models.User, error) {
+	user, exists := um.store.GetUserByEmail(email)
+	return um.authenticateUser(user, exists, password)
+}
+
+func (um *UserManager) authenticateUser(user *models.User, exists bool, password string) (*models.User, error) {
 	if !exists {
 		return nil, fmt.Errorf("invalid credentials")
 	}
@@ -199,6 +209,11 @@ func (um *UserManager) GetUser(id string) (*models.User, bool) {
 // GetUserByUsername returns a user by username.
 func (um *UserManager) GetUserByUsername(username string) (*models.User, bool) {
 	return um.store.GetUserByUsername(username)
+}
+
+// GetUserByEmail returns a user by email.
+func (um *UserManager) GetUserByEmail(email string) (*models.User, bool) {
+	return um.store.GetUserByEmail(email)
 }
 
 // ListUsers returns all users.

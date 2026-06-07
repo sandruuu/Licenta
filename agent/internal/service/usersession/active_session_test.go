@@ -58,6 +58,187 @@ func TestActiveAuthenticatedSessionIgnoresExpiredSession(t *testing.T) {
 	}
 }
 
+func TestDashboardSnapshotFallsBackToSameUserSessionWhenPeerKeyIsIncomplete(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	manager := NewManager(Config{}, Dependencies{Clock: func() time.Time { return now }})
+	peer := ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	}
+	key, err := localUserKey(peer)
+	if err != nil {
+		t.Fatalf("localUserKey returned error: %v", err)
+	}
+	manager.sessions[key] = &sessionState{
+		key:               key,
+		peer:              peer,
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionID:    "sess-1",
+		agentSessionToken: "agent-token",
+		expiresAt:         now.Add(time.Hour),
+		catalog: ipc.CatalogInfo{Resources: []ipc.CatalogResource{{
+			ResourceID: "res-rdp",
+			FQDN:       "rdp-desktop.trustcloud.test",
+		}}},
+	}
+
+	snapshot := manager.DashboardSnapshot(ipc.PeerIdentity{
+		UserSID:          peer.UserSID,
+		WindowsSessionID: peer.WindowsSessionID,
+		Verified:         true,
+	})
+
+	if snapshot.UserSession.State != ipc.UserSessionStateAuthenticated || snapshot.UserSession.SessionID != "sess-1" {
+		t.Fatalf("dashboard snapshot = %+v", snapshot.UserSession)
+	}
+	if len(snapshot.Catalog.Resources) != 1 || snapshot.Catalog.Resources[0].ResourceID != "res-rdp" {
+		t.Fatalf("dashboard catalog = %+v", snapshot.Catalog)
+	}
+}
+
+func TestDashboardSnapshotDoesNotFallbackWhenSameUserSessionsAreAmbiguous(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	manager := NewManager(Config{}, Dependencies{Clock: func() time.Time { return now }})
+	for _, windowsSessionID := range []string{"1", "2"} {
+		peer := ipc.PeerIdentity{
+			UserSID:               "S-1-5-21-1000",
+			WindowsLogonSessionID: "00000000:000003e7",
+			WindowsSessionID:      windowsSessionID,
+			Verified:              true,
+		}
+		key, err := localUserKey(peer)
+		if err != nil {
+			t.Fatalf("localUserKey returned error: %v", err)
+		}
+		manager.sessions[key] = &sessionState{
+			key:               key,
+			peer:              peer,
+			state:             ipc.UserSessionStateAuthenticated,
+			agentSessionID:    "sess-" + windowsSessionID,
+			agentSessionToken: "agent-token",
+			expiresAt:         now.Add(time.Hour),
+		}
+	}
+
+	snapshot := manager.DashboardSnapshot(ipc.PeerIdentity{
+		UserSID:  "S-1-5-21-1000",
+		Verified: true,
+	})
+
+	if snapshot.UserSession.State != ipc.UserSessionStateSignedOut || len(snapshot.Catalog.Resources) != 0 {
+		t.Fatalf("dashboard snapshot should be signed out when fallback is ambiguous: %+v catalog=%+v", snapshot.UserSession, snapshot.Catalog)
+	}
+}
+
+func TestAuthenticatedStepUpMessagesIncludeResourceTarget(t *testing.T) {
+	manager := NewManager(Config{TrustedStepUpHosts: []string{"pdp.example.test"}}, Dependencies{})
+	manager.sessions["auth"] = &sessionState{
+		key:               "auth",
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionToken: "agent-token",
+		expiresAt:         time.Now().Add(time.Hour),
+	}
+
+	manager.SetAuthenticatedStepUp(
+		"Additional security verification is required to access rdp-desktop.trustcloud.test.",
+		"https://pdp.example.test/browser/step-up/stepup-1",
+		"res-rdp",
+		"rdp-desktop.trustcloud.test",
+		time.Now().Add(time.Minute),
+	)
+
+	session := manager.sessions["auth"]
+	if session.stepUpURL == "" || session.message != "Additional security verification is required to access rdp-desktop.trustcloud.test." {
+		t.Fatalf("step-up session = %+v", session)
+	}
+
+	manager.MarkAuthenticatedStepUpAllowed("res-rdp", "rdp-desktop.trustcloud.test")
+	if session.stepUpURL != "" || session.lastError != "" || session.message != "Access granted to rdp-desktop.trustcloud.test." {
+		t.Fatalf("allowed step-up session = %+v", session)
+	}
+}
+
+func TestAuthenticatedStepUpDeniedKeepsResourceTarget(t *testing.T) {
+	manager := NewManager(Config{TrustedStepUpHosts: []string{"pdp.example.test"}}, Dependencies{})
+	manager.sessions["auth"] = &sessionState{
+		key:               "auth",
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionToken: "agent-token",
+		expiresAt:         time.Now().Add(time.Hour),
+	}
+	manager.SetAuthenticatedStepUp(
+		"Additional security verification is required to access ssh.trustcloud.test.",
+		"https://pdp.example.test/browser/step-up/stepup-2",
+		"res-ssh",
+		"ssh.trustcloud.test",
+		time.Now().Add(time.Minute),
+	)
+
+	manager.MarkAuthenticatedResourceDenied("res-ssh", "ssh.trustcloud.test", "verification rejected")
+
+	session := manager.sessions["auth"]
+	if session.stepUpURL != "" {
+		t.Fatalf("step-up URL should be cleared: %+v", session)
+	}
+	if session.lastError != "Security verification was rejected for ssh.trustcloud.test. Additional security verification is required to access ssh.trustcloud.test." {
+		t.Fatalf("lastError = %q", session.lastError)
+	}
+}
+
+func TestAuthenticatedStepUpExpirySetsErrorToastMessage(t *testing.T) {
+	manager := NewManager(Config{TrustedStepUpHosts: []string{"pdp.example.test"}}, Dependencies{})
+	manager.sessions["auth"] = &sessionState{
+		key:               "auth",
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionToken: "agent-token",
+		expiresAt:         time.Now().Add(time.Hour),
+	}
+	manager.SetAuthenticatedStepUp(
+		"Additional security verification is required to access web-app.trustcloud.test.",
+		"https://pdp.example.test/browser/step-up/stepup-3",
+		"res-web",
+		"web-app.trustcloud.test",
+		time.Now().Add(20*time.Millisecond),
+	)
+
+	deadline := time.After(time.Second)
+	for {
+		manager.mu.RLock()
+		session := manager.sessions["auth"]
+		if session.stepUpURL == "" && strings.Contains(session.lastError, "Security verification expired for web-app.trustcloud.test") {
+			manager.mu.RUnlock()
+			return
+		}
+		snapshot := *session
+		manager.mu.RUnlock()
+		select {
+		case <-deadline:
+			t.Fatalf("step-up did not expire: %+v", snapshot)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestSetFailureUsesFriendlyMessageForMissingWFPDriver(t *testing.T) {
+	manager := NewManager(Config{}, Dependencies{})
+	manager.sessions["login"] = &sessionState{state: ipc.UserSessionStateAuthenticating}
+
+	manager.setFailure("login", `apply protected resource catalog: apply traffic interception rules: apply WFP redirect rules through \\.\TrustAgentWfp: The system cannot find the file specified.`)
+
+	session := manager.sessions["login"]
+	if session.state != ipc.UserSessionStateFailed || session.message != "Authentication failed" {
+		t.Fatalf("session failure state = %+v", session)
+	}
+	if session.lastError != "Local traffic protection is not available. Reinstall TRUSTAgent, then sign in again." {
+		t.Fatalf("lastError = %q", session.lastError)
+	}
+	if strings.Contains(session.lastError, "TrustAgentWfp") || strings.Contains(session.lastError, "apply protected resource catalog") {
+		t.Fatalf("lastError should not expose technical WFP details: %q", session.lastError)
+	}
+}
+
 func TestAuthenticatedSessionExpiryRevokesAndClears(t *testing.T) {
 	client := &recordingSessionClient{}
 	cleared := make(chan ipc.PeerIdentity, 1)

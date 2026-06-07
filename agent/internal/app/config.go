@@ -145,6 +145,7 @@ func loadConfig() (configFile, bool, error) {
 	}
 	config, err := readFileConfig(path)
 	if err == nil {
+		resolveConfigFilePaths(&config, filepath.Dir(path))
 		return config, true, nil
 	}
 	if os.IsNotExist(err) {
@@ -168,6 +169,21 @@ func readFileConfig(path string) (configFile, error) {
 		return configFile{}, fmt.Errorf("decode agent config %s: %w", cleanPath, err)
 	}
 	return config, nil
+}
+
+func resolveConfigFilePaths(config *configFile, baseDir string) {
+	if config == nil {
+		return
+	}
+	config.PDPCAFile = resolveReferencedConfigPath(config.PDPCAFile, baseDir)
+}
+
+func resolveReferencedConfigPath(value, baseDir string) string {
+	cleanValue := strings.TrimSpace(value)
+	if cleanValue == "" || filepath.IsAbs(cleanValue) {
+		return cleanValue
+	}
+	return filepath.Join(baseDir, cleanValue)
 }
 
 func configPath() (string, error) {

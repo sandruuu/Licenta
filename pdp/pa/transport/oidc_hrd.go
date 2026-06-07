@@ -70,6 +70,9 @@ func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*mod
 			return nil, nil, fmt.Errorf("organization has no enabled default identity provider")
 		}
 		log.Printf("[HRD] No IdP found for domain=%s", domain)
+		if domain != "" {
+			return nil, nil, fmt.Errorf("login_hint domain is not configured for an identity provider")
+		}
 	}
 
 	// Step 3 — explicit organization context from the native client.
@@ -143,6 +146,25 @@ func (s *Server) singleTenantIdentityProvider() (*models.IdentityProviderConfig,
 		return nil, nil, false
 	}
 	return selectedIdP, selectedTenant, true
+}
+
+func tenantMatchesDomain(tenant *models.Tenant, domain string) bool {
+	if tenant == nil {
+		return false
+	}
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return false
+	}
+	if strings.EqualFold(tenant.Domain, domain) {
+		return true
+	}
+	for _, alias := range tenant.Domains {
+		if strings.EqualFold(alias, domain) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTenantFromGateway determines which tenant a gateway serves.

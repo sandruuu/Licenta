@@ -18,6 +18,15 @@ const (
 	PDPWebAuthnRPOriginsEnv    = "PDP_WEBAUTHN_RP_ORIGINS"
 	PDPCORSOriginsEnv          = "PDP_CORS_ORIGINS"
 	PDPAdminRequireMFAEnv      = "PDP_ADMIN_REQUIRE_MFA"
+	PDPPKIURLEnv               = "PDP_PKI_URL"
+	PDPPKITokenEnv             = "PDP_PKI_TOKEN"
+	PDPPKIPathEnv              = "PDP_PKI_PATH"
+	PDPPKIRolePDPEnv           = "PDP_PKI_ROLE_PDP"
+	PDPPKIRoleDeviceEnv        = "PDP_PKI_ROLE_DEVICE"
+	PDPPKIRoleGatewayEnv       = "PDP_PKI_ROLE_GATEWAY"
+	PDPTransitKeyEnv           = "PDP_TRANSIT_KEY"
+	PDPPKICAFileEnv            = "PDP_PKI_CA_FILE"
+	PDPPKIServerNameEnv        = "PDP_PKI_SERVER_NAME"
 )
 
 // RuntimeConfig holds operational knobs that used to live as literals in code.
@@ -226,6 +235,19 @@ func (c *Config) ApplyEnvironmentOverrides() {
 	if value := strings.TrimSpace(os.Getenv(PDPFQDNEnv)); value != "" {
 		c.PDPFQDN = value
 	}
+	applyStringEnv(PDPPKIURLEnv, &c.PKIURL)
+	applyStringEnv(PDPPKITokenEnv, &c.PKIToken)
+	applyStringEnv(PDPPKIPathEnv, &c.PKIPath)
+	applyStringEnv(PDPPKIRolePDPEnv, &c.PKIRolePDP)
+	applyStringEnv(PDPPKIRoleDeviceEnv, &c.PKIRoleDevice)
+	applyStringEnv(PDPPKIRoleGatewayEnv, &c.PKIRoleGateway)
+	if value := strings.TrimSpace(os.Getenv(PDPTransitKeyEnv)); value != "" {
+		c.PKITransitKey = value
+		c.JWTTransitKey = value
+		c.MFATransitKey = value
+	}
+	applyStringEnv(PDPPKICAFileEnv, &c.PKICAFile)
+	applyStringEnv(PDPPKIServerNameEnv, &c.PKIServerName)
 	if origin, rpHost := publicOriginFromEnvironment(); origin != "" {
 		c.applyPublicOrigin(origin, rpHost)
 	}
@@ -245,6 +267,15 @@ func (c *Config) ApplyEnvironmentOverrides() {
 		if parsed, err := strconv.ParseBool(value); err == nil {
 			c.AdminAuth.RequireMFA = &parsed
 		}
+	}
+}
+
+func applyStringEnv(name string, target *string) {
+	if target == nil {
+		return
+	}
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		*target = value
 	}
 }
 

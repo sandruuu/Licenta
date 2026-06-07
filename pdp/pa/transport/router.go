@@ -168,6 +168,10 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/auth/mfa/verify", s.handleMFAVerify)
+	s.mux.HandleFunc("/api/auth/passkey/login/begin", s.handleAdminPasskeyLoginBegin)
+	s.mux.HandleFunc("/api/auth/passkey/login/finish", s.handleAdminPasskeyLoginFinish)
+	s.mux.HandleFunc("/api/auth/passkey/register/begin", s.handleAdminPasskeyRegisterBegin)
+	s.mux.HandleFunc("/api/auth/passkey/register/finish", s.handleAdminPasskeyRegisterFinish)
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/config/public", s.handlePublicConfig)
 	s.mux.HandleFunc("/health", s.handleHealthCheck)
@@ -221,6 +225,7 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Admin endpoints (JWT auth + admin role)
 	// ─────────────────────────────────────────────
+	s.mux.Handle("/api/admin/session", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSession)))
 	s.mux.Handle("/api/admin/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminUsers)))
 	s.mux.Handle("/api/admin/organizations", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizations)))
 	s.mux.Handle("/api/admin/organizations/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizationByID)))

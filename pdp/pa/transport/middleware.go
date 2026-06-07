@@ -248,6 +248,13 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if strings.TrimSpace(claims.Purpose) != "" {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "token is not valid for dashboard access",
+			})
+			return
+		}
+
 		// Check admin role for admin endpoints
 		if strings.HasPrefix(r.URL.Path, "/api/admin") && claims.Role != "platform_admin" {
 			writeJSON(w, http.StatusForbidden, map[string]string{

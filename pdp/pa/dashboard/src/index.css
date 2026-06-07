@@ -171,6 +171,26 @@ html[data-theme='dark'] {
     animation: spin 1s linear infinite;
   }
 
+  .session-spinner {
+    position: relative;
+    height: 28px;
+    width: 28px;
+  }
+
+  .session-spinner span {
+    position: absolute;
+    left: calc(50% - 1px);
+    top: 2px;
+    height: 7px;
+    width: 2px;
+    transform: rotate(calc(var(--segment-index) * 30deg));
+    transform-origin: 1px 12px;
+    border-radius: 999px;
+    background: var(--color-text-secondary);
+    animation: sessionSpinnerFade 1s linear infinite;
+    animation-delay: calc(var(--segment-index) * -83ms);
+  }
+
   .text-mono {
     font-family: 'JetBrains Mono', 'Fira Code', monospace;
     font-size: 12px;
@@ -210,6 +230,16 @@ html[data-theme='dark'] {
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+
+  @keyframes sessionSpinnerFade {
+    0% {
+      opacity: 1;
+    }
+
+    100% {
+      opacity: 0.16;
     }
   }
 }

@@ -89,11 +89,12 @@ func loadJWTSigningKey(cfg *config.Config) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// Login handles primary authentication with username and password.
+// Login handles primary authentication with email and password.
 // MFA is deferred to resource-access step-up challenges.
 func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error) {
-	if locked, until := svc.Store.IsLockedOut(req.Username); locked {
-		svc.audit("login", req.Username, "", "", false,
+	identifier := req.Identifier()
+	if locked, until := svc.Store.IsLockedOut(identifier); locked {
+		svc.audit("login", identifier, "", "", false,
 			"Account locked until "+until.Format(time.RFC3339))
 		return &models.LoginResponse{
 			Status:  "denied",
@@ -101,17 +102,17 @@ func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error
 		}, nil
 	}
 
-	user, err := svc.Users.Authenticate(req.Username, req.Password)
+	user, err := svc.Users.AuthenticateByEmail(identifier, req.Password)
 	if err != nil {
-		svc.Store.RecordFailedLogin(req.Username, svc.Cfg.MaxLoginAttempts, svc.Cfg.LockoutDuration)
-		svc.audit("login", req.Username, "", "", false, "Invalid credentials")
+		svc.Store.RecordFailedLogin(identifier, svc.Cfg.MaxLoginAttempts, svc.Cfg.LockoutDuration)
+		svc.audit("login", identifier, "", "", false, "Invalid credentials")
 		return &models.LoginResponse{
 			Status:  "denied",
 			Message: "Invalid credentials",
 		}, nil
 	}
 
-	svc.Store.ResetLoginAttempts(req.Username)
+	svc.Store.ResetLoginAttempts(identifier)
 
 	svc.audit("login", user.Username, user.ID, "", true, "Primary authentication completed; MFA required")
 	log.Printf("[AUTH] Login: %s - primary authentication completed; MFA required", user.Username)

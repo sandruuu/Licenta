@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"agent/internal/shared/ipc"
 )
 
 func TestNewGUIAppRequiresExplicitTimeout(t *testing.T) {
@@ -21,6 +24,40 @@ func TestNewGUIAppPreservesTimeout(t *testing.T) {
 	app := NewGUIApp(Options{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if app.timeout != time.Second {
 		t.Fatalf("timeout = %s, want 1s", app.timeout)
+	}
+}
+
+func TestUnavailableDashboardPreservesLastKnownDashboard(t *testing.T) {
+	app := NewGUIApp(Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	app.rememberDashboard(ipc.AgentDashboard{
+		Connection: ipc.DashboardConnection{
+			State:        "connected",
+			Message:      "Device enrolled",
+			ServiceState: "running",
+		},
+		Status: ipc.AgentStatus{
+			ServiceState:    "running",
+			EnrollmentState: ipc.EnrollmentStateEnrolled,
+		},
+		Enrollment: ipc.EnrollmentInfo{
+			State:    ipc.EnrollmentStateEnrolled,
+			DeviceID: "device-1",
+		},
+		UserSession: ipc.UserSessionInfo{
+			State:     ipc.UserSessionStateAuthenticated,
+			SessionID: "session-1",
+		},
+	})
+
+	dashboard := app.unavailableDashboard(errors.New("pipe temporarily unavailable"))
+	if dashboard.Status.EnrollmentState != ipc.EnrollmentStateEnrolled || dashboard.Enrollment.State != ipc.EnrollmentStateEnrolled {
+		t.Fatalf("enrollment state was not preserved: %+v", dashboard)
+	}
+	if dashboard.UserSession.State != ipc.UserSessionStateAuthenticated || dashboard.UserSession.SessionID != "session-1" {
+		t.Fatalf("user session was not preserved: %+v", dashboard.UserSession)
+	}
+	if dashboard.Connection.State != "connected" || dashboard.Connection.ServiceState != "unavailable" || dashboard.Status.ServiceState != "unavailable" {
+		t.Fatalf("connection/status = %+v / %+v", dashboard.Connection, dashboard.Status)
 	}
 }
 

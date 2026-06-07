@@ -49,14 +49,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+	purpose, validPurpose := adminLoginPurpose(req.Purpose)
+	if !validPurpose {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid login purpose"})
+		return
+	}
 
 	user, ok := s.authenticatePrimaryLogin(w, r, req)
 	if !ok {
 		return
 	}
 
-	if !s.appConfig().AdminMFARequired() {
-		s.issueAdminLoginToken(w, r, user)
+	requireMFA := s.appConfig().AdminMFARequired() || purpose == paauth.PasskeyEnrollmentPurpose
+	if !requireMFA {
+		s.issueAdminLoginToken(w, r, user, purpose)
 		return
 	}
 
@@ -65,7 +71,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ttl = 5 * time.Minute
 	}
 	if s.userHasTOTPConfigured(user) {
-		challenge, err := s.adminMFA.create(user, "", ttl)
+		challenge, err := s.adminMFA.create(user, "", ttl, purpose)
 		if err != nil {
 			log.Printf("[AUTH] MFA challenge error: %v", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA challenge failed"})
@@ -75,6 +81,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			Status:      "mfa_required",
 			Message:     "MFA verification required",
 			UserID:      user.ID,
+			Purpose:     purpose,
 			ChallengeID: challenge.ID,
 			MFARequired: true,
 		})
@@ -87,7 +94,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
 		return
 	}
-	challenge, err := s.adminMFA.create(user, secret, ttl)
+	challenge, err := s.adminMFA.create(user, secret, ttl, purpose)
 	if err != nil {
 		log.Printf("[AUTH] MFA setup challenge error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
@@ -104,6 +111,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Status:      "mfa_setup_required",
 		Message:     "Set up MFA to continue",
 		UserID:      user.ID,
+		Purpose:     purpose,
 		ChallengeID: challenge.ID,
 		MFARequired: true,
 		MFASetup:    true,
@@ -113,21 +121,54 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) issueAdminLoginToken(w http.ResponseWriter, r *http.Request, user *models.User) {
-	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+func adminLoginPurpose(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "dashboard":
+		return "", true
+	case paauth.PasskeyEnrollmentPurpose:
+		return paauth.PasskeyEnrollmentPurpose, true
+	default:
+		return "", false
+	}
+}
+
+func (s *Server) issueAdminLoginToken(w http.ResponseWriter, r *http.Request, user *models.User, purpose string) {
+	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, purpose)
 	if err != nil {
 		log.Printf("[AUTH] JWT issue after password login failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard password login completed; MFA disabled by configuration", true)
+		details := "Dashboard password login completed; MFA disabled by configuration"
+		if purpose == paauth.PasskeyEnrollmentPurpose {
+			details = "Passkey enrollment authentication completed; MFA disabled by configuration"
+		}
+		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", details, true)
 	}
 	writeJSON(w, http.StatusOK, models.LoginResponse{
 		Status:    "authenticated",
 		Message:   "Authentication successful",
 		AuthToken: authToken,
 		UserID:    user.ID,
+		Purpose:   purpose,
+	})
+}
+
+func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data: map[string]string{
+			"status":   "authenticated",
+			"user_id":  r.Header.Get("X-User-ID"),
+			"username": r.Header.Get("X-Username"),
+			"role":     r.Header.Get("X-User-Role"),
+		},
 	})
 }
 
@@ -228,29 +269,43 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	s.adminMFA.consume(challenge.ID)
 	s.pa.Store.ResetLoginAttempts(user.Username)
-	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, challenge.Purpose)
 	if err != nil {
 		log.Printf("[AUTH] JWT issue after MFA failed: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("admin_mfa_completed", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard MFA completed", true)
+		details := "Dashboard MFA completed"
+		if challenge.Purpose == paauth.PasskeyEnrollmentPurpose {
+			details = "Passkey enrollment MFA completed"
+		}
+		s.pa.Audit.LogEvent("admin_mfa_completed", user.ID, user.Username, r.RemoteAddr, "", "", details, true)
 	}
 	writeJSON(w, http.StatusOK, models.LoginResponse{
 		Status:      "authenticated",
 		Message:     "Authentication successful",
 		AuthToken:   authToken,
 		UserID:      user.ID,
+		Purpose:     challenge.Purpose,
 		MFARequired: true,
 	})
 }
 
 func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request, req models.LoginRequest) (*models.User, bool) {
-	if strings.EqualFold(strings.TrimSpace(req.Username), "admin") && req.Password == "admin" {
-		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+	identifier := req.Identifier()
+	if identifier == "" {
+		writeJSON(w, http.StatusBadRequest, models.LoginResponse{
+			Status:  "denied",
+			Message: "Email is required",
+		})
+		return nil, false
+	}
+
+	if strings.EqualFold(identifier, "admin") && req.Password == "admin" {
+		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Default admin/admin credentials rejected", false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Default admin/admin credentials rejected", false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -259,9 +314,9 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 		return nil, false
 	}
 
-	if locked, until := s.pa.Store.IsLockedOut(req.Username); locked {
+	if locked, until := s.pa.Store.IsLockedOut(identifier); locked {
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Account locked until "+until.Format(time.RFC3339), false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Account locked until "+until.Format(time.RFC3339), false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -269,11 +324,11 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 		})
 		return nil, false
 	}
-	user, err := s.pa.Auth.Users.Authenticate(req.Username, req.Password)
+	user, err := s.pa.Auth.Users.AuthenticateByEmail(identifier, req.Password)
 	if err != nil {
-		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", req.Username, r.RemoteAddr, "", "", "Invalid credentials", false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Invalid credentials", false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -282,11 +337,11 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 		return nil, false
 	}
 	if user.Role != "platform_admin" {
-		s.pa.Store.RecordFailedLogin(req.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "platform administrator access required"})
 		return nil, false
 	}
-	s.pa.Store.ResetLoginAttempts(req.Username)
+	s.pa.Store.ResetLoginAttempts(identifier)
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Primary authentication completed", true)
 	}

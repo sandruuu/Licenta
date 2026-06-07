@@ -9,6 +9,7 @@ const stepUpBrowserJS = `
   const challengeID = root.dataset.challengeId || '';
   const csrfToken = root.dataset.csrfToken || '';
   const status = document.getElementById('webauthn-status');
+  const alertIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>';
 
   function setupOTPInputs() {
     const groups = document.querySelectorAll('.otp');
@@ -124,26 +125,36 @@ const stepUpBrowserJS = `
     };
   }
 
-  async function readError(response, fallback) {
-    try {
-      const body = await response.json();
-      return body.error || body.message || fallback;
-    } catch (_) {
-      return fallback;
-    }
+  function escapeHTML(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[char]));
+  }
+
+  function clearStatus() {
+    if (status) status.innerHTML = '';
+  }
+
+  function showError(message) {
+    if (!status) return;
+    status.innerHTML = '<div class="page-alert stepup-alert" role="alert">' + alertIcon + '<span>' + escapeHTML(message) + '</span></div>';
   }
 
   async function verifyWebAuthn() {
     const button = document.getElementById('webauthn-verify-button');
     try {
       button.disabled = true;
-      status.textContent = 'Waiting for passkey...';
+      clearStatus();
       const begin = await fetch('/api/step-up/webauthn/begin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ challenge_id: challengeID }),
       });
-      if (!begin.ok) throw new Error(await readError(begin, 'Could not start passkey verification'));
+      if (!begin.ok) throw new Error('passkey verification failed');
       const options = await begin.json();
       const credential = await navigator.credentials.get({ publicKey: prepareRequestOptions(options) });
       const finish = await fetch('/api/step-up/webauthn/finish?challenge_id=' + encodeURIComponent(challengeID), {
@@ -151,11 +162,11 @@ const stepUpBrowserJS = `
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify(credentialToJSON(credential)),
       });
-      if (!finish.ok) throw new Error(await readError(finish, 'Passkey verification failed'));
-      status.textContent = 'Verification complete.';
+      if (!finish.ok) throw new Error('passkey verification failed');
+      clearStatus();
       window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
-    } catch (err) {
-      status.textContent = err.message || 'Passkey verification failed.';
+    } catch (_) {
+      showError('Passkey verification failed. Try again.');
       if (button) button.disabled = false;
     }
   }
@@ -164,13 +175,13 @@ const stepUpBrowserJS = `
     const button = document.getElementById('webauthn-register-button');
     try {
       button.disabled = true;
-      status.textContent = 'Creating passkey...';
+      clearStatus();
       const begin = await fetch('/api/step-up/webauthn/register/begin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify({ challenge_id: challengeID }),
       });
-      if (!begin.ok) throw new Error(await readError(begin, 'Could not start passkey setup'));
+      if (!begin.ok) throw new Error('passkey setup failed');
       const options = await begin.json();
       const credential = await navigator.credentials.create({ publicKey: prepareCreationOptions(options) });
       const finish = await fetch('/api/step-up/webauthn/register/finish?challenge_id=' + encodeURIComponent(challengeID), {
@@ -178,11 +189,11 @@ const stepUpBrowserJS = `
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify(credentialToJSON(credential)),
       });
-      if (!finish.ok) throw new Error(await readError(finish, 'Passkey setup failed'));
-      status.textContent = 'Verification complete.';
+      if (!finish.ok) throw new Error('passkey setup failed');
+      clearStatus();
       window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
-    } catch (err) {
-      status.textContent = err.message || 'Passkey setup failed.';
+    } catch (_) {
+      showError('Passkey setup failed. Try again.');
       if (button) button.disabled = false;
     }
   }

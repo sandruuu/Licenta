@@ -114,6 +114,45 @@ func TestResourceStreamConnectorRecordsStepUpRequired(t *testing.T) {
 	}
 }
 
+func TestResourceStreamConnectorRecordsResourceDenied(t *testing.T) {
+	var deniedRequest trafficinterception.StreamRequest
+	var deniedAuthorization flowauthorization.AuthorizeResponse
+	var deniedErr error
+	connector := &resourceStreamConnector{
+		enrollment: &fakeEnrollmentRecordProvider{record: enrollment.EnrollmentRecord{DeviceID: "device-1"}},
+		userSessions: &fakeAuthenticatedSessionProvider{
+			session: usersession.AuthenticatedSession{AgentSessionToken: "agent-token"},
+			found:   true,
+		},
+		authorizer: &fakeFlowAuthorizer{response: flowauthorization.AuthorizeResponse{
+			Decision: flowauthorization.DecisionDeny,
+			Reason:   "verification rejected",
+		}},
+		tunnel: &fakeGatewayTunnel{},
+		onResourceDenied: func(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse, err error) {
+			deniedRequest = request
+			deniedAuthorization = authorization
+			deniedErr = err
+		},
+	}
+
+	_, err := connector.OpenResourceStream(context.Background(), trafficinterception.StreamRequest{
+		ResourceID: "res-rdp",
+		FQDN:       "rdp-desktop.trustcloud.test",
+		Protocol:   "tcp",
+		Port:       3389,
+	})
+	if err == nil {
+		t.Fatal("OpenResourceStream returned nil error")
+	}
+	if deniedRequest.ResourceID != "res-rdp" || deniedRequest.FQDN != "rdp-desktop.trustcloud.test" {
+		t.Fatalf("denied request = %+v", deniedRequest)
+	}
+	if deniedAuthorization.Reason != "verification rejected" || deniedErr == nil {
+		t.Fatalf("denied authorization=%+v err=%v", deniedAuthorization, deniedErr)
+	}
+}
+
 func TestResourceStreamConnectorRequiresAuthenticatedSession(t *testing.T) {
 	var authRequiredRequest trafficinterception.StreamRequest
 	connector := &resourceStreamConnector{

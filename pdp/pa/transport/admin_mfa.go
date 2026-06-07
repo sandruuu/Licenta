@@ -15,6 +15,7 @@ type adminMFAChallenge struct {
 	UserID            string
 	Username          string
 	Role              string
+	Purpose           string
 	PendingTOTPSecret string
 	ExpiresAt         time.Time
 	Attempts          int
@@ -29,7 +30,7 @@ func newAdminMFAStore() *adminMFAStore {
 	return &adminMFAStore{challenges: map[string]*adminMFAChallenge{}}
 }
 
-func (s *adminMFAStore) create(user *models.User, pendingTOTPSecret string, ttl time.Duration) (*adminMFAChallenge, error) {
+func (s *adminMFAStore) create(user *models.User, pendingTOTPSecret string, ttl time.Duration, purpose string) (*adminMFAChallenge, error) {
 	if s == nil || user == nil {
 		return nil, fmt.Errorf("MFA challenge store unavailable")
 	}
@@ -45,6 +46,7 @@ func (s *adminMFAStore) create(user *models.User, pendingTOTPSecret string, ttl 
 		UserID:            user.ID,
 		Username:          user.Username,
 		Role:              user.Role,
+		Purpose:           strings.TrimSpace(purpose),
 		PendingTOTPSecret: strings.TrimSpace(pendingTOTPSecret),
 		ExpiresAt:         time.Now().UTC().Add(ttl),
 	}

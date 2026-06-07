@@ -107,6 +107,7 @@ function Copy-AgentConfig {
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $staleOutputs = @(
     "trust-agent.exe",
+    "trust-agent.ico",
     "TrustAgent-Setup.exe",
     "config.json",
     "pdp-ca.pem",
@@ -138,6 +139,11 @@ try {
     go build -tags "desktop,production" -ldflags "-H windowsgui" -o (Join-Path $OutputDir "trust-agent.exe") ./cmd/agent
 } finally {
     Pop-Location
+}
+
+$agentIconPath = Join-Path $agentRoot "assets\trust-agent.ico"
+if (Test-Path -LiteralPath $agentIconPath) {
+    Copy-Item -LiteralPath $agentIconPath -Destination (Join-Path $OutputDir "trust-agent.ico") -Force
 }
 
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination (Join-Path $OutputDir "install-service.ps1") -Force

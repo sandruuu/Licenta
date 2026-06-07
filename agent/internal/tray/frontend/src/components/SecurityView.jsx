@@ -8,7 +8,7 @@ import {
   Flame,
   HardDrive,
   HelpCircle,
-  Laptop,
+  LaptopMinimalCheck,
   Loader2,
   Lock,
   Monitor,
@@ -99,7 +99,7 @@ const REMEDIATIONS = {
       'Turn on BitLocker or device encryption for the system drive.',
       'Wait until encryption finishes before retrying access.',
     ],
-    why: 'Disk encryption protects company data if the device is lost or stolen.',
+    why: 'Disk encryption protects data if the device is lost or stolen.',
   },
   firewall: {
     title: 'Turn on Windows Firewall',
@@ -134,14 +134,14 @@ function SecurityView({ dashboard, error = '', loading = false }) {
 
   if (selectedRow) {
     return (
-      <section className="ml-[76px] h-full overflow-hidden bg-[#f9faf9] text-[#202427]">
+      <section className="ml-[54px] h-full overflow-hidden bg-[#f9faf9] text-[#202427]">
         <RemediationView row={selectedRow} onBack={() => setSelectedId('')} />
       </section>
     );
   }
 
   return (
-    <section className="ml-[76px] h-full overflow-hidden bg-[#f9faf9] text-[#202427]">
+    <section className="ml-[54px] h-full overflow-hidden bg-[#f9faf9] text-[#202427]">
       <HealthHeader dashboard={dashboard} checking={loading || pipeUnavailable} />
       <HealthList rows={rows} onSelect={setSelectedId} />
       <HealthFooter dashboard={dashboard} checking={loading || pipeUnavailable} />
@@ -154,16 +154,13 @@ function HealthHeader({ dashboard, checking }) {
   const osName = dashboard?.device_data?.os || findCheck(dashboard, 'os')?.description || 'Your System';
 
   return (
-    <header className="px-5 py-4">
-      <div className="mb-3 flex items-center">
-        <p className="text-lg font-extrabold leading-none text-[#1f262b]">Health Check</p>
-      </div>
+    <header className="mx-8 py-5">
       <div className="flex min-w-0 items-center gap-3">
-        <div className="grid h-14 w-14 shrink-0 place-items-center rounded-md border border-[#cdd1d3] bg-[#f0f2f2] text-[#334045]">
-          <Laptop className="h-10 w-10" strokeWidth={2.2} />
+        <div className="grid h-12 w-12 shrink-0 place-items-center text-[#334045]">
+          <LaptopMinimalCheck className="h-10 w-10" strokeWidth={2.2} />
         </div>
         <div className="min-w-0">
-          <h1 className="truncate text-2xl font-medium leading-none text-[#111820]">Your System</h1>
+          <h1 className="truncate text-2xl font-medium leading-none text-[#111820]">Your device</h1>
           <p className="mt-1 truncate text-xs font-semibold text-[#6b737a]">{hostname}</p>
           <p className="mt-0.5 truncate text-xs text-[#6b737a]">{checking ? 'Collecting device data' : osName}</p>
         </div>
@@ -174,7 +171,7 @@ function HealthHeader({ dashboard, checking }) {
 
 function HealthList({ rows, onSelect }) {
   return (
-    <div className="border-y border-[#e3e4e5]">
+    <div className="mx-8 border-y border-[#e3e4e5]">
       {rows.map((row) => (
         <HealthRow key={row.id} row={row} onSelect={onSelect} />
       ))}
@@ -210,7 +207,7 @@ function HealthRow({ row, onSelect }) {
     return (
       <button
         type="button"
-        className="flex h-[52px] w-full items-center gap-2 px-5 text-left transition-colors duration-150 hover:bg-[#eef1f1]"
+        className="flex h-[64px] w-full items-center gap-3 text-left transition-colors duration-150 hover:bg-[#eef1f1]"
         onClick={() => onSelect(row.id)}
       >
         {content}
@@ -219,7 +216,7 @@ function HealthRow({ row, onSelect }) {
   }
 
   return (
-    <div className="flex h-[52px] items-center gap-2 px-5">
+    <div className="flex h-[64px] items-center gap-3">
       {content}
     </div>
   );
@@ -270,54 +267,68 @@ function HealthFooter({ dashboard, checking }) {
   const footerText = checking ? 'Collecting device health data' : `Last checked ${formatDateTime(collectedAt)}`;
 
   return (
-    <footer className="px-5 py-3 text-xs font-semibold text-[#5f686e]">
-      <p className="truncate">{footerText}</p>
+    <footer className="mx-8 pb-4 pt-2 text-xs font-semibold text-[#5f686e]">
+      <p className="truncate text-right">{footerText}</p>
     </footer>
   );
 }
 
 function RemediationView({ row, onBack }) {
   const remediation = getRemediation(row);
+  const problem = row.subtitle || row.description || 'This device check needs attention.';
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[#dedede] px-4">
-        <button
-          type="button"
-          className="grid h-8 w-8 place-items-center rounded-md text-[#4b5358] transition-colors duration-150 hover:bg-[#eef1f1]"
-          onClick={onBack}
-          title="Back"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <p className="truncate text-sm font-bold text-[#1f262b]">{row.name}</p>
+      <header className="mx-8 flex shrink-0 items-center gap-3 border-b border-[#e3e4e5] py-4">
+        <div className="grid h-12 w-12 shrink-0 place-items-center">
+          <button
+            type="button"
+            className="grid h-8 w-8 place-items-center bg-transparent text-[#4b5358] transition-colors duration-150 hover:text-[var(--accent)]"
+            onClick={onBack}
+            title="Back"
+          >
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.4} />
+          </button>
+        </div>
+        <div className="min-w-0">
+          <h1 className="truncate text-lg font-extrabold leading-none text-[#111820]">{remediation.title}</h1>
+          <p className="mt-1 truncate text-xs font-semibold text-[#6b737a]">{row.name}</p>
+        </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto px-8 pb-8 pt-2">
-        <h2 className="mb-5 text-base font-bold text-[#1f262b]">{remediation.title}</h2>
+      <div className="min-h-0 flex-1 overflow-auto px-8 pb-8 pt-5">
+        <section className="py-1">
+          <h2 className="text-base font-extrabold leading-6 text-[#111820]">{row.title}</h2>
+          <div className="mt-3 flex items-start gap-3 text-[var(--danger)]">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={2.4} />
+            <p className="min-w-0 text-sm font-semibold leading-5 text-[var(--danger)]">{problem}</p>
+          </div>
+        </section>
 
-        <ol className="space-y-4">
-          <li className="flex items-center gap-3">
-            <StepNumber value="1" />
-            <button
-              type="button"
-              className="inline-flex min-h-10 items-center gap-2 rounded-md bg-[var(--accent)] px-6 text-sm font-bold text-white transition-colors duration-150 hover:bg-[#245256]"
-              onClick={() => openRemediationUri(remediation.uri)}
-            >
-              <span>{remediation.action}</span>
-              <ExternalLink className="h-4 w-4" />
-            </button>
-          </li>
-          {remediation.steps.map((step, index) => (
-            <li key={step} className="flex items-start gap-3">
-              <StepNumber value={String(index + 2)} />
-              <p className="pt-1 text-sm font-semibold text-[#4b5358]">{step}</p>
+        <section className="mt-7">
+          <h2 className="text-base font-extrabold leading-6 text-[#111820]">{remediation.title}</h2>
+          <ol className="mt-4 space-y-4">
+            <li className="flex items-center gap-3">
+              <StepNumber value="1" />
+              <button
+                type="button"
+                className="inline-flex min-h-10 items-center gap-2 bg-transparent px-0 text-sm font-bold text-[var(--accent)] transition-colors duration-150 hover:text-[#245256]"
+                onClick={() => openRemediationUri(remediation.uri)}
+              >
+                <span>{remediation.action}</span>
+                <ExternalLink className="h-4 w-4" />
+              </button>
             </li>
-          ))}
-        </ol>
+            {remediation.steps.map((step, index) => (
+              <li key={step} className="flex items-start gap-3">
+                <StepNumber value={String(index + 2)} />
+                <p className="pt-1 text-sm font-semibold text-[#4b5358]">{step}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
 
         <p className="mt-6 text-sm font-semibold text-[var(--accent)]">{remediation.why}</p>
-
       </div>
     </div>
   );

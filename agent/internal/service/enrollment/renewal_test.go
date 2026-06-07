@@ -3,6 +3,8 @@ package enrollment
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +96,33 @@ func TestRenewCertificateIfNeededRenewsAndSavesUpdatedRecord(t *testing.T) {
 	}
 }
 
+func TestRefreshKeepsEnrolledStateWhenLocalEnrollmentCheckErrors(t *testing.T) {
+	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	store := &testEnrollmentStore{record: enrolledRecord(now.Add(time.Hour))}
+	identity := &renewalTestIdentity{}
+	manager := NewManager(Config{}, Dependencies{
+		Store:          store,
+		DeviceIdentity: identity,
+		Clock:          func() time.Time { return now },
+	})
+
+	manager.Refresh(context.Background())
+	if snapshot := manager.Snapshot(); snapshot.State != ipc.EnrollmentStateEnrolled || snapshot.DeviceID != "device-1" {
+		t.Fatalf("initial snapshot = %+v", snapshot)
+	}
+
+	identity.localCheckErr = errors.New("certificate store is temporarily unavailable")
+	manager.Refresh(context.Background())
+
+	snapshot := manager.Snapshot()
+	if snapshot.State != ipc.EnrollmentStateEnrolled || snapshot.DeviceID != "device-1" {
+		t.Fatalf("snapshot after transient check failure = %+v", snapshot)
+	}
+	if !strings.Contains(snapshot.Message, "temporarily unavailable") || !strings.Contains(snapshot.LastError, "certificate store") {
+		t.Fatalf("snapshot message/error = %+v", snapshot)
+	}
+}
+
 func enrolledRecord(expiresAt time.Time) EnrollmentRecord {
 	return EnrollmentRecord{
 		EnrollmentState:           ipc.EnrollmentStateEnrolled,
@@ -139,6 +168,7 @@ type renewalTestIdentity struct {
 	renewalCSR       EnrollmentCSR
 	installed        InstalledCertificate
 	installedRequest InstallCertificateRequest
+	localCheckErr    error
 }
 
 func (identity renewalTestIdentity) CreateEnrollmentCSR(context.Context, string) (EnrollmentCSR, error) {
@@ -165,6 +195,9 @@ func (identity *renewalTestIdentity) InstallDeviceCertificate(_ context.Context,
 }
 
 func (identity renewalTestIdentity) CheckLocalEnrollment(context.Context, EnrollmentRecord) (LocalEnrollmentCheck, error) {
+	if identity.localCheckErr != nil {
+		return LocalEnrollmentCheck{}, identity.localCheckErr
+	}
 	return LocalEnrollmentCheck{Enrolled: true}, nil
 }
 

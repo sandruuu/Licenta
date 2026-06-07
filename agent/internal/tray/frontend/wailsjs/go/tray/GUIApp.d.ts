@@ -4,6 +4,8 @@ import {ipc} from '../models';
 
 export function GetDashboard():Promise<ipc.AgentDashboard>;
 
+export function FlashWindowAttention():Promise<void>;
+
 export function HideWindow():Promise<void>;
 
 export function ShowWindow():Promise<void>;

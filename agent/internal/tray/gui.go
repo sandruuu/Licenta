@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/user"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2"
@@ -25,6 +26,10 @@ type GUIApp struct {
 	identity processIdentity
 	logger   *slog.Logger
 	options  Options
+
+	mu               sync.Mutex
+	lastDashboard    ipc.AgentDashboard
+	hasLastDashboard bool
 }
 
 func NewGUIApp(trayOptions Options, logger *slog.Logger) *GUIApp {
@@ -86,6 +91,7 @@ func (app *GUIApp) GetDashboard() ipc.AgentDashboard {
 		app.logger.Warn("Failed to fetch Agent dashboard over IPC", "error", err)
 		return app.unavailableDashboard(err)
 	}
+	app.rememberDashboard(dashboard)
 	return dashboard
 }
 
@@ -166,9 +172,33 @@ func (app *GUIApp) context() context.Context {
 	return context.Background()
 }
 
+func (app *GUIApp) rememberDashboard(dashboard ipc.AgentDashboard) {
+	app.mu.Lock()
+	app.lastDashboard = dashboard
+	app.hasLastDashboard = true
+	app.mu.Unlock()
+}
+
+func (app *GUIApp) lastKnownDashboard() (ipc.AgentDashboard, bool) {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+	return app.lastDashboard, app.hasLastDashboard
+}
+
 func (app *GUIApp) unavailableDashboard(err error) ipc.AgentDashboard {
 	now := time.Now().UTC()
 	reason := strings.TrimSpace(err.Error())
+	if lastDashboard, ok := app.lastKnownDashboard(); ok {
+		lastDashboard.Connection.ServiceState = "unavailable"
+		lastDashboard.Connection.Message = "Agent service IPC is temporarily unavailable"
+		lastDashboard.Status.ServiceState = "unavailable"
+		lastDashboard.Status.ReportedAt = now
+		lastDashboard.ReportedAt = now
+		if len(lastDashboard.DeviceData.Checks) == 0 {
+			lastDashboard.DeviceData = unavailableDeviceDataReport(app.identity.Username, now, reason)
+		}
+		return lastDashboard
+	}
 	enrollmentState := unavailableEnrollmentState()
 	connectionState := "disconnected"
 	connectionMessage := "Agent service IPC is unavailable"
@@ -190,18 +220,22 @@ func (app *GUIApp) unavailableDashboard(err error) ipc.AgentDashboard {
 			ReportedAt:      now,
 		},
 		Enrollment: ipc.EnrollmentInfo{State: enrollmentState},
-		DeviceData: ipc.DeviceDataReport{
-			Hostname:    app.identity.Username,
-			OS:          "Unknown",
-			CollectedAt: now,
-			Checks: []ipc.DeviceDataCheck{{
-				Name:        "Device Data",
-				Status:      ipc.DeviceDataStatusUnavailable,
-				Description: "Agent service pipe is not reachable",
-				Details:     map[string]string{"Reason": reason},
-			}},
-		},
+		DeviceData: unavailableDeviceDataReport(app.identity.Username, now, reason),
 		ReportedAt: now,
+	}
+}
+
+func unavailableDeviceDataReport(hostname string, collectedAt time.Time, reason string) ipc.DeviceDataReport {
+	return ipc.DeviceDataReport{
+		Hostname:    hostname,
+		OS:          "Unknown",
+		CollectedAt: collectedAt,
+		Checks: []ipc.DeviceDataCheck{{
+			Name:        "Device Data",
+			Status:      ipc.DeviceDataStatusUnavailable,
+			Description: "Agent service pipe is not reachable",
+			Details:     map[string]string{"Reason": reason},
+		}},
 	}
 }
 

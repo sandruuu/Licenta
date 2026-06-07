@@ -255,7 +255,7 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 	manager.enrollmentCancel = cancel
 	manager.enrollment = RuntimeState{
 		State:               ipc.EnrollmentStateEnrolling,
-		Message:             "Open browser to complete identity verification",
+		Message:             "Open your browser to verify your identity.",
 		AuthURL:             startResponse.AuthURL,
 		EnrollmentSessionID: startResponse.EnrollmentSessionID,
 		ExpiresAt:           startResponse.ExpiresAt,
@@ -278,7 +278,7 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 		AuthURL:             startResponse.AuthURL,
 		EnrollmentSessionID: startResponse.EnrollmentSessionID,
 		State:               ipc.EnrollmentStateEnrolling,
-		Message:             "Open browser to complete enrollment",
+		Message:             "Open your browser to enroll this device.",
 		ExpiresAt:           startResponse.ExpiresAt,
 		PollIntervalSeconds: int(pollInterval.Seconds()),
 		ReportedAt:          now,
@@ -344,15 +344,14 @@ func (manager *Manager) pollEnrollmentSession(ctx context.Context, client Client
 		PollSecret:          session.PollSecret,
 	})
 	if err != nil {
-		manager.setEnrollmentMessage("Waiting for browser enrollment status")
+		manager.setEnrollmentMessage("Checking enrollment status...")
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(status.Status)) {
 	case StatusWaitingForIDPDiscovery:
-		manager.setEnrollmentMessage("Waiting for organization discovery in browser")
 		return false
 	case StatusWaitingForUserLogin:
-		manager.setEnrollmentMessage("Waiting for user login in browser")
+		manager.setEnrollmentMessage("Identity verification is in progress.")
 		return false
 	case StatusReadyForDeviceProof:
 		if err := manager.completeEnrollmentSession(ctx, client, session); err != nil {
@@ -367,7 +366,7 @@ func (manager *Manager) pollEnrollmentSession(ctx context.Context, client Client
 		manager.setEnrollmentFailure(fmt.Errorf("%s", reason))
 		return true
 	default:
-		manager.setEnrollmentMessage("Waiting for PDP enrollment decision")
+		manager.setEnrollmentMessage("Finalizing device enrollment...")
 		return false
 	}
 }
@@ -504,6 +503,10 @@ func (manager *Manager) Refresh(ctx context.Context) {
 	}
 	check, err := manager.deviceIdentity.CheckLocalEnrollment(ctx, record)
 	if err != nil {
+		manager.logger.Warn("Failed to check local enrollment state", "error", err)
+		if manager.keepEnrolledAfterTransientCheckFailure(record, err.Error()) {
+			return
+		}
 		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", err.Error())
 		return
 	}
@@ -570,6 +573,9 @@ func (manager *Manager) RenewCertificateIfNeeded(ctx context.Context) (bool, err
 	}
 	check, err := manager.deviceIdentity.CheckLocalEnrollment(ctx, record)
 	if err != nil {
+		if manager.keepEnrolledAfterTransientCheckFailure(record, err.Error()) {
+			return false, err
+		}
 		manager.setEnrollmentRuntime(ipc.EnrollmentStateUnenrolled, "", "Device is not enrolled", err.Error())
 		return false, err
 	}
@@ -601,6 +607,29 @@ func (manager *Manager) RenewCertificateIfNeeded(ctx context.Context) (bool, err
 	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, updated.DeviceID, "Device certificate renewed", "")
 	manager.notifyEnrolled()
 	return true, nil
+}
+
+func (manager *Manager) keepEnrolledAfterTransientCheckFailure(record EnrollmentRecord, reason string) bool {
+	manager.mu.RLock()
+	previous := manager.enrollment
+	manager.mu.RUnlock()
+	if previous.State != ipc.EnrollmentStateEnrolled {
+		return false
+	}
+	deviceID := strings.TrimSpace(record.DeviceID)
+	if deviceID == "" {
+		deviceID = previous.DeviceID
+	}
+	if strings.TrimSpace(previous.DeviceID) != "" && deviceID != "" && previous.DeviceID != deviceID {
+		return false
+	}
+	manager.setEnrollmentRuntime(
+		ipc.EnrollmentStateEnrolled,
+		deviceID,
+		"Device enrollment check is temporarily unavailable",
+		strings.TrimSpace(reason),
+	)
+	return true
 }
 
 func (manager *Manager) renewCertificate(ctx context.Context, record EnrollmentRecord) (EnrollmentRecord, error) {

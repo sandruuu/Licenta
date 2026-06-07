@@ -19,7 +19,7 @@ func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 	service.enrollment.Refresh(ctx)
 	status := service.status()
 	peer, _ := ipc.PeerIdentityFromContext(ctx)
-	userSession := service.userSessions.Snapshot(peer)
+	userSession := service.userSessions.DashboardSnapshot(peer)
 	authenticated := strings.EqualFold(userSession.UserSession.State, ipc.UserSessionStateAuthenticated)
 	now := service.clock().UTC()
 	catalog := ipc.CatalogInfo{}

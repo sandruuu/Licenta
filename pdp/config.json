@@ -7,14 +7,14 @@
   "pki_token": "trustcloud-vault-token",
   "pki_path": "pki_int",
   "pki_role_pdp": "trustcloud",
-  "pki_role_device": "trustagent-device",
+  "pki_role_device": "trustagent",
   "pki_role_gateway": "trustgateway",
-  "pki_transit_key": "trustcloud-pdp-key",
+  "pki_transit_key": "trustcloud-key",
   "pki_ca_file": "",
   "pki_server_name": "",
   "pki_timeout": 10000000000,
   "jwt_expiry": 3600000000000,
-  "jwt_transit_key": "trustcloud-pdp-key",
+  "jwt_transit_key": "trustcloud-key",
   "totp_issuer": "TrustCloud",
   "session_expiry": 600000000000,
   "max_sessions": 5,
@@ -24,7 +24,7 @@
   "database_path": "./data/trustcloud.db",
   "pdp_key_encrypted_path": "./data/pdp_key.enc",
   "jwt_key_encrypted_path": "./data/jwt_signing_key.enc",
-  "mfa_transit_key": "trustcloud-pdp-key",
+  "mfa_transit_key": "trustcloud-key",
   "mfa_secret_key_encrypted_path": "./data/mfa_secret.key.enc",
   "webauthn_rp_id": "localhost",
   "webauthn_rp_name": "TrustCloud",
@@ -85,7 +85,7 @@
     }
   },
   "admin_auth": {
-    "require_mfa": false
+    "require_mfa": true
   },
   "gateway": {
     "certificate_validity_days": 7,

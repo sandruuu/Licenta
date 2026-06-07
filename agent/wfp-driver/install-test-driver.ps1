@@ -63,6 +63,47 @@ function Set-JsonProperty {
     }
 }
 
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class TrustAgentWfpDeviceProbe {
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    public static extern IntPtr CreateFileW(string lpFileName, UInt32 dwDesiredAccess, UInt32 dwShareMode, IntPtr lpSecurityAttributes, UInt32 dwCreationDisposition, UInt32 dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+}
+"@
+
+function Test-DriverDevicePath {
+    param([Parameter(Mandatory = $true)][string]$DevicePath)
+
+    $invalidHandle = [IntPtr]::new(-1)
+    $handle = [TrustAgentWfpDeviceProbe]::CreateFileW($DevicePath, [uint32]0, [uint32]3, [IntPtr]::Zero, [uint32]3, [uint32]0, [IntPtr]::Zero)
+    if ($handle -eq $invalidHandle) {
+        $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        throw "Could not open $DevicePath. Win32 error: $errorCode"
+    }
+    [TrustAgentWfpDeviceProbe]::CloseHandle($handle) | Out-Null
+}
+
+function Assert-DriverDeviceHealthy {
+    $driverDevices = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+        $_.Service -eq "trustagent_wfp" -or
+        $_.FriendlyName -eq "TrustAgent WFP Redirect Driver" -or
+        $_.InstanceId -like "ROOT\TRUSTAGENTWFP\*" -or
+        ($_.InstanceId -like "ROOT\SYSTEM\*" -and $_.Service -eq "trustagent_wfp")
+    })
+    if ($driverDevices.Count -eq 0) {
+        throw "TrustAgent WFP PnP device was not found."
+    }
+    $unhealthy = @($driverDevices | Where-Object { $_.Status -ne "OK" })
+    if ($unhealthy.Count -gt 0) {
+        $summary = ($unhealthy | ForEach-Object { "$($_.InstanceId) status=$($_.Status) problem=$($_.Problem)" }) -join "; "
+        throw "TrustAgent WFP PnP device is not healthy: $summary"
+    }
+    Test-DriverDevicePath -DevicePath "\\.\TrustAgentWfp"
+}
+
 Start-Transcript -Path $LogPath -Force | Out-Null
 
 try {
@@ -174,6 +215,9 @@ try {
             Write-Step "Restarting TrustAgent service"
             Restart-Service -Name TrustAgent -Force
         }
+
+        Write-Step "Validating TrustAgent WFP device"
+        Assert-DriverDeviceHealthy
 
         Write-Step "Current service status"
         Get-Service -Name TrustAgent,trustagent_wfp | Format-Table Name, Status, StartType, ServiceType

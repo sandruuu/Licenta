@@ -46,6 +46,16 @@ static VOID TrustAgentEvtDeviceContextCleanup(_In_ WDFOBJECT Object);
 static NTSTATUS TrustAgentRegisterWfp(_In_ WDFDEVICE Device, _Inout_ PTRUSTAGENT_DEVICE_CONTEXT Context);
 static VOID TrustAgentUnregisterWfp(_Inout_ PTRUSTAGENT_DEVICE_CONTEXT Context);
 
+static NTSTATUS TrustAgentEnsureWfpRegistered(_In_ WDFDEVICE Device, _Inout_ PTRUSTAGENT_DEVICE_CONTEXT Context)
+{
+    if (Context->EngineHandle != NULL &&
+        Context->RedirectHandle != NULL &&
+        Context->CalloutIdV4 != 0) {
+        return STATUS_SUCCESS;
+    }
+    return TrustAgentRegisterWfp(Device, Context);
+}
+
 static VOID TrustAgentFreeRules(_Inout_ PTRUSTAGENT_RULE_SET RuleSet)
 {
     if (RuleSet->Rules != NULL) {
@@ -639,6 +649,7 @@ NTSTATUS TrustAgentEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT D
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, TRUSTAGENT_DEVICE_CONTEXT);
     attributes.EvtCleanupCallback = TrustAgentEvtDeviceContextCleanup;
+    attributes.ExecutionLevel = WdfExecutionLevelPassive;
     status = WdfDeviceCreate(&DeviceInit, &attributes, &device);
     if (!NT_SUCCESS(status)) {
         return status;
@@ -647,11 +658,6 @@ NTSTATUS TrustAgentEvtDeviceAdd(_In_ WDFDRIVER Driver, _Inout_ PWDFDEVICE_INIT D
     context = TrustAgentGetDeviceContext(device);
     RtlZeroMemory(context, sizeof(*context));
     status = WdfSpinLockCreate(WDF_NO_OBJECT_ATTRIBUTES, &context->Lock);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
-    status = TrustAgentRegisterWfp(device, context);
     if (!NT_SUCCESS(status)) {
         return status;
     }
@@ -683,6 +689,10 @@ VOID TrustAgentEvtIoDeviceControl(
 
     switch (IoControlCode) {
     case IOCTL_TRUSTAGENT_WFP_APPLY_RULES:
+        status = TrustAgentEnsureWfpRegistered(device, context);
+        if (!NT_SUCCESS(status)) {
+            break;
+        }
         status = WdfRequestRetrieveInputBuffer(Request, InputBufferLength, &inputBuffer, NULL);
         if (NT_SUCCESS(status)) {
             status = TrustAgentStoreRules(context, inputBuffer, InputBufferLength);

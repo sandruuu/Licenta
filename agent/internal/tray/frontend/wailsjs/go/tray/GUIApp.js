@@ -6,6 +6,10 @@ export function GetDashboard() {
   return window['go']['tray']['GUIApp']['GetDashboard']();
 }
 
+export function FlashWindowAttention() {
+  return window['go']['tray']['GUIApp']['FlashWindowAttention']();
+}
+
 export function HideWindow() {
   return window['go']['tray']['GUIApp']['HideWindow']();
 }

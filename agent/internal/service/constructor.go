@@ -155,6 +155,11 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 			service.recordResourceAllowed(request, authorization)
 		}
 	}
+	resourceConnector.onResourceDenied = func(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse, err error) {
+		if service != nil {
+			service.recordResourceDenied(request, authorization, err)
+		}
+	}
 	protectedResources := dependencies.ProtectedResources
 	if protectedResources == nil {
 		if manager, err := protectedresources.NewManager(protectedResourcesConfig(config), protectedresources.Dependencies{

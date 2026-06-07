@@ -41,6 +41,11 @@ agent/build/
 agent/wfp-driver/x64/
 agent/wfp-driver/trustagent_wfp/
 infrastructure/vault/state/
+deploy/openstack/vault/state/
+deploy/openstack/vault/tls/
+deploy/openstack/pdp/data/
+deploy/openstack/pdp/vault-ca.crt
+deploy/openstack/pdp/*.tar
 dist/
 dist-ssr/
 frontend/dist/

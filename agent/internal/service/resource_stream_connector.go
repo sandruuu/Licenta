@@ -63,6 +63,7 @@ type resourceStreamConnector struct {
 	onAuthenticationRequired func(trafficinterception.StreamRequest)
 	onStepUpRequired         func(trafficinterception.StreamRequest, flowauthorization.AuthorizeResponse)
 	onResourceAllowed        func(trafficinterception.StreamRequest, flowauthorization.AuthorizeResponse)
+	onResourceDenied         func(trafficinterception.StreamRequest, flowauthorization.AuthorizeResponse, error)
 }
 
 type resourceSessionCacheKey struct {
@@ -150,6 +151,7 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		return nil, fmt.Errorf("%w: %s", ErrStepUpRequired, firstNonEmpty(authorization.Reason, "additional verification required"))
 	}
 	if err := validateAllowedResourceAuthorization(request.ResourceID, authorization); err != nil {
+		connector.recordResourceDenied(request, authorization, err)
 		return nil, err
 	}
 	connector.recordResourceAllowed(request, authorization)
@@ -185,6 +187,7 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 			return nil, fmt.Errorf("%w: %s", ErrStepUpRequired, firstNonEmpty(authorization.Reason, "additional verification required"))
 		}
 		if err := validateAllowedResourceAuthorization(request.ResourceID, authorization); err != nil {
+			connector.recordResourceDenied(request, authorization, err)
 			return nil, err
 		}
 		connector.recordResourceAllowed(request, authorization)
@@ -522,6 +525,13 @@ func (connector *resourceStreamConnector) recordResourceAllowed(request traffici
 		return
 	}
 	connector.onResourceAllowed(request, authorization)
+}
+
+func (connector *resourceStreamConnector) recordResourceDenied(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse, err error) {
+	if connector == nil || connector.onResourceDenied == nil {
+		return
+	}
+	connector.onResourceDenied(request, authorization, err)
 }
 
 func (connector *resourceStreamConnector) authorizerFor(ctx context.Context, record enrollment.EnrollmentRecord) (flowAuthorizer, error) {

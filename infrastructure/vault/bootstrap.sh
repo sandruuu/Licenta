@@ -2,14 +2,24 @@
 set -eu
 
 VAULT_ADDR="${VAULT_ADDR:-http://vault:8200}"
-APP_TOKEN="${TRUSTCLOUD_VAULT_TOKEN:-trustcloud-vault-token}"
+APP_TOKEN="${TRUSTCLOUD_VAULT_TOKEN:-}"
+APP_TOKEN_FROM_FILE=false
 STATE_DIR="${TRUSTCLOUD_VAULT_STATE_DIR:-/vault/state}"
 INIT_FILE="$STATE_DIR/init.env"
+APP_TOKEN_FILE="${TRUSTCLOUD_VAULT_TOKEN_FILE:-$STATE_DIR/pdp-token.env}"
 WATCH_INTERVAL="${TRUSTCLOUD_VAULT_WATCH_INTERVAL:-15}"
 BOOTSTRAP_MODE="${TRUSTCLOUD_VAULT_BOOTSTRAP_MODE:-watch}"
+MANAGE_LIFECYCLE="${TRUSTCLOUD_VAULT_MANAGE_LIFECYCLE:-true}"
 
 export VAULT_ADDR
 mkdir -p "$STATE_DIR"
+
+is_true() {
+  case "$1" in
+    true|TRUE|1|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 wait_for_vault() {
   i=0
@@ -30,6 +40,17 @@ wait_for_vault() {
   cat /tmp/vault-status.txt >&2 || true
   echo "Vault did not become reachable" >&2
   exit 1
+}
+
+load_app_token_file() {
+  if [ -n "$APP_TOKEN" ] || [ ! -f "$APP_TOKEN_FILE" ]; then
+    return
+  fi
+
+  # shellcheck disable=SC1090
+  . "$APP_TOKEN_FILE"
+  APP_TOKEN="${PDP_PKI_TOKEN:-}"
+  APP_TOKEN_FROM_FILE=true
 }
 
 read_init_file() {
@@ -70,6 +91,35 @@ unseal_vault() {
   fi
 }
 
+require_manual_vault_ready() {
+  if [ -z "${VAULT_TOKEN:-}" ]; then
+    echo "VAULT_TOKEN must be set when TRUSTCLOUD_VAULT_MANAGE_LIFECYCLE=false." >&2
+    echo "Initialize and unseal Vault manually, then rerun bootstrap with a root/operator token in VAULT_TOKEN." >&2
+    exit 1
+  fi
+
+  set +e
+  vault status >/tmp/vault-status.txt 2>&1
+  code=$?
+  set -e
+  if [ "$code" -ne 0 ]; then
+    cat /tmp/vault-status.txt >&2 || true
+    echo "Vault must be initialized and unsealed before manual bootstrap." >&2
+    exit 1
+  fi
+
+  if vault status | grep -Eq "Initialized[[:space:]]+false|Sealed[[:space:]]+true"; then
+    vault status >&2 || true
+    echo "Vault must be initialized and unsealed before manual bootstrap." >&2
+    exit 1
+  fi
+
+  if ! vault token lookup >/dev/null 2>&1; then
+    echo "VAULT_TOKEN is not valid or does not have permission to configure Vault." >&2
+    exit 1
+  fi
+}
+
 ensure_secret_engine() {
   mount="$1"
   type="$2"
@@ -89,8 +139,8 @@ ensure_pki_ca() {
 }
 
 ensure_transit_key() {
-  if ! vault read transit/keys/trustcloud-pdp-key >/dev/null 2>&1; then
-    vault write -f transit/keys/trustcloud-pdp-key >/dev/null
+  if ! vault read transit/keys/trustcloud-key >/dev/null 2>&1; then
+    vault write -f transit/keys/trustcloud-key >/dev/null
   fi
 }
 
@@ -104,9 +154,9 @@ write_pki_roles() {
     allow_ip_sans=true \
     client_flag=true \
     server_flag=true \
-    max_ttl=168h >/dev/null
+    max_ttl=720h >/dev/null
 
-  vault write pki_int/roles/trustagent-device \
+  vault write pki_int/roles/trustagent \
     allow_any_name=true \
     key_type=ec \
     enforce_hostnames=false \
@@ -125,20 +175,20 @@ write_pki_roles() {
     allow_ip_sans=true \
     client_flag=true \
     server_flag=true \
-    max_ttl=168h >/dev/null
+    max_ttl=720h >/dev/null
 }
 
 write_pdp_policy() {
   cat > /tmp/trustcloud-pki-policy.hcl <<'POLICY'
-path "transit/encrypt/trustcloud-pdp-key" {
+path "transit/encrypt/trustcloud-key" {
   capabilities = ["update"]
 }
 
-path "transit/decrypt/trustcloud-pdp-key" {
+path "transit/decrypt/trustcloud-key" {
   capabilities = ["update"]
 }
 
-path "transit/keys/trustcloud-pdp-key" {
+path "transit/keys/trustcloud-key" {
   capabilities = ["read"]
 }
 
@@ -166,21 +216,43 @@ POLICY
 }
 
 ensure_app_token() {
-  if ! vault token lookup "$APP_TOKEN" >/dev/null 2>&1; then
+  load_app_token_file
+
+  if [ -n "$APP_TOKEN" ]; then
+    if vault token lookup "$APP_TOKEN" >/dev/null 2>&1; then
+      return
+    fi
+  fi
+
+  if [ -n "$APP_TOKEN" ] && [ "$APP_TOKEN_FROM_FILE" != "true" ]; then
     vault token create \
       -id="$APP_TOKEN" \
       -policy=trustcloud-pki \
       -ttl=720h \
       -renewable=true >/dev/null
+    return
   fi
+
+  APP_TOKEN="$(vault token create \
+    -policy=trustcloud-pki \
+    -ttl=720h \
+    -renewable=true \
+    -field=token)"
+  umask 077
+  printf "PDP_PKI_TOKEN='%s'\n" "$APP_TOKEN" > "$APP_TOKEN_FILE"
+  echo "Vault PDP token written to $APP_TOKEN_FILE"
 }
 
 bootstrap_once() {
   wait_for_vault
-  init_vault_if_needed
-  unseal_vault
+  if is_true "$MANAGE_LIFECYCLE"; then
+    init_vault_if_needed
+    unseal_vault
 
-  export VAULT_TOKEN="$ROOT_TOKEN"
+    export VAULT_TOKEN="$ROOT_TOKEN"
+  else
+    require_manual_vault_ready
+  fi
   ensure_secret_engine "transit" "transit"
   ensure_transit_key
   ensure_secret_engine "pki_int" "pki"

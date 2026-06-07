@@ -1,4 +1,4 @@
-import { Shield } from 'lucide-react';
+import logoMark from '../../assets/logo-variants/network-shield-keyhole.svg';
 
 export default function BrandLogo({
   className = 'inline-flex items-center gap-3',
@@ -10,7 +10,7 @@ export default function BrandLogo({
   return (
     <div className={className}>
       <span className={iconBoxClassName}>
-        <Shield className={iconClassName} />
+        <img src={logoMark} alt="" aria-hidden="true" className={`${iconClassName} object-contain`} />
       </span>
       <div className={textWrapperClassName}>
         <h1 className={titleClassName}>

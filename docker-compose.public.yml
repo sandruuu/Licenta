@@ -22,7 +22,7 @@ services:
       - "443:443"
       - "443:443/udp"
     volumes:
-      - ./infrastructure/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/openstack/pdp/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     environment:

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"log"
+	"strings"
 	"time"
 
 	"pdp/models"
@@ -24,6 +25,11 @@ func (s *Store) GetUser(id string) (*models.User, bool) {
 
 func (s *Store) GetUserByUsername(username string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE username = ?`, username)
+	return s.scanUser(row)
+}
+
+func (s *Store) GetUserByEmail(email string) (*models.User, bool) {
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE email = ? COLLATE NOCASE`, strings.TrimSpace(email))
 	return s.scanUser(row)
 }
 

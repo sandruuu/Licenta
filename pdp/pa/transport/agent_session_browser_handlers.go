@@ -29,6 +29,10 @@ func (s *Server) handleBrowserAgentSession(w http.ResponseWriter, r *http.Reques
 	}
 	switch r.Method {
 	case http.MethodGet:
+		if browserCancelledResult(r) {
+			renderEnrollmentPage(w, "Authentication cancelled", "You can close this tab and go back to the TRUSTAgent app.", "", false)
+			return
+		}
 		s.renderBrowserAgentSessionState(w, r, session)
 	case http.MethodPost:
 		s.handleBrowserAgentSessionDiscovery(w, r, session)
@@ -45,14 +49,14 @@ func (s *Server) renderBrowserAgentSessionState(w http.ResponseWriter, r *http.R
 				s.redirectAgentSessionToIDP(w, r, session, idpCfg)
 				return
 			}
-			renderEnrollmentPage(w, "Sign in", "Enter your organization email address.", "", true)
+			renderEnrollmentPage(w, "Sign in", "Enter your email address.", "", true)
 			return
 		}
 		if idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID); ok && idpCfg != nil && idpCfg.Enabled {
 			s.redirectAgentSessionToIDP(w, r, session, idpCfg)
 			return
 		}
-		renderEnrollmentPage(w, "Continue in browser", "Authentication is in progress. Complete login with your identity provider.", "", false)
+		renderEnrollmentPage(w, "Identity verification in progress", "Complete the sign-in flow, then return to TRUSTAgent.", "", false)
 	case agentSessionStatusReadyToClaim, agentSessionStatusClaimed:
 		renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)
 	case agentSessionStatusDenied:
@@ -71,10 +75,24 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 		renderEnrollmentPage(w, "Sign in", "Could not read the submitted email address.", "", true)
 		return
 	}
+	if browserFormCancelled(r) {
+		if _, err := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
+			if live.Status != agentSessionStatusWaitingForUserLogin {
+				return fmt.Errorf("authentication request is not waiting for user login")
+			}
+			live.Status = agentSessionStatusDenied
+			live.Reason = "user_cancelled"
+			return nil
+		}); err != nil {
+			log.Printf("[AGENT-SESSION] Failed to cancel browser authentication session: session=%s err=%v", session.ID, err)
+		}
+		redirectBrowserCancelled(w, r)
+		return
+	}
 	email := strings.TrimSpace(r.Form.Get("email"))
 	idpCfg, ok := s.resolveAgentSessionIdentityProvider(session.TenantID, email)
 	if !ok {
-		renderEnrollmentPage(w, "Sign in", "We could not determine the identity provider for this email. Check the address or contact your administrator.", email, true)
+		renderEnrollmentPage(w, "Sign in", "Email does not match any organization directory.", email, true)
 		return
 	}
 	s.redirectAgentSessionToIDP(w, r, session, idpCfg)
@@ -97,6 +115,11 @@ func (s *Server) resolveAgentSessionIdentityProvider(tenantID, email string) (*m
 				}
 			}
 		}
+		if tenant, found := s.pa.Store.GetTenant(tenantID); found && tenant != nil && tenant.Enabled && tenantMatchesDomain(tenant, domain) {
+			idpCfg, _, ok := s.defaultIdentityProviderForTenant(tenantID)
+			return idpCfg, ok
+		}
+		return nil, false
 	}
 	idpCfg, _, ok := s.defaultIdentityProviderForTenant(tenantID)
 	return idpCfg, ok

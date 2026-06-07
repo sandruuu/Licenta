@@ -47,6 +47,21 @@ func TestAuthTokenUsesAgentAudience(t *testing.T) {
 	}
 }
 
+func TestAuthTokenCanCarryPurpose(t *testing.T) {
+	manager := newTestJWTManager(t)
+	authToken, err := manager.GenerateAuthTokenWithPurpose("user-1", "user@example.com", "platform_admin", "", "", true, PasskeyEnrollmentPurpose)
+	if err != nil {
+		t.Fatalf("GenerateAuthTokenWithPurpose returned error: %v", err)
+	}
+	claims, err := manager.ValidateAuthToken(authToken)
+	if err != nil {
+		t.Fatalf("ValidateAuthToken returned error: %v", err)
+	}
+	if claims.Purpose != PasskeyEnrollmentPurpose {
+		t.Fatalf("purpose = %q, want %q", claims.Purpose, PasskeyEnrollmentPurpose)
+	}
+}
+
 func TestEnrollmentParserRejectsAgentToken(t *testing.T) {
 	manager := newTestJWTManager(t)
 	authToken, err := manager.GenerateAuthToken("user-1", "user@example.com", "user", "device-1", "", false)

@@ -73,3 +73,57 @@ func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
 		t.Fatalf("RequireMFA = %v", cfg.AdminAuth.RequireMFA)
 	}
 }
+
+func TestApplyEnvironmentOverridesVaultPKI(t *testing.T) {
+	t.Setenv(PDPPKIURLEnv, "http://10.20.40.10:8200")
+	t.Setenv(PDPPKITokenEnv, "deployment-token")
+	t.Setenv(PDPPKIPathEnv, "pki_prod")
+	t.Setenv(PDPPKIRolePDPEnv, "pdp-role")
+	t.Setenv(PDPPKIRoleDeviceEnv, "device-role")
+	t.Setenv(PDPPKIRoleGatewayEnv, "gateway-role")
+	t.Setenv(PDPTransitKeyEnv, "deployment-key")
+	t.Setenv(PDPPKICAFileEnv, "/app/vault-ca/vault-ca.crt")
+	t.Setenv(PDPPKIServerNameEnv, "vault")
+
+	cfg := &Config{
+		PKIURL:         "http://vault:8200",
+		PKIToken:       "trustcloud-vault-token",
+		PKIPath:        "pki_int",
+		PKIRolePDP:     "trustcloud",
+		PKIRoleDevice:  "trustagent",
+		PKIRoleGateway: "trustgateway",
+		PKITransitKey:  "trustcloud-key",
+		JWTTransitKey:  "trustcloud-key",
+		MFATransitKey:  "trustcloud-key",
+	}
+
+	cfg.ApplyEnvironmentOverrides()
+
+	if cfg.PKIURL != "http://10.20.40.10:8200" {
+		t.Fatalf("PKIURL = %q", cfg.PKIURL)
+	}
+	if cfg.PKIToken != "deployment-token" {
+		t.Fatalf("PKIToken = %q", cfg.PKIToken)
+	}
+	if cfg.PKIPath != "pki_prod" {
+		t.Fatalf("PKIPath = %q", cfg.PKIPath)
+	}
+	if cfg.PKIRolePDP != "pdp-role" || cfg.PKIRoleDevice != "device-role" || cfg.PKIRoleGateway != "gateway-role" {
+		t.Fatalf("PKI roles = %q %q %q", cfg.PKIRolePDP, cfg.PKIRoleDevice, cfg.PKIRoleGateway)
+	}
+	if cfg.PKITransitKey != "deployment-key" {
+		t.Fatalf("PKITransitKey = %q", cfg.PKITransitKey)
+	}
+	if cfg.PKICAFile != "/app/vault-ca/vault-ca.crt" {
+		t.Fatalf("PKICAFile = %q", cfg.PKICAFile)
+	}
+	if cfg.PKIServerName != "vault" {
+		t.Fatalf("PKIServerName = %q", cfg.PKIServerName)
+	}
+	if cfg.JWTTransitKey != "deployment-key" {
+		t.Fatalf("JWTTransitKey = %q", cfg.JWTTransitKey)
+	}
+	if cfg.MFATransitKey != "deployment-key" {
+		t.Fatalf("MFATransitKey = %q", cfg.MFATransitKey)
+	}
+}

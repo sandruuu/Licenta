@@ -2,7 +2,7 @@
 const API_BASE = '/api';
 
 // Get the auth token from localStorage
-function getToken() {
+export function getToken() {
   return localStorage.getItem('admin_token');
 }
 
@@ -18,21 +18,24 @@ export function clearToken() {
 
 // Generic fetch wrapper with auth headers, error handling, and response unwrapping
 async function apiFetch(path, options = {}) {
+  const { redirectOnUnauthorized = true, ...fetchOptions } = options;
   const token = getToken();
   const headers = {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...options.headers,
+    ...fetchOptions.headers,
   };
 
   const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
   if (res.status === 401) {
     clearToken();
-    window.location.href = '/login';
+    if (redirectOnUnauthorized) {
+      window.location.href = '/login';
+    }
     throw new Error('Unauthorized');
   }
 
@@ -107,11 +110,15 @@ export async function deleteOrganization(id) {
 
 // ─── Auth ───────────────────────────────────
 
-export async function login(username, password) {
+export async function login(email, password, purpose = '') {
+  const body = { email, password };
+  if (purpose) {
+    body.purpose = purpose;
+  }
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(body),
   });
   return res.json();
 }
@@ -123,6 +130,71 @@ export async function verifyMFA(challengeId, code) {
     body: JSON.stringify({ challenge_id: challengeId, code }),
   });
   return res.json();
+}
+
+export async function beginPasskeyAuthentication(email) {
+  const res = await fetch(`${API_BASE}/auth/passkey/login/begin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.message || 'Could not start passkey sign-in');
+  }
+  return data;
+}
+
+export async function finishPasskeyAuthentication(email, challengeId, credential) {
+  const params = new URLSearchParams({ email, challenge_id: challengeId });
+  const res = await fetch(`${API_BASE}/auth/passkey/login/finish?${params.toString()}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credential),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.message || 'Passkey sign-in failed');
+  }
+  return data;
+}
+
+export async function beginPasskeyRegistration(token) {
+  const res = await fetch(`${API_BASE}/auth/passkey/register/begin`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({}),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.message || 'Could not start passkey registration');
+  }
+  return data;
+}
+
+export async function finishPasskeyRegistration(token, credential) {
+  const res = await fetch(`${API_BASE}/auth/passkey/register/finish`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(credential),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || data.message || 'Passkey registration failed');
+  }
+  return data;
+}
+
+export async function validateAdminSession() {
+  return apiFetch('/admin/session', {
+    redirectOnUnauthorized: false,
+  });
 }
 
 // ─── Dashboard ──────────────────────────────

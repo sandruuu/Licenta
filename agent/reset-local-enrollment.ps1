@@ -60,6 +60,8 @@ $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $buildDir = Join-Path $PSScriptRoot "build"
 $buildExe = Join-Path $buildDir "trust-agent.exe"
 $buildConfig = Join-Path $buildDir "config.json"
+$buildCA = Join-Path $buildDir "pdp-ca.pem"
+$preflightScript = Join-Path $PSScriptRoot "packaging\Test-AgentConfig.ps1"
 
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
   $serviceInstallDir = Get-ServiceExecutableDirectory -Name $ServiceName
@@ -72,6 +74,7 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
 
 $installExe = Join-Path $InstallDir "trust-agent.exe"
 $installConfig = Join-Path $InstallDir "config.json"
+$installCA = Join-Path $InstallDir "pdp-ca.pem"
 $stateDir = "C:\ProgramData\TrustAgent"
 $statePath = Join-Path $stateDir "enrollment.json"
 
@@ -80,6 +83,12 @@ if (-not (Test-Path -LiteralPath $buildExe)) {
 }
 if (-not (Test-Path -LiteralPath $buildConfig)) {
   throw "Missing build config: $buildConfig"
+}
+if (-not (Test-Path -LiteralPath $buildCA)) {
+  throw "Missing build PDP CA file: $buildCA"
+}
+if (-not (Test-Path -LiteralPath $preflightScript)) {
+  throw "Missing preflight script: $preflightScript"
 }
 
 if (-not (Test-Path -LiteralPath $InstallDir)) {
@@ -93,6 +102,8 @@ Start-Sleep -Seconds 1
 
 Copy-WithRetry -Source $buildExe -Destination $installExe
 Copy-WithRetry -Source $buildConfig -Destination $installConfig
+Copy-WithRetry -Source $buildCA -Destination $installCA
+& $preflightScript -RuntimePath $installExe -RepairPaths
 
 if (Test-Path -LiteralPath $statePath) {
   $backup = Join-Path $stateDir "enrollment.before-reenroll-$stamp.json"

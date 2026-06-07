@@ -1,0 +1,59 @@
+name: pdp-stack
+
+services:
+  pdp:
+    image: trustcloud:latest
+    container_name: trustcloud
+    ports:
+      - "127.0.0.1:8443:8443"
+    extra_hosts:
+      - "vault:$VAULT_PRIVATE_IP"
+    volumes:
+      - ./data:/app/data
+      - ./vault-ca.crt:/app/vault-ca/vault-ca.crt:ro
+    environment:
+      - PDP_FQDN=${PDP_FQDN:-pdp}
+      - PDP_PUBLIC_HOST=${PDP_PUBLIC_HOST:?Set PDP_PUBLIC_HOST, for example policy-admin.remote-access-demo.xyz}
+      - PDP_PUBLIC_ORIGIN=https://${PDP_PUBLIC_HOST}
+      - PDP_CORS_ORIGINS=https://${PDP_PUBLIC_HOST}
+      - PDP_ADMIN_REQUIRE_MFA=${PDP_ADMIN_REQUIRE_MFA:-true}
+      - PDP_PKI_URL=${PDP_PKI_URL:-https://vault:8200}
+      - PDP_PKI_TOKEN=${PDP_PKI_TOKEN:?Set PDP_PKI_TOKEN from the Vault bootstrap output}
+      - PDP_PKI_CA_FILE=${PDP_PKI_CA_FILE:-/app/vault-ca/vault-ca.crt}
+      - PDP_PKI_SERVER_NAME=${PDP_PKI_SERVER_NAME:-vault}
+      - PDP_PKI_PATH=${PDP_PKI_PATH:-pki_int}
+      - PDP_PKI_ROLE_PDP=${PDP_PKI_ROLE_PDP:-trustcloud}
+      - PDP_PKI_ROLE_DEVICE=${PDP_PKI_ROLE_DEVICE:-trustagent}
+      - PDP_PKI_ROLE_GATEWAY=${PDP_PKI_ROLE_GATEWAY:-trustgateway}
+      - PDP_TRANSIT_KEY=${PDP_TRANSIT_KEY:-trustcloud-key}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  public-proxy:
+    image: caddy:2.8-alpine
+    container_name: trustcloud-public-proxy
+    depends_on:
+      pdp:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - PDP_PUBLIC_HOST=${PDP_PUBLIC_HOST:?Set PDP_PUBLIC_HOST, for example policy-admin.remote-access-demo.xyz}
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+    driver: local
+  caddy-config:
+    driver: local

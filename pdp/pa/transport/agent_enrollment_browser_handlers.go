@@ -31,6 +31,10 @@ func (s *Server) handleBrowserEnroll(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
+		if browserCancelledResult(r) {
+			renderEnrollmentPage(w, "Enrollment cancelled", "You can close this tab and go back to the TRUSTAgent app.", "", false)
+			return
+		}
 		s.renderBrowserEnrollState(w, session)
 	case http.MethodPost:
 		s.handleBrowserEnrollDiscovery(w, r, session)
@@ -42,7 +46,7 @@ func (s *Server) handleBrowserEnroll(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderBrowserEnrollState(w http.ResponseWriter, session *paenrollment.InteractiveSession) {
 	switch session.Status {
 	case paenrollment.InteractiveStatusWaitingForIDPDiscovery:
-		renderEnrollmentPage(w, "Enroll device", "Enter your organization email address.", "", true)
+		renderEnrollmentPage(w, "Enroll device", "Enter your email address.", "", true)
 	case paenrollment.InteractiveStatusWaitingForUserLogin:
 		idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID)
 		if ok && idpCfg != nil && idpCfg.Enabled {
@@ -52,7 +56,7 @@ func (s *Server) renderBrowserEnrollState(w http.ResponseWriter, session *paenro
 				return
 			}
 		}
-		renderEnrollmentPage(w, "Continue in browser", "Authentication is in progress. Complete login with your identity provider.", "", false)
+		renderEnrollmentPage(w, "Device enrollment in progress", "Complete the sign-in flow, then return to TRUSTAgent.", "", false)
 	case paenrollment.InteractiveStatusReadyForDeviceProof:
 		renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)
 	case paenrollment.InteractiveStatusEnrolled:
@@ -73,10 +77,17 @@ func (s *Server) handleBrowserEnrollDiscovery(w http.ResponseWriter, r *http.Req
 		renderEnrollmentPage(w, "Enroll device", "Could not read the submitted email address.", "", true)
 		return
 	}
+	if browserFormCancelled(r) {
+		if _, err := s.pa.Enrollment.DenyInteractiveSession(session.ID, "user_cancelled"); err != nil {
+			log.Printf("[ENROLL] Failed to cancel enrollment session: session=%s err=%v", session.ID, err)
+		}
+		redirectBrowserCancelled(w, r)
+		return
+	}
 	email := strings.TrimSpace(r.Form.Get("email"))
 	idpCfg, tenant, ok := s.resolveEnrollmentIdentityProvider(email)
 	if !ok {
-		renderEnrollmentPage(w, "Enroll device", "We could not determine the organization for this email. Check the address or contact your administrator.", email, true)
+		renderEnrollmentPage(w, "Enroll device", "Email does not match any organization directory.", email, true)
 		return
 	}
 	s.redirectBrowserEnrollToIDP(w, r, session, tenant, idpCfg)
@@ -113,6 +124,7 @@ func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Reque
 		ClientID:      idpCfg.ClientID,
 		ClientSecret:  idpCfg.ClientSecret,
 		Scopes:        idpCfg.Scopes,
+		Prompt:        "login",
 		AutoDiscovery: idpCfg.AutoDiscovery,
 		ClaimMapping:  idpCfg.ClaimMapping,
 	}
@@ -144,6 +156,7 @@ func (s *Server) resolveEnrollmentIdentityProvider(email string) (*models.Identi
 				return idpCfg, resolvedTenant, true
 			}
 		}
+		return nil, nil, false
 	}
 	if idpCfg, tenant, ok := s.singleTenantIdentityProvider(); ok {
 		return idpCfg, tenant, true
@@ -210,7 +223,60 @@ func renderEnrollmentPage(w http.ResponseWriter, title, message, email string, s
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	var form string
 	if showForm {
-		form = `<form method="post"><label for="browser-email">Organization email</label><input id="browser-email" name="email" type="email" autocomplete="email" placeholder="user@company.com" value="` + html.EscapeString(email) + `" required autofocus><button type="submit">Continue</button></form>`
+		form = `<form method="post"><div><label for="browser-email">Email</label><input id="browser-email" name="email" type="email" autocomplete="email" placeholder="user@company.com" value="` + html.EscapeString(email) + `" required autofocus></div><div class="form-actions"><button type="submit">Continue</button><button type="submit" name="action" value="cancel" class="secondary" formnovalidate>Cancel</button></div></form>`
 	}
-	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title><style>` + browserPageStyles + `</style></head><body><main class="panel">` + browserBrandMarkup + `<h1>` + html.EscapeString(title) + `</h1><p>` + html.EscapeString(message) + `</p>` + form + `</main></body></html>`))
+	lowerTitle := strings.ToLower(title)
+	resultMark := browserResultMarkForTitle(lowerTitle)
+	if resultMark == "success" && strings.Contains(message, "TrustAgent") {
+		message = "You can close this tab and go back to the TRUSTAgent app."
+	}
+	messageMarkup := `<p class="page-copy">` + html.EscapeString(message) + `</p>`
+	if showForm && strings.TrimSpace(message) != "" && !strings.EqualFold(strings.TrimSpace(message), "Enter your email address.") {
+		messageMarkup = `<div class="page-alert" role="alert"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>` + html.EscapeString(message) + `</span></div>`
+	}
+	completionMarkup := ""
+	if resultMark == "success" {
+		completionMarkup = `<svg class="completion-mark" viewBox="0 0 72 72" aria-hidden="true"><path class="completion-ring" pathLength="1" d="M60.7 32.5A25 25 0 1 1 49.2 14.8"/><path class="completion-check" pathLength="1" d="M20 39l13 13 25-31"/></svg>`
+	}
+	if resultMark == "failure" {
+		completionMarkup = `<svg class="cancel-mark" viewBox="0 0 72 72" aria-hidden="true"><circle class="cancel-ring" pathLength="1" cx="36" cy="36" r="25"/><path class="cancel-cross-first" pathLength="1" d="M26 26l20 20"/><path class="cancel-cross-second" pathLength="1" d="M46 26L26 46"/></svg>`
+	}
+	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title><style>` + browserPageStyles + `</style></head><body><main class="panel">` + browserBrandMarkup + `<h1>` + html.EscapeString(title) + `</h1>` + messageMarkup + form + completionMarkup + `</main></body></html>`))
+}
+
+func browserResultMarkForTitle(lowerTitle string) string {
+	for _, term := range []string{"cancelled", "canceled", "denied", "unavailable", "expired", "failed", "failure", "unsuccessful"} {
+		if strings.Contains(lowerTitle, term) {
+			return "failure"
+		}
+	}
+	for _, term := range []string{"complete", "enrolled", "successful", "succeeded"} {
+		if strings.Contains(lowerTitle, term) {
+			return "success"
+		}
+	}
+	return ""
+}
+
+func browserFormCancelled(r *http.Request) bool {
+	if r == nil || r.Form == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Form.Get("action")), "cancel")
+}
+
+func browserCancelledResult(r *http.Request) bool {
+	if r == nil || r.URL == nil {
+		return false
+	}
+	value := strings.TrimSpace(r.URL.Query().Get("cancelled"))
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
+func redirectBrowserCancelled(w http.ResponseWriter, r *http.Request) {
+	if r == nil || r.URL == nil {
+		renderEnrollmentPage(w, "Enrollment cancelled", "You can close this tab and go back to the TRUSTAgent app.", "", false)
+		return
+	}
+	http.Redirect(w, r, r.URL.EscapedPath()+"?cancelled=1", http.StatusSeeOther)
 }

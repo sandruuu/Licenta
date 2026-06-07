@@ -3,11 +3,12 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
-func writeConfig(t *testing.T, body string) {
+func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, configFilename)
@@ -21,6 +22,7 @@ func writeConfig(t *testing.T, body string) {
 	t.Cleanup(func() {
 		executablePath = originalExecutablePath
 	})
+	return configDir
 }
 
 func serviceConfigJSON() string {
@@ -49,14 +51,28 @@ func serviceConfigJSON() string {
 }
 
 func TestLoadServiceConfigLoadsServiceConfig(t *testing.T) {
-	writeConfig(t, serviceConfigJSON())
+	configDir := writeConfig(t, serviceConfigJSON())
 
 	config, err := LoadServiceConfig()
 	if err != nil {
 		t.Fatalf("LoadServiceConfig returned error: %v", err)
 	}
-	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != "ca.pem" || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.CertificateRenewBefore != 12*time.Hour || config.CertificateRenewCheckInterval != time.Hour || config.CertificateRenewTimeout != 20*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH || !config.TrafficInterceptionEnabled || config.TrafficProxyListenAddress != "127.0.0.1:18787" || config.WFPDriverDevicePath != `\\.\TrustAgentWfp` || !config.WFPFailClosed {
+	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != filepath.Join(configDir, "ca.pem") || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.CertificateRenewBefore != 12*time.Hour || config.CertificateRenewCheckInterval != time.Hour || config.CertificateRenewTimeout != 20*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH || !config.TrafficInterceptionEnabled || config.TrafficProxyListenAddress != "127.0.0.1:18787" || config.WFPDriverDevicePath != `\\.\TrustAgentWfp` || !config.WFPFailClosed {
 		t.Fatalf("service config = %+v", config)
+	}
+}
+
+func TestLoadServiceConfigKeepsAbsolutePDPCAFile(t *testing.T) {
+	absoluteCA := filepath.Join(t.TempDir(), "ca.pem")
+	body := strings.Replace(serviceConfigJSON(), `"pdp_ca_file": "ca.pem"`, `"pdp_ca_file": "`+escapeJSONPath(absoluteCA)+`"`, 1)
+	writeConfig(t, body)
+
+	config, err := LoadServiceConfig()
+	if err != nil {
+		t.Fatalf("LoadServiceConfig returned error: %v", err)
+	}
+	if config.PDPCAFile != absoluteCA {
+		t.Fatalf("PDPCAFile = %q, want %q", config.PDPCAFile, absoluteCA)
 	}
 }
 
@@ -108,4 +124,8 @@ func TestLoadServiceConfigAllowsMinimalServiceConfig(t *testing.T) {
 	if _, err := LoadServiceConfig(); err != nil {
 		t.Fatalf("LoadServiceConfig returned error: %v", err)
 	}
+}
+
+func escapeJSONPath(path string) string {
+	return strings.ReplaceAll(path, `\`, `\\`)
 }

@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { clearToken, getToken, validateAdminSession } from './api';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -15,11 +17,60 @@ import ProtectApp from './pages/ProtectApp';
 import Gateways from './pages/Gateways';
 import GatewayDetail from './pages/GatewayDetail';
 
+const sessionSpinnerSegments = Array.from({ length: 12 }, (_, index) => index);
+
+function SessionLoading() {
+  return (
+    <div className="grid min-h-screen place-items-center bg-surface" role="status" aria-live="polite" aria-label="Loading">
+      <div className="flex flex-col items-center gap-1.5">
+        <div className="session-spinner" aria-hidden="true">
+          {sessionSpinnerSegments.map((index) => (
+            <span key={index} style={{ '--segment-index': index }} />
+          ))}
+        </div>
+        <span className="text-[10px] font-semibold leading-none text-text-secondary">Loading...</span>
+      </div>
+    </div>
+  );
+}
+
 function PrivateRoute({ children }) {
-  const token = localStorage.getItem('admin_token');
-  if (!token) {
+  const [status, setStatus] = useState(() => (getToken() ? 'checking' : 'guest'));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function checkSession() {
+      if (!getToken()) {
+        setStatus('guest');
+        return;
+      }
+
+      setStatus('checking');
+      try {
+        await validateAdminSession();
+        if (!cancelled) setStatus('authenticated');
+      } catch {
+        clearToken();
+        if (!cancelled) setStatus('guest');
+      }
+    }
+
+    void checkSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (status === 'guest') {
     return <Navigate to="/login" replace />;
   }
+
+  if (status === 'checking') {
+    return <SessionLoading />;
+  }
+
   return children;
 }
 

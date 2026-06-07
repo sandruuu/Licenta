@@ -154,6 +154,10 @@ type sessionState struct {
 	message           string
 	lastError         string
 	stepUpURL         string
+	stepUpResourceID  string
+	stepUpTarget      string
+	stepUpExpiresAt   time.Time
+	stepUpCancel      context.CancelFunc
 	catalog           ipc.CatalogInfo
 	cancel            context.CancelFunc
 }

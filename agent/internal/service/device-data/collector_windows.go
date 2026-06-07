@@ -217,7 +217,7 @@ try {
 	if !hasLockoutBadCount || lockoutBadCount <= 0 || lockoutBadCount > 10 {
 		weakReasons = append(weakReasons, "account lockout threshold is not enforced tightly")
 	}
-	if !hasInactivityTimeout || inactivityTimeout <= 0 || inactivityTimeout > 900 {
+	if hasInactivityTimeout && (inactivityTimeout <= 0 || inactivityTimeout > 900) {
 		weakReasons = append(weakReasons, "machine inactivity lock is not enforced within 15 minutes")
 	}
 	if len(weakReasons) > 0 {
