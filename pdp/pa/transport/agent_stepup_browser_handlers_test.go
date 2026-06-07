@@ -144,6 +144,7 @@ func TestBrowserStepUpSelectionMatchesAdminMFAStyle(t *testing.T) {
 		"Passkey",
 		`class="method-chevron"`,
 		`class="stepup-selection-spacer"`,
+		`data-expires-at="`,
 		`rgba(44,97,100,.045)`,
 		`rgba(44,97,100,.085)`,
 	} {
@@ -574,6 +575,9 @@ func TestStepUpWebAuthnClientMessagesAreGenericAlerts(t *testing.T) {
 		"page-alert stepup-alert",
 		"Passkey setup failed. Try again.",
 		"Passkey verification failed. Try again.",
+		"Verification expired. Try accessing the protected resource again.",
+		"scheduleExpiry();",
+		"setControlsDisabled(true);",
 		"clearStatus();",
 	} {
 		if !strings.Contains(stepUpBrowserJS, want) {

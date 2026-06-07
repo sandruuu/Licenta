@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"agent/internal/service/enrollment"
+	flowauthorization "agent/internal/service/flow-authorization"
 	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/service/usersession"
 	"agent/internal/shared/ipc"
@@ -673,6 +674,19 @@ func TestServiceDashboardPromptsSignInWhenEnrolledAndSignedOut(t *testing.T) {
 	dashboard = service.dashboard(peerCtx)
 	if !strings.Contains(dashboard.UserSession.Message, "crm.internal.example") {
 		t.Fatalf("dashboard did not include access prompt target: %+v", dashboard.UserSession)
+	}
+}
+
+func TestAccessPromptFallsBackToAuthorizationResourceID(t *testing.T) {
+	request := trafficinterception.StreamRequest{}
+	authorization := flowauthorization.AuthorizeResponse{ResourceID: "res-from-pdp"}
+
+	resourceID := accessPromptResourceID(request, authorization)
+	if resourceID != "res-from-pdp" {
+		t.Fatalf("resourceID = %q, want authorization resource", resourceID)
+	}
+	if target := accessPromptTargetForResource(request, resourceID); target != "res-from-pdp" {
+		t.Fatalf("target = %q, want authorization resource", target)
 	}
 }
 

@@ -49,32 +49,43 @@ func (service *Service) recordStepUpRequired(request trafficinterception.StreamR
 	if service == nil || service.userSessions == nil {
 		return
 	}
-	target := accessPromptTarget(request)
+	resourceID := accessPromptResourceID(request, authorization)
+	target := accessPromptTargetForResource(request, resourceID)
 	message := "Additional security verification is required to access protected resources."
 	if target != "" {
 		message = "Additional security verification is required to access " + target + "."
 	}
-	service.userSessions.SetAuthenticatedStepUp(message, authorization.StepUpURL, request.ResourceID, target, authorization.StepUpExpiresAt)
+	service.userSessions.SetAuthenticatedStepUp(message, authorization.StepUpURL, resourceID, target, authorization.StepUpExpiresAt)
 }
 
-func (service *Service) recordResourceAllowed(request trafficinterception.StreamRequest, _ flowauthorization.AuthorizeResponse) {
+func (service *Service) recordResourceAllowed(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse) {
 	if service == nil || service.userSessions == nil {
 		return
 	}
-	service.userSessions.MarkAuthenticatedStepUpAllowed(request.ResourceID, accessPromptTarget(request))
+	resourceID := accessPromptResourceID(request, authorization)
+	service.userSessions.MarkAuthenticatedStepUpAllowed(resourceID, accessPromptTargetForResource(request, resourceID))
 }
 
 func (service *Service) recordResourceDenied(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse, err error) {
 	if service == nil || service.userSessions == nil {
 		return
 	}
+	resourceID := accessPromptResourceID(request, authorization)
 	reason := firstNonEmpty(authorization.Reason)
 	if reason == "" && err != nil {
 		reason = err.Error()
 	}
-	service.userSessions.MarkAuthenticatedResourceDenied(request.ResourceID, accessPromptTarget(request), reason)
+	service.userSessions.MarkAuthenticatedResourceDenied(resourceID, accessPromptTargetForResource(request, resourceID), reason)
 }
 
 func accessPromptTarget(request trafficinterception.StreamRequest) string {
-	return firstNonEmpty(request.FQDN, request.ResourceID)
+	return accessPromptTargetForResource(request, request.ResourceID)
+}
+
+func accessPromptResourceID(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse) string {
+	return firstNonEmpty(request.ResourceID, authorization.ResourceID)
+}
+
+func accessPromptTargetForResource(request trafficinterception.StreamRequest, resourceID string) string {
+	return firstNonEmpty(request.FQDN, resourceID)
 }

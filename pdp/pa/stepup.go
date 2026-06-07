@@ -209,12 +209,12 @@ func (manager *StepUpManager) EnsurePendingTOTPSecret(challengeID string, genera
 	if !ok || challenge == nil {
 		return "", fmt.Errorf("step-up challenge not found")
 	}
-	if challenge.Status != StepUpStatusPending && challenge.Status != StepUpStatusAwaiting {
-		return "", fmt.Errorf("step-up challenge is not pending")
-	}
-	if !challenge.ExpiresAt.IsZero() && !time.Now().UTC().Before(challenge.ExpiresAt) {
-		challenge.Status = StepUpStatusExpired
+	now := time.Now().UTC()
+	if manager.expirePendingChallengeLocked(challenge, now) {
 		return "", fmt.Errorf("step-up challenge expired")
+	}
+	if !isPendingStepUpStatus(challenge.Status) {
+		return "", fmt.Errorf("step-up challenge is not pending")
 	}
 	if strings.TrimSpace(challenge.PendingTOTPSecret) != "" {
 		return challenge.PendingTOTPSecret, nil
@@ -235,10 +235,10 @@ func (manager *StepUpManager) PendingTOTPSecret(challengeID string) (string, boo
 	if manager == nil {
 		return "", false
 	}
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
 	challenge := manager.challenges[strings.TrimSpace(challengeID)]
-	if challenge == nil || strings.TrimSpace(challenge.PendingTOTPSecret) == "" {
+	if challenge == nil || manager.expirePendingChallengeLocked(challenge, time.Now().UTC()) || !isPendingStepUpStatus(challenge.Status) || strings.TrimSpace(challenge.PendingTOTPSecret) == "" {
 		return "", false
 	}
 	return challenge.PendingTOTPSecret, true
@@ -261,12 +261,15 @@ func (manager *StepUpManager) CompleteWithAssurance(challengeID string, completi
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
-	if completedAt.After(challenge.ExpiresAt) {
-		challenge.Status = StepUpStatusExpired
+	completedAt = completedAt.UTC()
+	if manager.expirePendingChallengeLocked(challenge, completedAt) {
 		return nil, fmt.Errorf("step-up challenge expired")
 	}
+	if !isPendingStepUpStatus(challenge.Status) {
+		return nil, fmt.Errorf("step-up challenge is not pending")
+	}
 	challenge.Status = StepUpStatusCompleted
-	challenge.CompletedAt = completedAt.UTC()
+	challenge.CompletedAt = completedAt
 	challenge.CompletedMethod = strings.ToLower(strings.TrimSpace(completion.Method))
 	challenge.PendingTOTPSecret = ""
 	if challenge.CompletedMethod == "" {
@@ -303,11 +306,12 @@ func (manager *StepUpManager) RecordFailedAttempt(challengeID, reason string) (*
 	if !ok || challenge == nil {
 		return nil, false
 	}
-	if challenge.Status != StepUpStatusPending && challenge.Status != StepUpStatusAwaiting {
+	now := time.Now().UTC()
+	if manager.expirePendingChallengeLocked(challenge, now) || !isPendingStepUpStatus(challenge.Status) {
 		return cloneStepUpChallenge(challenge), false
 	}
 	challenge.FailedAttempts++
-	challenge.LastFailedAt = time.Now().UTC()
+	challenge.LastFailedAt = now
 	challenge.Reason = strings.TrimSpace(reason)
 	if challenge.FailedAttempts >= maxStepUpFailedAttempts {
 		challenge.Status = StepUpStatusDenied
@@ -360,7 +364,7 @@ func (manager *StepUpManager) findActiveLocked(agentSessionID, userID, deviceID,
 
 func (manager *StepUpManager) expireLocked(now time.Time) {
 	for id, challenge := range manager.challenges {
-		if challenge == nil || challenge.ExpiresAt.IsZero() || now.Before(challenge.ExpiresAt) {
+		if challenge == nil || !stepUpExpiresAtOrBefore(challenge.ExpiresAt, now) {
 			continue
 		}
 		switch challenge.Status {
@@ -371,6 +375,29 @@ func (manager *StepUpManager) expireLocked(now time.Time) {
 			delete(manager.challenges, id)
 		}
 	}
+}
+
+func (manager *StepUpManager) expirePendingChallengeLocked(challenge *StepUpChallenge, now time.Time) bool {
+	if challenge == nil || !isPendingStepUpStatus(challenge.Status) || !stepUpExpiresAtOrBefore(challenge.ExpiresAt, now) {
+		return false
+	}
+	challenge.Status = StepUpStatusExpired
+	challenge.PendingTOTPSecret = ""
+	return true
+}
+
+func isPendingStepUpStatus(status string) bool {
+	return status == StepUpStatusPending || status == StepUpStatusAwaiting
+}
+
+func stepUpExpiresAtOrBefore(expiresAt, now time.Time) bool {
+	if expiresAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !now.UTC().Before(expiresAt.UTC())
 }
 
 func cloneStepUpChallenge(challenge *StepUpChallenge) *StepUpChallenge {

@@ -8,8 +8,32 @@ const stepUpBrowserJS = `
   if (!root) return;
   const challengeID = root.dataset.challengeId || '';
   const csrfToken = root.dataset.csrfToken || '';
-  const status = document.getElementById('webauthn-status');
+  const expiresAt = root.dataset.expiresAt ? Date.parse(root.dataset.expiresAt) : 0;
+  const expiryMessage = 'Verification expired. Try accessing the protected resource again.';
+  let expired = false;
   const alertIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>';
+
+  function statusNode() {
+    let status = document.getElementById('webauthn-status');
+    if (status) return status;
+    let slot = root.querySelector('.stepup-message-slot');
+    if (!slot) {
+      slot = document.createElement('div');
+      slot.className = 'stepup-message-slot';
+      const methods = root.querySelector('.methods');
+      if (methods) {
+        root.insertBefore(slot, methods);
+      } else {
+        root.appendChild(slot);
+      }
+    }
+    status = document.createElement('div');
+    status.id = 'webauthn-status';
+    status.className = 'webauthn-status';
+    status.setAttribute('aria-live', 'polite');
+    slot.appendChild(status);
+    return status;
+  }
 
   function setupOTPInputs() {
     const groups = document.querySelectorAll('.otp');
@@ -136,16 +160,69 @@ const stepUpBrowserJS = `
   }
 
   function clearStatus() {
+    const status = document.getElementById('webauthn-status');
     if (status) status.innerHTML = '';
   }
 
   function showError(message) {
-    if (!status) return;
+    const status = statusNode();
     status.innerHTML = '<div class="page-alert stepup-alert" role="alert">' + alertIcon + '<span>' + escapeHTML(message) + '</span></div>';
+  }
+
+  function isExpired() {
+    return Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() >= expiresAt;
+  }
+
+  function setControlsDisabled(disabled) {
+    root.querySelectorAll('button,input:not([type="hidden"]),select,textarea').forEach((control) => {
+      control.disabled = disabled;
+    });
+    root.querySelectorAll('a.method-link,a.button-link').forEach((link) => {
+      if (disabled) {
+        link.setAttribute('aria-disabled', 'true');
+        link.dataset.previousTabIndex = link.getAttribute('tabindex') || '';
+        link.setAttribute('tabindex', '-1');
+      } else {
+        link.removeAttribute('aria-disabled');
+        if (link.dataset.previousTabIndex) {
+          link.setAttribute('tabindex', link.dataset.previousTabIndex);
+        } else {
+          link.removeAttribute('tabindex');
+        }
+      }
+    });
+  }
+
+  function markExpired() {
+    if (!isExpired()) return false;
+    if (!expired) {
+      expired = true;
+      root.classList.add('stepup-expired');
+      setControlsDisabled(true);
+      showError(expiryMessage);
+    }
+    return true;
+  }
+
+  function requireActive(event) {
+    if (!markExpired()) return true;
+    if (event) event.preventDefault();
+    return false;
+  }
+
+  function scheduleExpiry() {
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) return;
+    const delay = expiresAt - Date.now();
+    if (delay <= 0) {
+      markExpired();
+      return;
+    }
+    window.setTimeout(markExpired, delay);
   }
 
   async function verifyWebAuthn() {
     const button = document.getElementById('webauthn-verify-button');
+    if (!button || !requireActive()) return;
     try {
       button.disabled = true;
       clearStatus();
@@ -155,8 +232,10 @@ const stepUpBrowserJS = `
         body: JSON.stringify({ challenge_id: challengeID }),
       });
       if (!begin.ok) throw new Error('passkey verification failed');
+      if (!requireActive()) return;
       const options = await begin.json();
       const credential = await navigator.credentials.get({ publicKey: prepareRequestOptions(options) });
+      if (!requireActive()) return;
       const finish = await fetch('/api/step-up/webauthn/finish?challenge_id=' + encodeURIComponent(challengeID), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
@@ -166,6 +245,7 @@ const stepUpBrowserJS = `
       clearStatus();
       window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
     } catch (_) {
+      if (markExpired()) return;
       showError('Passkey verification failed. Try again.');
       if (button) button.disabled = false;
     }
@@ -173,6 +253,7 @@ const stepUpBrowserJS = `
 
   async function registerWebAuthn() {
     const button = document.getElementById('webauthn-register-button');
+    if (!button || !requireActive()) return;
     try {
       button.disabled = true;
       clearStatus();
@@ -182,8 +263,10 @@ const stepUpBrowserJS = `
         body: JSON.stringify({ challenge_id: challengeID }),
       });
       if (!begin.ok) throw new Error('passkey setup failed');
+      if (!requireActive()) return;
       const options = await begin.json();
       const credential = await navigator.credentials.create({ publicKey: prepareCreationOptions(options) });
+      if (!requireActive()) return;
       const finish = await fetch('/api/step-up/webauthn/register/finish?challenge_id=' + encodeURIComponent(challengeID), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
@@ -193,12 +276,20 @@ const stepUpBrowserJS = `
       clearStatus();
       window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
     } catch (_) {
+      if (markExpired()) return;
       showError('Passkey setup failed. Try again.');
       if (button) button.disabled = false;
     }
   }
 
   setupOTPInputs();
+  root.querySelectorAll('form').forEach((form) => {
+    form.addEventListener('submit', requireActive);
+  });
+  root.querySelectorAll('a.method-link,a.button-link').forEach((link) => {
+    link.addEventListener('click', requireActive);
+  });
+  scheduleExpiry();
 
   const verifyButton = document.getElementById('webauthn-verify-button');
   if (verifyButton) verifyButton.addEventListener('click', verifyWebAuthn);

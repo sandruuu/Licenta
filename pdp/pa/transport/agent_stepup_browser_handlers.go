@@ -54,8 +54,8 @@ func (s *Server) handleBrowserStepUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	if !challenge.ExpiresAt.IsZero() && now.After(challenge.ExpiresAt) && challenge.Status != pa.StepUpStatusCompleted {
-		renderEnrollmentPage(w, "Verification expired", "Try accessing the protected resource again.", "", false)
+	if stepUpChallengeExpired(challenge, now) && challenge.Status != pa.StepUpStatusCompleted {
+		renderStepUpExpiredPage(w)
 		return
 	}
 	switch challenge.Status {
@@ -116,6 +116,10 @@ func (s *Server) handleBrowserStepUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge) {
+	if stepUpChallengeExpired(challenge, time.Now().UTC()) {
+		renderStepUpExpiredPage(w)
+		return
+	}
 	if !methodAllowed(challenge.Methods, "totp") {
 		s.renderStepUpPage(w, r, challenge, "Authenticator app verification is not allowed for this request.", "totp")
 		return
@@ -173,6 +177,10 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 	completed, err := s.pa.StepUps.Complete(challenge.ID, "totp", time.Now().UTC())
 	if err != nil {
 		log.Printf("[STEP-UP] Completing TOTP challenge failed: challenge=%s err=%v", challenge.ID, err)
+		if strings.Contains(strings.ToLower(err.Error()), "expired") {
+			renderStepUpExpiredPage(w)
+			return
+		}
 		http.Error(w, "Step-up challenge could not be completed", http.StatusConflict)
 		return
 	}
@@ -184,6 +192,10 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 }
 
 func (s *Server) handleStepUpReauth(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge) {
+	if stepUpChallengeExpired(challenge, time.Now().UTC()) {
+		renderStepUpExpiredPage(w)
+		return
+	}
 	targetMethod := strings.ToLower(strings.TrimSpace(r.Form.Get("target_method")))
 	if targetMethod == "" || !methodAllowed(challenge.Methods, targetMethod) {
 		s.renderStepUpPage(w, r, challenge, "Choose an MFA method to continue.", targetMethod)
@@ -283,6 +295,10 @@ func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challe
 		actionMarkup = `<div class="stepup-selection-spacer" aria-hidden="true"></div>`
 	}
 	panelClass := "panel stepup-panel" + stepUpPanelVariantClass(methods)
+	expiresAt := ""
+	if !challenge.ExpiresAt.IsZero() {
+		expiresAt = challenge.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TrustCloud verification</title><style>
@@ -386,6 +402,15 @@ func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challe
   background:rgba(44,97,100,.085);
   box-shadow:0 0 0 4px var(--color-accent-muted),0 8px 16px rgba(42,42,42,.12);
   outline:none;
+}
+.stepup-expired .method-link,
+.stepup-expired .button-link,
+.stepup-expired button,
+.stepup-expired input,
+.stepup-expired select,
+.stepup-expired textarea{
+  opacity:.55;
+  cursor:not-allowed;
 }
 .method.active .method-link{display:none}
 .method-head{
@@ -555,7 +580,7 @@ func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challe
   height:28px;
   margin-top:4px;
 }
-</style></head><body><main id="stepup-root" class="` + panelClass + `" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `">` + browserBrandMarkup + `<div class="stepup-heading` + stepUpHeadingClass(hasActiveMethod) + `"><h1>` + html.EscapeString(pageTitle) + `</h1>` + pageCopyMarkup + `</div>` + messageSlot + `<div class="methods">` + methodCards.String() + actionMarkup + `</div></main><script src="/browser/step-up/assets/stepup.js" defer></script></body></html>`))
+</style></head><body><main id="stepup-root" class="` + panelClass + `" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `" data-expires-at="` + html.EscapeString(expiresAt) + `">` + browserBrandMarkup + `<div class="stepup-heading` + stepUpHeadingClass(hasActiveMethod) + `"><h1>` + html.EscapeString(pageTitle) + `</h1>` + pageCopyMarkup + `</div>` + messageSlot + `<div class="methods">` + methodCards.String() + actionMarkup + `</div></main><script src="/browser/step-up/assets/stepup.js" defer></script></body></html>`))
 }
 
 func (s *Server) renderStepUpMethodCard(challenge *pa.StepUpChallenge, method stepUpPageMethod, setup *models.MFAEnrollResponse, csrfToken string) string {
@@ -1208,7 +1233,7 @@ func (s *Server) pendingStepUpChallengeForMethod(challengeID, method string, req
 	if challenge.Status != pa.StepUpStatusPending && challenge.Status != pa.StepUpStatusAwaiting {
 		return nil, nil, false
 	}
-	if !challenge.ExpiresAt.IsZero() && time.Now().UTC().After(challenge.ExpiresAt) {
+	if stepUpChallengeExpired(challenge, time.Now().UTC()) {
 		return nil, nil, false
 	}
 	if !methodAllowed(challenge.Methods, method) {
@@ -1222,6 +1247,20 @@ func (s *Server) pendingStepUpChallengeForMethod(challengeID, method string, req
 		return nil, nil, false
 	}
 	return challenge, user, true
+}
+
+func stepUpChallengeExpired(challenge *pa.StepUpChallenge, now time.Time) bool {
+	if challenge == nil || challenge.ExpiresAt.IsZero() {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return !now.UTC().Before(challenge.ExpiresAt.UTC())
+}
+
+func renderStepUpExpiredPage(w http.ResponseWriter) {
+	renderEnrollmentPage(w, "Verification expired", "Try accessing the protected resource again.", "", false)
 }
 
 func methodAllowed(methods []string, expected string) bool {
