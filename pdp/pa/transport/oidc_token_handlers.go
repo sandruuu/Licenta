@@ -102,9 +102,6 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.pa.Audit.LogEvent("oidc_token_refresh", newRT.UserID, newRT.Username,
-			r.RemoteAddr, "", "", "Token refresh for "+clientID, true)
-
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"access_token":  token,
 			"token_type":    "Bearer",
@@ -155,9 +152,6 @@ func (s *Server) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			idToken = freshToken
 		}
 	}
-
-	s.pa.Audit.LogEvent("oidc_token_exchange", authCode.UserID, authCode.Username,
-		r.RemoteAddr, "", "", "Token exchange for "+clientID, true)
 
 	response := map[string]interface{}{
 		"access_token":  authCode.AuthToken,

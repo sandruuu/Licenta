@@ -20,6 +20,7 @@ import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import Modal from '../components/ui/Modal';
 import FormField, { FormInput, FormSelect } from '../components/ui/FormField';
 import Pagination from '../components/ui/Pagination';
+import StatusText from '../components/ui/StatusText';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { formatDateTime } from '../utils/format';
 import { navigateWithReturn } from '../utils/navigation';
@@ -38,7 +39,7 @@ function isRevokedGateway(gateway) {
 
 function invalidatedValue(row, value) {
   if (isRevokedGateway(row)) {
-    return <Badge variant="danger">Invalidated</Badge>;
+    return <StatusText variant="danger">Invalidated</StatusText>;
   }
   return <span className="text-mono">{formatDateTime(value)}</span>;
 }
@@ -193,7 +194,7 @@ export default function Gateways() {
       render: (value) => organizationByID.get(value)?.name || value || '-',
     },
     { key: 'fqdn', label: 'FQDN', render: (value) => <span className="text-mono">{value || '-'}</span> },
-    { key: 'status', label: 'Status', render: (value) => <Badge variant={statusVariant(value)}>{value || 'unknown'}</Badge> },
+    { key: 'status', label: 'Status', render: (value) => <StatusText variant={statusVariant(value)}>{value || 'unknown'}</StatusText> },
     { key: 'token_expires_at', label: 'Token Expires', render: (value, row) => invalidatedValue(row, value) },
     { key: 'cert_expires_at', label: 'Cert Expires', render: (value, row) => invalidatedValue(row, value) },
     {
@@ -278,7 +279,7 @@ export default function Gateways() {
   };
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
         title="Gateways"
         subtitle="Enroll edge gateways under one organization and attach resources to them"
@@ -312,16 +313,19 @@ export default function Gateways() {
         </ListToolbarSelect>
       </ListToolbar>
 
-      <DataTable
-        columns={columns}
-        data={gatewayPagination.pageItems}
-        loading={loading}
-        minRows={gatewayPagination.pageSize}
-        emptyIcon={Router}
-        emptyTitle={hasFilters ? 'No gateways match filters' : 'No gateways created yet'}
-        emptyMessage={hasFilters ? 'Adjust search or filters to find gateways.' : 'Create an organization first, then enroll its first gateway.'}
-        onRowClick={(row) => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(row.id)}`, location)}
-      />
+      <div className="min-h-0 flex-1">
+        <DataTable
+          columns={columns}
+          data={gatewayPagination.pageItems}
+          loading={loading}
+          minRows={gatewayPagination.pageSize}
+          emptyIcon={Router}
+          emptyTitle={hasFilters ? 'No gateways match filters' : 'No gateways created yet'}
+          emptyMessage={hasFilters ? 'Adjust search or filters to find gateways.' : 'Create an organization first, then enroll its first gateway.'}
+          fillHeight
+          onRowClick={(row) => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(row.id)}`, location)}
+        />
+      </div>
 
       {/* <div className="pt-6">
         <Pagination
@@ -453,6 +457,6 @@ export default function Gateways() {
           onCreate={gatewayCreate.handleGatewayCreate}
         />
       ) : null}
-    </>
+    </div>
   );
 }

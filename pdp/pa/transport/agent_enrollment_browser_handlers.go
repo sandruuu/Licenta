@@ -24,7 +24,9 @@ func (s *Server) handleBrowserEnroll(w http.ResponseWriter, r *http.Request) {
 		renderEnrollmentPage(w, "Enrollment unavailable", "The enrollment session was not found or has expired.", "", false)
 		return
 	}
-	if time.Now().UTC().After(session.ExpiresAt) {
+	now := time.Now().UTC()
+	if now.After(session.ExpiresAt) {
+		s.pa.Enrollment.ExpireInteractiveSessionIfExpired(session.ID, now)
 		renderEnrollmentPage(w, "Enrollment expired", "Start enrollment again from TrustAgent.", "", false)
 		return
 	}

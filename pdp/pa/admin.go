@@ -1,6 +1,8 @@
 package pa
 
 import (
+	"time"
+
 	"pdp/config"
 	"pdp/models"
 	"pdp/pa/audit"
@@ -14,6 +16,7 @@ import (
 	"pdp/pa/sessions"
 	"pdp/pe/evaluation"
 	"pdp/store"
+	"strings"
 )
 
 // PolicyAdministrator (PA) is the central coordinator that ties together
@@ -61,6 +64,18 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 		Store:     s,
 		Cfg:       cfg,
 	}
+
+	pa.Enrollment.SetInteractiveSessionExpiredHandler(func(session enrollment.InteractiveSession, _ time.Time) {
+		resource := strings.TrimSpace(session.Hostname)
+		if resource == "" {
+			resource = strings.TrimSpace(session.ID)
+		}
+		details := "Device enrollment expired"
+		if strings.TrimSpace(session.Hostname) != "" {
+			details += " for " + strings.TrimSpace(session.Hostname)
+		}
+		auditLogger.LogEvent("enrollment_expired", "", "", strings.TrimSpace(session.SourceIP), resource, models.DecisionDeny, details, false)
+	})
 
 	return pa
 }

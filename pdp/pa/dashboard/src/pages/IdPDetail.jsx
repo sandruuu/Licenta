@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  Building2,
+  ChevronLeft,
   Edit2,
   Key,
   Search,
@@ -10,29 +10,35 @@ import {
   Users,
 } from 'lucide-react';
 import { getDirectoryGroups, getDirectoryUsers, getIdPs, getOrganizations, updateIdP } from '../api';
-import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import FormField, { FormCheckbox, FormInput } from '../components/ui/FormField';
+import StatusText from '../components/ui/StatusText';
 import {
-  BackIconButton,
-  DetailDivider,
   DetailEmptyState as EmptyState,
-  DetailSummaryItem,
-  detailSectionTitleClass,
   InlineBackButton,
 } from '../components/ui/Detail';
 import { formatDateTime } from '../utils/format';
 import { navigateBack } from '../utils/navigation';
 
-function DetailValue({ label, value, mono = false }) {
+const detailPanelClass = 'rounded-md border border-border bg-transparent';
+const tableRowClass = 'min-h-[92px] rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
+const panelTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
+const panelCountClass = 'text-sm font-bold text-text-muted';
+const tableHeaderWrapClass = 'relative px-2 pr-5';
+const tableHeaderCellClass = "relative flex min-w-0 items-center justify-center px-4 py-4 text-center text-[11px] font-bold uppercase tracking-[0.14em] text-text-muted after:absolute after:bottom-[2px] after:right-0 after:h-5 after:w-[2px] after:bg-border after:content-[''] last:after:hidden";
+const tableScrollClass = 'mt-3 h-[312px] overflow-y-auto px-2 pr-4 [scrollbar-gutter:stable]';
+
+function DetailField({ label, value, mono = false, children }) {
   return (
-    <DetailSummaryItem>
-      <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</span>
-      <span className={`mt-1 block truncate text-base font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
-        {value || '-'}
-      </span>
-    </DetailSummaryItem>
+    <div className="min-w-0">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">{label}</p>
+      {children || (
+        <p className={`mt-2 truncate text-sm font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
+          {value === undefined || value === null || value === '' ? '-' : value}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -202,132 +208,146 @@ export default function IdPDetail() {
     <div className="space-y-7">
       {error && <div className="rounded-md border border-danger bg-danger-muted p-3 text-sm text-danger">{error}</div>}
 
-      <section className="p-5">
-        <div className="space-y-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back to organization" onClick={() => navigateBack(navigate, backTarget, location)}>
-                  <ArrowLeft size={16} />
-                </BackIconButton>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-2xl font-bold leading-tight text-text-primary">{idp.name}</h1>
+      <section className="space-y-5 pb-5 pr-3 pt-1">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                aria-label="Back to organization"
+                onClick={() => navigateBack(navigate, backTarget, location)}
+                className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center text-text-primary transition-colors hover:text-accent focus-visible:text-accent active:text-accent-hover"
+              >
+                <ChevronLeft size={34} strokeWidth={3} />
+              </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{idp.name}</h1>
+                  <StatusText variant={idp.enabled === false ? 'danger' : 'success'}>
+                    {idp.enabled === false ? 'Disabled' : 'Enabled'}
+                  </StatusText>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>{organization?.name || organizationID}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <Button onClick={openEdit}>
+              <Edit2 size={14} />
+              Edit
+            </Button>
+          </div>
+        </div>
+
+        <div className="border-t border-border" />
+
+        <section className={`${detailPanelClass} p-5`}>
+          <h2 className={panelTitleClass}>Configuration data</h2>
+          <div className="mt-5 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+            <DetailField label="Name" value={idp.name} />
+            <DetailField label="Issuer" value={idp.issuer} mono />
+            <DetailField label="Client ID" value={idp.client_id} mono />
+            <DetailField label="Type" value={(idp.type || 'oidc').toUpperCase()} />
+            <DetailField label="Scopes" value={idp.scopes || 'openid profile email groups'} mono />
+            <DetailField label="SCIM token">
+              <p className={`mt-2 text-sm font-bold uppercase ${idp.has_scim_token ? 'text-[#638f67]' : 'text-[#b46a62]'}`}>
+                {idp.has_scim_token ? 'CONFIGURED' : 'NOT CONFIGURED'}
+              </p>
+            </DetailField>
+            <DetailField label="Groups" value={groups.length} />
+            <DetailField label="Users" value={users.length} />
+            <DetailField label="Updated" value={formatDateTime(idp.updated_at)} />
+          </div>
+        </section>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          <section className={`${detailPanelClass} p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className={panelTitleClass}>
+                Groups <span className={panelCountClass}>({filteredGroups.length} of {groups.length})</span>
+              </h2>
+              <div className="w-full sm:max-w-[260px]">
+                <SearchField value={groupQuery} onChange={setGroupQuery} placeholder="Search groups" />
+              </div>
+            </div>
+
+            {groups.length === 0 ? (
+              <EmptyState icon={Users} title="No groups" message="When the IdP provisions groups through SCIM, they appear here." />
+            ) : filteredGroups.length === 0 ? (
+              <EmptyState icon={Users} title="No groups match" message="Adjust search to find a SCIM group." />
+            ) : (
+              <div className="mt-4 min-w-0">
+                <div className={tableHeaderWrapClass}>
+                  <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-2 right-5 h-[2px] bg-border" />
+                  <div className="grid grid-cols-[minmax(0,1.35fr)_110px_minmax(0,0.85fr)]">
+                    <div className={tableHeaderCellClass}>Group</div>
+                    <div className={tableHeaderCellClass}>Members</div>
+                    <div className={tableHeaderCellClass}>Updated</div>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                    <span>{organization?.name || organizationID}</span>
+                </div>
+                <div className={tableScrollClass}>
+                  <div className="space-y-3 pb-1">
+                    {filteredGroups.map((group) => (
+                      <div key={group.id} className={`${tableRowClass} grid grid-cols-[minmax(0,1.35fr)_110px_minmax(0,0.85fr)] items-stretch`}>
+                        <div className="flex min-w-0 flex-col items-center justify-center px-4 py-4 text-center">
+                          <p className="truncate text-sm font-semibold text-text-primary">{group.display_name || group.id}</p>
+                          <p className="mt-1 truncate text-xs text-text-secondary">{group.external_id || group.id}</p>
+                        </div>
+                        <p className="flex items-center justify-center px-4 py-4 text-center text-xs font-bold text-text-secondary">{(group.member_ids || []).length}</p>
+                        <p className="flex items-center justify-center px-4 py-4 text-center text-xs font-semibold text-text-secondary">{formatDateTime(group.updated_at)}</p>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
+            )}
+          </section>
+
+          <section className={`${detailPanelClass} p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className={panelTitleClass}>
+                Users <span className={panelCountClass}>({filteredUsers.length} of {users.length})</span>
+              </h2>
+              <div className="w-full sm:max-w-[260px]">
+                <SearchField value={userQuery} onChange={setUserQuery} placeholder="Search users" />
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <Button onClick={openEdit}>
-                <Edit2 size={14} />
-              </Button>
-            </div>
-          </div>
 
-          <DetailDivider />
-
-          <div>
-            <p className={detailSectionTitleClass}>Configuration</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              <DetailValue label="Issuer" value={idp.issuer} mono />
-              <DetailValue label="Client ID" value={idp.client_id} mono />
-              <DetailValue label="Type" value={(idp.type || 'oidc').toUpperCase()} />
-              <DetailValue label="Scopes" value={idp.scopes || 'openid profile email groups'} mono />
-              <DetailValue label="SCIM token" value={idp.has_scim_token ? 'Configured' : 'Not configured'} />
-              <DetailValue label="Updated" value={formatDateTime(idp.updated_at)} />
-            </div>
-          </div>
-
-          <DetailDivider />
-
-          <div className="grid gap-5 xl:grid-cols-2">
-            <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
-              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className={detailSectionTitleClass}>Groups ({filteredGroups.length} of {groups.length})</p>
-                <div className="w-full sm:max-w-[260px]">
-                  <SearchField value={groupQuery} onChange={setGroupQuery} placeholder="Search groups" />
+            {users.length === 0 ? (
+              <EmptyState icon={UserRoundCheck} title="No users" message="When the IdP provisions users through SCIM, they appear here." />
+            ) : filteredUsers.length === 0 ? (
+              <EmptyState icon={UserRoundCheck} title="No users match" message="Adjust search to find a SCIM user." />
+            ) : (
+              <div className="mt-4 min-w-0">
+                <div className={tableHeaderWrapClass}>
+                  <div aria-hidden="true" className="pointer-events-none absolute bottom-0 left-2 right-5 h-[2px] bg-border" />
+                  <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_90px]">
+                    <div className={tableHeaderCellClass}>User</div>
+                    <div className={tableHeaderCellClass}>Groups</div>
+                    <div className={tableHeaderCellClass}>Status</div>
+                  </div>
+                </div>
+                <div className={tableScrollClass}>
+                  <div className="space-y-3 pb-1">
+                    {filteredUsers.map((user) => (
+                      <div key={user.id} className={`${tableRowClass} grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_90px] items-stretch`}>
+                        <div className="flex min-w-0 flex-col items-center justify-center px-4 py-4 text-center">
+                          <p className="truncate text-sm font-semibold text-text-primary">{user.display_name || user.user_name || user.id}</p>
+                          <p className="mt-1 truncate text-xs text-text-secondary">{user.email || user.user_name || '-'}</p>
+                        </div>
+                        <p className="flex items-center justify-center px-4 py-4 text-center text-xs font-semibold text-text-secondary">{(groupsByUserID.get(user.id) || []).join(', ') || 'No groups'}</p>
+                        <div className="flex items-center justify-center px-4 py-4 text-center">
+                          <StatusText variant={user.active ? 'success' : 'danger'}>{user.active ? 'Active' : 'Disabled'}</StatusText>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-              {groups.length === 0 ? (
-                <EmptyState icon={Users} title="No groups" message="When the IdP provisions groups through SCIM, they appear here." />
-              ) : filteredGroups.length === 0 ? (
-                <EmptyState icon={Users} title="No groups match" message="Adjust search to find a SCIM group." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[520px] border-collapse">
-                    <thead>
-                      <tr className="border-b border-border text-left text-[10px] font-bold uppercase tracking-[0.12em] text-text-muted">
-                        <th className="px-3 py-3">Group</th>
-                        <th className="px-3 py-3">Members</th>
-                        <th className="px-3 py-3">Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredGroups.map((group) => (
-                        <tr key={group.id} className="border-b border-border-light last:border-b-0">
-                          <td className="px-3 py-3 align-top">
-                            <p className="truncate text-sm font-semibold text-text-primary">{group.display_name || group.id}</p>
-                            <p className="mt-1 truncate text-xs text-text-secondary">{group.external_id || group.id}</p>
-                          </td>
-                          <td className="px-3 py-3 align-top">
-                            <Badge variant="accent">{(group.member_ids || []).length} members</Badge>
-                          </td>
-                          <td className="px-3 py-3 align-top text-xs font-semibold text-text-secondary">
-                            {formatDateTime(group.updated_at)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
-              <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className={detailSectionTitleClass}>Users ({filteredUsers.length} of {users.length})</p>
-                <div className="w-full sm:max-w-[260px]">
-                  <SearchField value={userQuery} onChange={setUserQuery} placeholder="Search users" />
-                </div>
-              </div>
-              {users.length === 0 ? (
-                <EmptyState icon={UserRoundCheck} title="No users" message="When the IdP provisions users through SCIM, they appear here." />
-              ) : filteredUsers.length === 0 ? (
-                <EmptyState icon={UserRoundCheck} title="No users match" message="Adjust search to find a SCIM user." />
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] border-collapse">
-                    <thead>
-                      <tr className="border-b border-border text-left text-[10px] font-bold uppercase tracking-[0.12em] text-text-muted">
-                        <th className="px-3 py-3">User</th>
-                        <th className="px-3 py-3">Groups</th>
-                        <th className="px-3 py-3">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredUsers.map((user) => (
-                        <tr key={user.id} className="border-b border-border-light last:border-b-0">
-                          <td className="px-3 py-3 align-top">
-                            <p className="truncate text-sm font-semibold text-text-primary">{user.display_name || user.user_name || user.id}</p>
-                            <p className="mt-1 truncate text-xs text-text-secondary">{user.email || user.user_name || '-'}</p>
-                          </td>
-                          <td className="px-3 py-3 align-top text-xs font-semibold text-text-secondary">
-                            <span className="line-clamp-2">{(groupsByUserID.get(user.id) || []).join(', ') || 'No groups'}</span>
-                          </td>
-                          <td className="px-3 py-3 align-top">
-                            <Badge variant={user.active ? 'success' : 'danger'}>{user.active ? 'Active' : 'Disabled'}</Badge>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
+            )}
+          </section>
         </div>
       </section>
 

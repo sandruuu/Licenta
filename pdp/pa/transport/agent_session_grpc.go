@@ -92,6 +92,10 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		ExpiresAt:             expiresAt,
 	}
 	service.server.agentSessions.save(session)
+	if service.server.pa.Audit != nil {
+		service.server.pa.Audit.LogEvent("agent_user_authentication_request", "", "", grpcPeerIP(ctx), deviceID, "",
+			"User authentication requested for TrustAgent session", true)
+	}
 	return structpb.NewStruct(map[string]interface{}{
 		"session_request_id":    session.ID,
 		"auth_url":              session.AuthURL,

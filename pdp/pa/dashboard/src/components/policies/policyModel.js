@@ -25,6 +25,13 @@ export const AUTHENTICATION_POLICIES = [
   },
 ];
 
+export const STEP_UP_METHOD_OPTIONS = [
+  { value: 'totp', label: 'Authenticator app' },
+  { value: 'webauthn', label: 'Passkey or security key' },
+];
+
+const REQUIRED_STEP_UP_METHOD = STEP_UP_METHOD_OPTIONS[0].value;
+
 export const NEW_USER_POLICIES = [
   {
     value: 'require_enrollment',
@@ -201,10 +208,10 @@ export const POLICY_SECTIONS = [
   },
   {
     id: 'devicehealth',
-    label: 'Device health',
+    label: 'Device data',
     category: 'Devices',
     fields: ['required_checks', 'required_check_status'],
-    description: 'Require selected device posture checks to report the expected status.',
+    description: 'Require selected device data checks to report the expected status.',
     protects: 'Keeps endpoints that fail required health checks from reaching protected resources.',
     recommendation: 'Start with high-signal checks such as firewall, disk encryption, and updates.',
   },
@@ -313,7 +320,7 @@ export const EMPTY_POLICY_FORM = {
   network_require_mfa_cidrs: [],
   network_blocked_cidrs: [],
   network_deny_other: false,
-  step_up_methods: 'totp, webauthn',
+  step_up_methods: REQUIRED_STEP_UP_METHOD,
 };
 
 export const EMPTY_ASSIGNMENT_FORM = {
@@ -339,6 +346,19 @@ export function splitList(value) {
 
 export function listToText(value) {
   return Array.isArray(value) ? value.join(', ') : '';
+}
+
+export function normalizeStepUpMethods(value) {
+  const validMethods = new Set(STEP_UP_METHOD_OPTIONS.map((method) => method.value));
+  const selectedMethods = new Set([REQUIRED_STEP_UP_METHOD]);
+  splitList(value).forEach((method) => {
+    if (validMethods.has(method)) {
+      selectedMethods.add(method);
+    }
+  });
+  return STEP_UP_METHOD_OPTIONS
+    .map((method) => method.value)
+    .filter((method) => selectedMethods.has(method));
 }
 
 export function deviceCheckOptionsFromReports(reports = []) {
@@ -424,9 +444,7 @@ export function policyFormFromRule(rule) {
   const userLocation = conditions.user_location || {};
   const network = conditions.network || {};
   const riskBasedAuth = conditions.risk_based_authentication || {};
-  const stepUpMethods = authentication.step_up_methods?.length
-    ? authentication.step_up_methods
-    : ['totp', 'webauthn'];
+  const stepUpMethods = normalizeStepUpMethods(authentication.step_up_methods);
   return {
     ...EMPTY_POLICY_FORM,
     id: rule?.id,
@@ -474,7 +492,7 @@ export function inferEnabledSections(form) {
 
 export function conditionsFromForm(form, enabledSections = inferEnabledSections(form)) {
   const requiredChecks = requiredDeviceChecksFromValue(form.required_checks);
-  const stepUpMethods = splitList(form.step_up_methods || 'totp, webauthn');
+  const stepUpMethods = normalizeStepUpMethods(form.step_up_methods);
   const allowedCIDRs = splitList(form.network_allowed_cidrs);
   const skipMFACIDRs = splitList(form.network_skip_mfa_cidrs);
   const requireMFACIDRs = splitList(form.network_require_mfa_cidrs);

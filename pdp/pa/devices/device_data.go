@@ -65,13 +65,17 @@ func (service *Service) RecordHealth(report *models.DeviceHealthReport) {
 }
 
 func (service *Service) RecordDeviceData(report *models.DeviceDataReport) {
+	service.RecordDeviceDataWithSourceIP(report, "")
+}
+
+func (service *Service) RecordDeviceDataWithSourceIP(report *models.DeviceDataReport, sourceIP string) {
 	if service == nil || service.store == nil || report == nil {
 		return
 	}
 	service.store.SaveDeviceData(report)
 	if service.audit != nil {
-		service.audit.LogEvent("device_data_report", "", "", "", report.DeviceID,
-			"", "Raw device data reported", true)
+		service.audit.LogEvent("device_data_report", "", "", strings.TrimSpace(sourceIP), report.DeviceID,
+			"", "Device data received", true)
 	}
 	log.Printf("[PA] Device data report received: device=%s checks=%d", report.DeviceID, len(report.Checks))
 }
@@ -103,6 +107,10 @@ func (service *Service) AcceptHealthReport(certDeviceID string, report models.De
 }
 
 func (service *Service) AcceptDeviceDataReport(certDeviceID string, report models.DeviceDataReport) (models.DeviceDataReport, error) {
+	return service.AcceptDeviceDataReportWithSourceIP(certDeviceID, report, "")
+}
+
+func (service *Service) AcceptDeviceDataReportWithSourceIP(certDeviceID string, report models.DeviceDataReport, sourceIP string) (models.DeviceDataReport, error) {
 	if err := service.ready(); err != nil {
 		return report, err
 	}
@@ -121,7 +129,7 @@ func (service *Service) AcceptDeviceDataReport(certDeviceID string, report model
 	} else {
 		report.CollectedAt = report.CollectedAt.UTC()
 	}
-	service.RecordDeviceData(&report)
+	service.RecordDeviceDataWithSourceIP(&report, sourceIP)
 	service.publish(events.TopicHealthChanged, map[string]string{
 		"device_id": report.DeviceID,
 		"tenant_id": report.TenantID,

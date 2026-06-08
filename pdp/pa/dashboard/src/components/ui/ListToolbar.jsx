@@ -7,10 +7,11 @@ export default function ListToolbar({
   placeholder = 'Search...',
   summary,
   children,
+  className = '',
 }) {
   return (
-    <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-      <div className="relative w-full lg:max-w-[420px]">
+    <div className={`mb-4 grid gap-3 lg:grid-cols-[minmax(0,420px)_minmax(0,1fr)] lg:items-center ${className}`}>
+      <div className="relative w-full">
         <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" />
         <input
           value={query}
@@ -20,13 +21,13 @@ export default function ListToolbar({
         />
       </div>
       {(summary || children) && (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end lg:min-w-0 lg:justify-self-end">
           {summary && (
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-text-muted">
+            <span className="w-[16ch] shrink-0 text-right text-xs font-bold uppercase tabular-nums tracking-[0.12em] text-text-muted">
               {summary}
             </span>
           )}
-          {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+          {children && <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:shrink-0">{children}</div>}
         </div>
       )}
     </div>

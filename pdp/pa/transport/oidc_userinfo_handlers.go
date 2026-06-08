@@ -84,8 +84,6 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.pa.Store.RevokeToken(claims.ID, expiresAt)
-	s.pa.Audit.LogEvent("token_revoked", claims.UserID, claims.Username,
-		r.RemoteAddr, "", "", "User revoked own token", true)
 
 	log.Printf("[AUTH] Token revoked: jti=%s user=%s", claims.ID, claims.Username)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})

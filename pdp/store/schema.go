@@ -382,6 +382,9 @@ func (s *Store) createTables() error {
 	if err := s.migrateDeviceDataFromOldTable(); err != nil {
 		return err
 	}
+	if err := s.removeSuppressedAuditEntries(); err != nil {
+		return err
+	}
 	if err := s.enforceSingleIdentityProviderPerTenant(); err != nil {
 		return err
 	}

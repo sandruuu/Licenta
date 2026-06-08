@@ -1,6 +1,6 @@
 import {
   Building2,
-  CheckCircle2,
+  Check,
   FileText,
   Layers3,
   LockKeyhole,
@@ -32,7 +32,7 @@ export const layerIcons = {
 };
 
 export const actionIcons = {
-  allow: CheckCircle2,
+  allow: Check,
   step_up_required: ShieldAlert,
   deny: XCircle,
 };

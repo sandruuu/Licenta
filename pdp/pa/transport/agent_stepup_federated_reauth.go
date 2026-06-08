@@ -131,7 +131,7 @@ func (s *Server) handleStepUpFederatedCallback(w http.ResponseWriter, r *http.Re
 	}
 	s.setStepUpAuthCookie(w, authSession)
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("agent_mfa_enrollment_reauth", user.ID, user.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "Federated re-authentication completed for MFA enrollment", true)
+		s.pa.Audit.LogEvent("agent_mfa_enrollment_reauth", user.ID, user.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "Organization sign-in completed for MFA enrollment", true)
 	}
 	http.Redirect(w, r, stepUpMethodURL(challenge.ID, session.TargetMethod), http.StatusFound)
 	return true

@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
+  Background,
+  Controls,
   Handle,
   Position,
   ReactFlow,
@@ -16,7 +18,7 @@ import {
 import { currentLocationPath, navigateWithReturn } from '../../utils/navigation';
 
 const NODE_WIDTH = 280;
-const NODE_HEIGHT = 104;
+const NODE_HEIGHT = 86;
 const NODE_X_GAP = 360;
 const NODE_Y_GAP = 126;
 const CANVAS_PADDING = 48;
@@ -28,18 +30,18 @@ const iconMap = {
   empty: Database,
 };
 
-const avatarClass = {
-  organization: 'bg-accent text-white-smoke',
-  gateway: 'bg-accent-muted text-accent',
-  resource: 'bg-success-muted text-success',
-  neutral: 'bg-surface-secondary text-text-secondary',
+const statusClass = {
+  success: 'text-[#638f67]',
+  warning: 'text-[#c7a23a]',
+  danger: 'text-[#b46a62]',
+  neutral: 'text-text-muted',
 };
 
-const statusClass = {
-  success: 'border-success/30 bg-success-muted text-success',
-  warning: 'border-warning/30 bg-warning-muted text-warning',
-  danger: 'border-danger/30 bg-danger-muted text-danger',
-  neutral: 'border-border bg-surface-secondary text-text-secondary',
+const iconClass = {
+  organization: 'text-accent',
+  gateway: 'text-accent',
+  resource: 'text-[#638f67]',
+  neutral: 'text-text-secondary',
 };
 
 const edgeColor = {
@@ -48,6 +50,7 @@ const edgeColor = {
   danger: 'var(--color-danger)',
   neutral: 'var(--color-text-secondary)',
 };
+const architectureCardClass = 'rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
 
 function statusVariant(status) {
   const value = String(status || '').toLowerCase();
@@ -79,15 +82,15 @@ function encode(value) {
 function ArchitectureNode({ data }) {
   const Icon = iconMap[data.icon] || Database;
   const isClickable = !!data.href;
-  const avatarTone = avatarClass[data.tone] || avatarClass.neutral;
+  const iconTone = iconClass[data.tone] || iconClass.neutral;
   const statusTone = statusClass[statusVariant(data.badge)] || statusClass.neutral;
   const showTarget = !data.isRoot;
   const showSource = data.hasChildren;
 
   return (
     <div
-      className={`group relative w-[280px] rounded-md border border-border bg-surface-card px-4 py-3 shadow-panel transition-colors ${
-        isClickable ? 'cursor-pointer hover:border-accent hover:bg-surface-hover' : ''
+      className={`group relative w-[280px] px-4 py-4 ${architectureCardClass} ${
+        isClickable ? 'cursor-pointer' : ''
       }`}
     >
       <Handle
@@ -97,34 +100,28 @@ function ArchitectureNode({ data }) {
           width: 13,
           height: 13,
           left: -7,
-          border: '3px solid var(--color-surface-card)',
+          border: '3px solid var(--color-surface)',
           background: 'var(--color-text-secondary)',
           opacity: showTarget ? 1 : 0,
         }}
       />
 
-      <div className="grid grid-cols-[44px_minmax(0,1fr)_auto] items-center gap-3">
-        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${avatarTone}`}>
-          <Icon size={18} />
+      {data.badge && (
+        <span className={`absolute right-4 top-3 text-[10px] font-bold uppercase tracking-[0.05em] ${statusTone}`}>
+          {String(data.badge).toLowerCase()}
+        </span>
+      )}
+
+      <div className="grid grid-cols-[24px_minmax(0,1fr)] items-center gap-3 pr-16">
+        <span className={`flex shrink-0 items-center justify-center ${iconTone}`}>
+          <Icon size={20} />
         </span>
         <div className="min-w-0">
           <div className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">{data.kicker}</div>
           <div className="mt-0.5 truncate text-[15px] font-semibold leading-5 text-text-primary">{data.label}</div>
           {data.subtitle && <div className="truncate text-[12px] font-medium text-text-secondary">{data.subtitle}</div>}
         </div>
-        {data.badge && (
-          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.05em] ${statusTone}`}>
-            {String(data.badge).toLowerCase()}
-          </span>
-        )}
       </div>
-
-      {data.meta && (
-        <div className="mt-3 flex items-center justify-between gap-3 border-t border-border-light pt-2">
-          <span className="truncate text-[11px] font-medium text-text-muted">{data.meta}</span>
-          {data.metric && <span className="shrink-0 text-[11px] font-semibold text-text-secondary">{data.metric}</span>}
-        </div>
-      )}
 
       <Handle
         type="source"
@@ -133,7 +130,7 @@ function ArchitectureNode({ data }) {
           width: 13,
           height: 13,
           right: -7,
-          border: '3px solid var(--color-surface-card)',
+          border: '3px solid var(--color-surface)',
           background: 'var(--color-text-secondary)',
           opacity: showSource ? 1 : 0,
         }}
@@ -148,6 +145,11 @@ function resourceSubtitle(resource) {
   const type = String(resource.type || 'resource').toUpperCase();
   if (resource.external_url) return resource.external_url;
   return resource.host ? `${type} target` : type;
+}
+
+function resourceProtocolLabel(resource) {
+  const type = String(resource.type || 'resource').toUpperCase();
+  return resource.port ? `${type} : ${resource.port}` : type;
 }
 
 function resourceMeta(resource) {
@@ -191,7 +193,7 @@ function buildTree({ organization, gateways, resources }) {
       children: gatewayResources.length > 0
         ? gatewayResources.map((resource) => ({
             id: `resource:${resource.id}`,
-            kicker: String(resource.type).toUpperCase(),
+            kicker: resourceProtocolLabel(resource),
             label: resource.name,
             subtitle: resourceSubtitle(resource),
             meta: resourceMeta(resource),
@@ -297,6 +299,7 @@ export default function OrganizationHierarchyFlow({
   organization,
   gateways,
   resources,
+  className = '',
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -305,11 +308,13 @@ export default function OrganizationHierarchyFlow({
     gateways,
     resources,
   })), [organization, gateways, resources]);
+  const containerClass = className || 'h-[min(640px,68vh)] min-h-[420px]';
+  const containerStyle = className ? undefined : { maxHeight: `${Math.max(420, Math.min(680, height + 70))}px` };
 
   return (
     <div
-      className="h-[min(640px,68vh)] min-h-[420px] overflow-hidden rounded-md bg-surface"
-      style={{ maxHeight: `${Math.max(420, Math.min(680, height + 70))}px` }}
+      className={`${containerClass} overflow-hidden rounded-md bg-surface`}
+      style={containerStyle}
     >
       <ReactFlow
         nodes={nodes}
@@ -329,7 +334,19 @@ export default function OrganizationHierarchyFlow({
           }
         }}
         style={{ width: '100%', height: '100%' }}
-      />
+      >
+        <Background variant="dots" gap={34} size={1.05} color="rgba(44, 97, 100, 0.26)" />
+        <Controls
+          position="top-left"
+          showInteractive={false}
+          style={{
+            border: '1px solid rgba(44, 97, 100, 0.25)',
+            borderRadius: 8,
+            boxShadow: '0 8px 18px rgba(42,42,42,0.12)',
+            overflow: 'hidden',
+          }}
+        />
+      </ReactFlow>
     </div>
   );
 }

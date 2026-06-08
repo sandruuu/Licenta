@@ -36,18 +36,32 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 	if service == nil || service.server == nil || service.server.pa == nil || service.server.pa.Enrollment == nil {
 		return nil, status.Error(codes.Internal, "enrollment service is not initialized")
 	}
-	if ip := grpcPeerIP(ctx); ip != "" && !service.server.checkEnrollRateLimit(ip) {
+	sourceIP := grpcPeerIP(ctx)
+	if sourceIP != "" && !service.server.checkEnrollRateLimit(sourceIP) {
 		return nil, status.Error(codes.ResourceExhausted, "too many enrollment attempts")
 	}
+	hostname := strings.TrimSpace(structFieldString(request, "hostname"))
 	result, err := service.server.pa.Enrollment.StartInteractiveSession(paenrollment.InteractiveStartRequest{
 		CSRHash:     strings.TrimSpace(structFieldString(request, "csr_sha256")),
 		SPKIHash:    strings.TrimSpace(structFieldString(request, "spki_sha256")),
 		DeviceNonce: strings.TrimSpace(structFieldString(request, "device_nonce")),
-		Hostname:    strings.TrimSpace(structFieldString(request, "hostname")),
+		Hostname:    hostname,
+		SourceIP:    sourceIP,
 		AuthURL:     service.server.publicOrigin(),
 	})
 	if err != nil {
 		return nil, enrollmentGRPCError(err)
+	}
+	if service.server.pa.Audit != nil {
+		resource := hostname
+		if resource == "" {
+			resource = result.SessionID
+		}
+		details := "Device enrollment requested"
+		if hostname != "" {
+			details += " for " + hostname
+		}
+		service.server.pa.Audit.LogEvent("enrollment_requested", "", "", sourceIP, resource, "", details, true)
 	}
 	return structpb.NewStruct(map[string]interface{}{
 		"enrollment_session_id":  result.SessionID,

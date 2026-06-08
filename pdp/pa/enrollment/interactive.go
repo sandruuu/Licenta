@@ -34,6 +34,7 @@ type InteractiveStartRequest struct {
 	SPKIHash    string
 	DeviceNonce string
 	Hostname    string
+	SourceIP    string
 	AuthURL     string
 }
 
@@ -51,6 +52,7 @@ type InteractiveSession struct {
 	SPKIHash        string
 	DeviceNonce     string
 	Hostname        string
+	SourceIP        string
 	DeviceChallenge string
 	PollSecretHash  string
 	Status          string
@@ -80,6 +82,8 @@ type InteractiveSession struct {
 	CertificateExpiry time.Time
 	SingleUseConsumed bool
 }
+
+type InteractiveSessionExpiredHandler func(session InteractiveSession, now time.Time)
 
 type InteractiveSessionStatus struct {
 	Status string
@@ -151,6 +155,7 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 		SPKIHash:        normalizeHex(req.SPKIHash),
 		DeviceNonce:     strings.TrimSpace(req.DeviceNonce),
 		Hostname:        strings.TrimSpace(req.Hostname),
+		SourceIP:        strings.TrimSpace(req.SourceIP),
 		DeviceChallenge: deviceChallenge,
 		PollSecretHash:  sha256HexString(pollSecret),
 		Status:          InteractiveStatusWaitingForIDPDiscovery,
@@ -170,6 +175,15 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 		PollSecret:      pollSecret,
 		ExpiresAt:       expiresAt,
 	}, nil
+}
+
+func (s *Service) SetInteractiveSessionExpiredHandler(handler InteractiveSessionExpiredHandler) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.interactiveSessionExpiredHandler = handler
+	s.mu.Unlock()
 }
 
 func (s *Service) StartCleanupLoop(interval time.Duration, stopChan <-chan struct{}) {
@@ -201,16 +215,59 @@ func (s *Service) CleanExpiredInteractiveSessions(now time.Time) int {
 		now = time.Now().UTC()
 	}
 	now = now.UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	var expired []InteractiveSession
+	var handler InteractiveSessionExpiredHandler
 	count := 0
+	s.mu.Lock()
+	handler = s.interactiveSessionExpiredHandler
 	for id, session := range s.interactiveSessions {
 		if session == nil || (!session.ExpiresAt.IsZero() && !now.Before(session.ExpiresAt.UTC())) {
-			delete(s.interactiveSessions, id)
 			count++
+			if session != nil && session.Status != InteractiveStatusDenied && session.Status != InteractiveStatusEnrolled {
+				expiredSession := *session
+				expired = append(expired, expiredSession)
+			}
+			delete(s.interactiveSessions, id)
 		}
 	}
+	s.mu.Unlock()
+	notifyInteractiveSessionsExpired(handler, expired, now)
 	return count
+}
+
+func (s *Service) ExpireInteractiveSessionIfExpired(sessionID string, now time.Time) bool {
+	if s == nil {
+		return false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	now = now.UTC()
+
+	var expired *InteractiveSession
+	var handler InteractiveSessionExpiredHandler
+	s.mu.Lock()
+	session, ok := s.interactiveSessions[sessionID]
+	if !ok || session == nil || session.ExpiresAt.IsZero() || now.Before(session.ExpiresAt.UTC()) {
+		s.mu.Unlock()
+		return false
+	}
+	if session.Status != InteractiveStatusDenied && session.Status != InteractiveStatusEnrolled {
+		expiredCopy := *session
+		expired = &expiredCopy
+	}
+	handler = s.interactiveSessionExpiredHandler
+	delete(s.interactiveSessions, sessionID)
+	s.mu.Unlock()
+
+	if expired != nil {
+		notifyInteractiveSessionsExpired(handler, []InteractiveSession{*expired}, now)
+	}
+	return true
 }
 
 func (s *Service) GetInteractiveSession(sessionID string) (*InteractiveSession, bool) {
@@ -348,20 +405,44 @@ func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret st
 	if s == nil {
 		return nil, fmt.Errorf("enrollment service not initialized")
 	}
+	var expired *InteractiveSession
+	var handler InteractiveSessionExpiredHandler
 	s.mu.Lock()
 	session, ok := s.interactiveSessions[strings.TrimSpace(sessionID)]
-	defer s.mu.Unlock()
 	if !ok || session == nil {
+		s.mu.Unlock()
 		return nil, ErrNotFound
 	}
 	if err := validateInteractivePollSecrets(session, deviceNonce, pollSecret); err != nil {
+		s.mu.Unlock()
 		return nil, err
 	}
-	if time.Now().UTC().After(session.ExpiresAt) && session.Status != InteractiveStatusEnrolled {
+	now := time.Now().UTC()
+	if now.After(session.ExpiresAt) && session.Status != InteractiveStatusEnrolled {
+		if session.Status != InteractiveStatusDenied {
+			expiredCopy := *session
+			expired = &expiredCopy
+		}
+		handler = s.interactiveSessionExpiredHandler
 		delete(s.interactiveSessions, session.ID)
+		s.mu.Unlock()
+		if expired != nil {
+			notifyInteractiveSessionsExpired(handler, []InteractiveSession{*expired}, now)
+		}
 		return &InteractiveSessionStatus{Status: InteractiveStatusDenied, Reason: "enrollment_session_expired"}, nil
 	}
-	return &InteractiveSessionStatus{Status: session.Status, Reason: session.Reason}, nil
+	result := &InteractiveSessionStatus{Status: session.Status, Reason: session.Reason}
+	s.mu.Unlock()
+	return result, nil
+}
+
+func notifyInteractiveSessionsExpired(handler InteractiveSessionExpiredHandler, sessions []InteractiveSession, now time.Time) {
+	if handler == nil || len(sessions) == 0 {
+		return
+	}
+	for _, session := range sessions {
+		handler(session, now)
+	}
 }
 
 func (s *Service) CompleteInteractiveSession(req InteractiveCompleteRequest) (*InteractiveCompleteResult, error) {

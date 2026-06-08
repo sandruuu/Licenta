@@ -45,7 +45,7 @@ func (service *agentAuthorizationGRPCService) AuthorizeResource(ctx context.Cont
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	response, statusCode, err := service.server.authorizeAgentResource(ctx, enrollment, clientCertificateFingerprint(peerCert), token, authorizeRequest, "")
+	response, statusCode, err := service.server.authorizeAgentResource(ctx, enrollment, clientCertificateFingerprint(peerCert), token, authorizeRequest, grpcPeerIP(ctx))
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCode), err.Error())
 	}

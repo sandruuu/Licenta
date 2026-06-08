@@ -63,7 +63,7 @@ export default function Organizations() {
   };
 
   return (
-    <div className="pb-8">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
         title="Organizations"
         subtitle="Manage organizations, identity providers, and gateways"
@@ -77,19 +77,21 @@ export default function Organizations() {
         placeholder="Search organization or domain"
       />
 
-      <OrganizationTable
-        loading={organizationDirectory.loading}
-        organizations={organizationPagination.pageItems}
-        pageSize={organizationPagination.pageSize}
-        onCreateGateway={gatewayCreate.openGatewayCreate}
-        onOpen={openOrganization}
-        onEdit={organizationDirectory.openEdit}
-        onRevoke={setRevokeOrganizationTarget}
-        onReactivate={setReactivateOrganizationTarget}
-        onDelete={setDeleteOrganizationTarget}
-        emptyTitle={hasFilters ? 'No organizations match filters' : 'No organizations yet'}
-        emptyMessage={hasFilters ? 'Adjust search or filters to find organizations.' : 'Create the first organization to start managing gateways and resources.'}
-      />
+      <div className="min-h-0 flex-1">
+        <OrganizationTable
+          loading={organizationDirectory.loading}
+          organizations={organizationPagination.pageItems}
+          pageSize={organizationPagination.pageSize}
+          onCreateGateway={gatewayCreate.openGatewayCreate}
+          onOpen={openOrganization}
+          onEdit={organizationDirectory.openEdit}
+          onRevoke={setRevokeOrganizationTarget}
+          onReactivate={setReactivateOrganizationTarget}
+          onDelete={setDeleteOrganizationTarget}
+          emptyTitle={hasFilters ? 'No organizations match filters' : 'No organizations yet'}
+          emptyMessage={hasFilters ? 'Adjust search or filters to find organizations.' : 'Create the first organization to start managing gateways and resources.'}
+        />
+      </div>
 
       {/* <div className="pt-6">
         <Pagination

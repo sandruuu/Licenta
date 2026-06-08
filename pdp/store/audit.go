@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"pdp/models"
@@ -17,7 +18,23 @@ import (
 // Audit Log operations
 // ─────────────────────────────────────────────
 
+var suppressedAuditEventTypes = map[string]struct{}{
+	"oidc_authorize":      {},
+	"oidc_token_exchange": {},
+	"oidc_token_refresh":  {},
+	"token_revoked":       {},
+}
+
+func isSuppressedAuditEvent(eventType string) bool {
+	_, ok := suppressedAuditEventTypes[strings.TrimSpace(eventType)]
+	return ok
+}
+
 func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
+	if entry == nil || isSuppressedAuditEvent(entry.EventType) {
+		return
+	}
+
 	// Serialise audit writes so the hash chain stays well-defined under
 	// concurrent callers; collisions on prev_hash would otherwise allow
 	// silent fork.
@@ -55,6 +72,87 @@ func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
 	// across the cap boundary is required.
 	s.db.Exec(`DELETE FROM audit_log WHERE id NOT IN (
 		SELECT id FROM audit_log ORDER BY timestamp DESC LIMIT 10000)`)
+}
+
+func (s *Store) removeSuppressedAuditEntries() error {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin audit cleanup: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			tx.Rollback()
+		}
+	}()
+
+	result, err := tx.Exec(`DELETE FROM audit_log
+		WHERE event_type IN ('oidc_authorize', 'oidc_token_exchange', 'oidc_token_refresh', 'token_revoked')`)
+	if err != nil {
+		return fmt.Errorf("delete suppressed audit entries: %w", err)
+	}
+	deleted, _ := result.RowsAffected()
+	if deleted == 0 {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit empty audit cleanup: %w", err)
+		}
+		committed = true
+		return nil
+	}
+
+	rows, err := tx.Query(`SELECT id, timestamp, event_type, user_id, username, source_ip,
+		resource, decision, details, success
+		FROM audit_log ORDER BY timestamp ASC, id ASC`)
+	if err != nil {
+		return fmt.Errorf("query audit entries for rechain: %w", err)
+	}
+
+	type auditChainRow struct {
+		entry models.AuditEntry
+	}
+	chainRows := []auditChainRow{}
+	for rows.Next() {
+		var (
+			row     auditChainRow
+			ts      string
+			success int
+		)
+		if err := rows.Scan(&row.entry.ID, &ts, &row.entry.EventType, &row.entry.UserID,
+			&row.entry.Username, &row.entry.SourceIP, &row.entry.Resource,
+			&row.entry.Decision, &row.entry.Details, &success); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan audit entry for rechain: %w", err)
+		}
+		row.entry.Timestamp = parseTime(ts)
+		row.entry.Success = success != 0
+		chainRows = append(chainRows, row)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close audit rechain rows: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate audit rechain rows: %w", err)
+	}
+
+	prevHash := ""
+	for _, row := range chainRows {
+		entryHash := computeAuditHash(prevHash, &row.entry)
+		if _, err := tx.Exec(`UPDATE audit_log SET prev_hash = ?, entry_hash = ? WHERE id = ?`,
+			prevHash, entryHash, row.entry.ID); err != nil {
+			return fmt.Errorf("update audit hash for %s: %w", row.entry.ID, err)
+		}
+		prevHash = entryHash
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit audit cleanup: %w", err)
+	}
+	committed = true
+	log.Printf("[STORE] Removed %d suppressed OIDC/token audit entries", deleted)
+	return nil
 }
 
 // computeAuditHash returns hex(SHA-256(prevHash || canonical(entry))).

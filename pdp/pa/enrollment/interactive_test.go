@@ -78,6 +78,10 @@ func TestVerifyEnrollmentProofRejectsNonP256ECDSA(t *testing.T) {
 func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
 	service := NewService(dataStore)
+	var expiredSessions []InteractiveSession
+	service.SetInteractiveSessionExpiredHandler(func(session InteractiveSession, _ time.Time) {
+		expiredSessions = append(expiredSessions, session)
+	})
 
 	active, err := service.StartInteractiveSession(InteractiveStartRequest{
 		CSRHash:     "active-csr",
@@ -92,6 +96,8 @@ func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T)
 		CSRHash:     "expired-csr",
 		SPKIHash:    "expired-spki",
 		DeviceNonce: "expired-nonce",
+		Hostname:    "expired-host",
+		SourceIP:    "192.0.2.45",
 		AuthURL:     "https://pdp.test",
 	})
 	if err != nil {
@@ -111,6 +117,12 @@ func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T)
 	}
 	if !service.HasInteractiveSession(active.SessionID) {
 		t.Fatalf("active interactive enrollment session was removed")
+	}
+	if len(expiredSessions) != 1 {
+		t.Fatalf("expired handler called %d times, want 1", len(expiredSessions))
+	}
+	if expiredSessions[0].Hostname != "expired-host" || expiredSessions[0].SourceIP != "192.0.2.45" {
+		t.Fatalf("unexpected expired session passed to handler: %#v", expiredSessions[0])
 	}
 }
 
@@ -140,6 +152,44 @@ func TestInteractiveSessionStatusDeletesExpiredTransaction(t *testing.T) {
 	}
 	if service.HasInteractiveSession(session.SessionID) {
 		t.Fatalf("expired interactive enrollment session remained after status check")
+	}
+}
+
+func TestExpireInteractiveSessionIfExpiredDeletesAndNotifies(t *testing.T) {
+	dataStore := newEnrollmentTestStore(t)
+	service := NewService(dataStore)
+	var expiredSessions []InteractiveSession
+	service.SetInteractiveSessionExpiredHandler(func(session InteractiveSession, _ time.Time) {
+		expiredSessions = append(expiredSessions, session)
+	})
+
+	session, err := service.StartInteractiveSession(InteractiveStartRequest{
+		CSRHash:     "csr-hash",
+		SPKIHash:    "spki-hash",
+		DeviceNonce: "device-nonce",
+		Hostname:    "expired-host",
+		SourceIP:    "192.0.2.46",
+		AuthURL:     "https://pdp.test",
+	})
+	if err != nil {
+		t.Fatalf("StartInteractiveSession returned error: %v", err)
+	}
+	now := time.Now().UTC()
+	service.mu.Lock()
+	service.interactiveSessions[session.SessionID].ExpiresAt = now.Add(-time.Second)
+	service.mu.Unlock()
+
+	if !service.ExpireInteractiveSessionIfExpired(session.SessionID, now) {
+		t.Fatalf("ExpireInteractiveSessionIfExpired returned false")
+	}
+	if service.HasInteractiveSession(session.SessionID) {
+		t.Fatalf("expired interactive enrollment session remained after explicit expiry")
+	}
+	if len(expiredSessions) != 1 {
+		t.Fatalf("expired handler called %d times, want 1", len(expiredSessions))
+	}
+	if expiredSessions[0].Hostname != "expired-host" || expiredSessions[0].SourceIP != "192.0.2.46" {
+		t.Fatalf("unexpected expired session passed to handler: %#v", expiredSessions[0])
 	}
 }
 

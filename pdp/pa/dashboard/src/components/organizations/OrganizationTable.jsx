@@ -98,6 +98,7 @@ export default function OrganizationTable({
       emptyTitle={emptyTitle}
       emptyMessage={emptyMessage}
       minRows={pageSize}
+      fillHeight
       onRowClick={onOpen}
     />
   );

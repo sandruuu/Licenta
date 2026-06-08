@@ -199,6 +199,11 @@ func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDeci
 	if err != nil {
 		return err
 	}
+	if pa.Audit != nil {
+		details := "Additional verification required for resource access"
+		pa.Audit.LogEvent("agent_step_up_required", claims.UserID, claims.Username, strings.TrimSpace(req.SourceIP),
+			resource.ID, models.DecisionStepUpRequired, details, true)
+	}
 	requirement.ChallengeID = challenge.ID
 	requirement.URL = challenge.URL
 	requirement.Methods = append([]string(nil), challenge.Methods...)

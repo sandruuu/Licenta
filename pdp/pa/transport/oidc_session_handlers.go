@@ -90,9 +90,6 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 	log.Printf("[OIDC] Authorization code issued: user=%s → redirect to %s",
 		claims.Username, authCode.RedirectURI)
 
-	s.pa.Audit.LogEvent("oidc_authorize", claims.UserID, claims.Username,
-		r.RemoteAddr, "", "", "Authorization code issued for "+authCode.ClientID, true)
-
 	writeJSON(w, http.StatusOK, map[string]string{
 		"redirect_url": redirectURL,
 	})

@@ -3,29 +3,29 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Ban,
+  ChevronLeft,
   Edit2,
   Building2,
   Plus,
   Router,
-  Server,
 } from 'lucide-react';
 import { getGateways, getOrganizations, getResources, revokeGateway, updateGateway } from '../api';
-import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import FormField, { FormInput } from '../components/ui/FormField';
+import StatusText from '../components/ui/StatusText';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import {
-  BackIconButton,
-  DetailDivider,
   DetailEmptyState as EmptyState,
-  DetailSummaryItem,
-  detailSectionTitleClass,
   InlineBackButton,
 } from '../components/ui/Detail';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
-import { formatDateTime } from '../utils/format';
 import { navigateBack, navigateWithReturn } from '../utils/navigation';
-import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
+
+const detailPanelClass = 'rounded-md border border-border bg-transparent';
+const summaryItemClass = 'block w-full rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-4 text-left shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
+const relatedSectionTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
+const relatedSectionCountClass = 'text-sm font-bold text-text-muted';
 
 function gatewayStatusVariant(status) {
   if (status === 'revoked') return 'danger';
@@ -37,15 +37,15 @@ function isRevokedGateway(gateway) {
   return String(gateway?.status || '').toLowerCase() === 'revoked';
 }
 
-function DetailValue({ label, value, mono = false }) {
-  return (
-    <DetailSummaryItem>
-      <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</span>
-      <span className={`mt-1 block truncate text-base font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
-        {value || '-'}
-      </span>
-    </DetailSummaryItem>
-  );
+function resourceProtocolLabel(resource) {
+  const type = String(resource?.type || 'resource').toUpperCase();
+  return resource?.port ? `${type} : ${resource.port}` : type;
+}
+
+function resourceTargetLabel(resource) {
+  if (resource?.external_url) return resource.external_url;
+  if (resource?.host) return resource.port ? `${resource.host}:${resource.port}` : resource.host;
+  return resource?.description || resource?.id || '-';
 }
 
 export default function GatewayDetail() {
@@ -62,6 +62,8 @@ export default function GatewayDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revoking, setRevoking] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -126,13 +128,17 @@ export default function GatewayDetail() {
   };
 
   const revokeSelectedGateway = async () => {
-    if (!gateway || !confirm(`Revoke gateway "${gateway.name || gateway.id}" and terminate its active sessions?`)) return;
+    if (!gateway) return;
+    setRevoking(true);
     setError('');
     try {
       await revokeGateway(gateway.id);
+      setRevokeOpen(false);
       await load();
     } catch (e) {
       setError(e.message || 'Failed to revoke gateway');
+    } finally {
+      setRevoking(false);
     }
   };
 
@@ -164,98 +170,109 @@ export default function GatewayDetail() {
     <div className="space-y-7">
       {error && <div className="rounded-md border border-danger bg-danger-muted p-3 text-sm text-danger">{error}</div>}
 
-      <section className="p-5">
-        <div className="space-y-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back" onClick={handleBack}>
-                  <ArrowLeft size={16} />
-                </BackIconButton>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-2xl font-bold leading-tight text-text-primary">{gateway.name || gateway.id}</h1>
-                    <Badge variant={gatewayStatusVariant(gateway.status)}>{gateway.status || 'active'}</Badge>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                    <span>{organization?.name || gateway.organization_id || 'Unassigned'}</span>
-                  </div>
+      <section className="space-y-5 pb-5 pr-3 pt-1">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={handleBack}
+                className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center text-text-primary transition-colors hover:text-accent focus-visible:text-accent active:text-accent-hover"
+              >
+                <ChevronLeft size={34} strokeWidth={3} />
+              </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{gateway.name || gateway.id}</h1>
+                  <StatusText variant={gatewayStatusVariant(gateway.status)}>{gateway.status || 'active'}</StatusText>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span>{gateway.fqdn || 'No FQDN configured'}</span>
                 </div>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              {!gatewayRevoked ? (
-                <Button variant="danger" onClick={revokeSelectedGateway} title="Revoke gateway" aria-label="Revoke gateway">
-                  <Ban size={14} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            {!gatewayRevoked ? (
+              <Button variant="danger" onClick={() => setRevokeOpen(true)} disabled={revoking}>
+                <Ban size={14} />
+                Revoke
+              </Button>
+            ) : null}
+            <Button onClick={openEdit}>
+              <Edit2 size={14} />
+              Edit
+            </Button>
+          </div>
+        </div>
+
+        <div className="border-t border-border" />
+
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <section className={`${detailPanelClass} min-h-[460px] overflow-hidden`} aria-label="Gateway infrastructure">
+            {organization?.id ? (
+              <OrganizationHierarchyFlow
+                organization={organization}
+                gateways={[gateway]}
+                resources={resources}
+                className="h-full min-h-[460px]"
+              />
+            ) : (
+              <EmptyState icon={Building2} title="No organization" message="This gateway is not assigned to an organization." />
+            )}
+          </section>
+
+          <aside className={`${detailPanelClass} min-h-[460px] p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h2 className={relatedSectionTitleClass}>
+                  Resources <span className={relatedSectionCountClass}>({resources.length})</span>
+                </h2>
+              </div>
+              <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:self-center sm:justify-end">
+                <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}`)}>
+                  View all
                 </Button>
-              ) : null}
-              <Button onClick={openEdit}>
-                <Edit2 size={14} />
-              </Button>
-            </div>
-          </div>
-
-          <DetailDivider />
-
-          <div>
-            <p className={detailSectionTitleClass}>Gateway Configuration</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              <DetailValue label="FQDN" value={gateway.fqdn} mono />
-              <DetailValue label="Certificate" value={gatewayRevoked ? 'Invalidated' : formatDateTime(gateway.cert_expires_at)} />
-            </div>
-          </div>
-
-          <DetailDivider />
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className={detailSectionTitleClass}>Resources ({resources.length})</p>
-              {resources.length === 0 ? (
-                <p className="mt-1 text-base font-semibold text-text-primary">No resources configured</p>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {resources.map((resource) => (
-                    <DetailSummaryItem key={resource.id} onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}>
-                      <span className="flex min-w-0 flex-wrap items-center gap-2">
-                        <span className="truncate text-base font-semibold text-text-primary hover:text-accent">{resource.name || resource.id}</span>
-                        <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
-                        <Badge variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</Badge>
-                      </span>
-                      <span className="mt-1 block truncate text-xs text-text-secondary">
-                        {`${resource.host || '-'}${resource.port ? `:${resource.port}` : ''}`}
-                      </span>
-                    </DetailSummaryItem>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}`)}>
-                View all
-              </Button>
-              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}&create=1`)}>
-                <Plus size={13} />
-                New
-              </Button>
-            </div>
-          </div>
-
-          {organization?.id && (
-            <>
-              <DetailDivider />
-
-              <div>
-                <h2 className={detailSectionTitleClass}>Gateway Infrastructure</h2>
-                <div className="mt-4">
-                  <OrganizationHierarchyFlow
-                    organization={organization}
-                    gateways={[gateway]}
-                    resources={resources}
-                  />
-                </div>
+                <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${resourceListFilter}&create=1`)}>
+                  <Plus size={13} />
+                  New
+                </Button>
               </div>
-            </>
-          )}
+            </div>
+
+            {resources.length === 0 ? (
+              <p className="mt-4 text-base font-semibold text-text-primary">No resources configured</p>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {resources.map((resource) => (
+                  <button
+                    key={resource.id}
+                    type="button"
+                    onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}
+                    className={summaryItemClass}
+                  >
+                    <span className="flex min-w-0 items-start justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block text-[11px] font-bold uppercase tracking-[0.08em] text-text-muted">
+                          {resourceProtocolLabel(resource)}
+                        </span>
+                        <span className="mt-1 block truncate text-base font-semibold text-text-primary">
+                          {resource.name || resource.id}
+                        </span>
+                        <span className="mt-1 block truncate text-xs text-text-secondary">
+                          {resourceTargetLabel(resource)}
+                        </span>
+                      </span>
+                      <StatusText variant={resource.enabled === false ? 'danger' : 'success'}>
+                        {resource.enabled === false ? 'disabled' : 'enabled'}
+                      </StatusText>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </aside>
         </div>
       </section>
 
@@ -282,6 +299,17 @@ export default function GatewayDetail() {
           </FormField>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        open={revokeOpen}
+        onClose={() => setRevokeOpen(false)}
+        onConfirm={revokeSelectedGateway}
+        title="Revoke gateway"
+        message={`Revoke "${gateway.name || gateway.id}" and terminate its active sessions?`}
+        confirmLabel="Revoke gateway"
+        loadingLabel="Revoking..."
+        loading={revoking}
+      />
     </div>
   );
 }

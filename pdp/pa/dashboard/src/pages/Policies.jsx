@@ -7,6 +7,7 @@ import {
   deletePolicyAssignment,
   getDirectoryGroups,
   getDeviceDataReports,
+  getGateways,
   getIdPs,
   getOrganizations,
   getPolicies,
@@ -91,6 +92,7 @@ export default function Policies() {
   const [assignments, setAssignments] = useState([]);
   const [organizations, setOrganizations] = useState([]);
   const [idps, setIdPs] = useState([]);
+  const [gateways, setGateways] = useState([]);
   const [resources, setResources] = useState([]);
   const [groups, setGroups] = useState([]);
   const [deviceCheckOptions, setDeviceCheckOptions] = useState(deviceCheckOptionsFromReports());
@@ -110,9 +112,10 @@ export default function Policies() {
     policies: new Map(policies.map((policy) => [policy.id, policy])),
     organizations: new Map(organizations.map((organization) => [organization.id, organization])),
     idps: new Map(idps.map((idp) => [idp.id, idp])),
+    gateways: new Map(gateways.map((gateway) => [gateway.id, gateway])),
     resources: new Map(resources.map((resource) => [resource.id, resource])),
     groups: new Map(groups.map((group) => [group.id, group])),
-  }), [policies, organizations, idps, resources, groups]);
+  }), [policies, organizations, idps, gateways, resources, groups]);
 
   const defaultOrganizationID = useMemo(
     () => searchParams.get('organization_id') || organizations[0]?.id || '',
@@ -123,11 +126,12 @@ export default function Policies() {
     setLoading(true);
     setError('');
     try {
-      const [policyData, assignmentData, organizationData, resourceData, groupData, deviceData] = await Promise.all([
+      const [policyData, assignmentData, organizationData, resourceData, gatewayData, groupData, deviceData] = await Promise.all([
         getPolicies(),
         getPolicyAssignments(),
         getOrganizations(),
         getResources(),
+        getGateways(),
         getDirectoryGroups(),
         getDeviceDataReports().catch(() => []),
       ]);
@@ -141,6 +145,7 @@ export default function Policies() {
       setAssignments(Array.isArray(assignmentData) ? assignmentData : []);
       setOrganizations(organizationList);
       setIdPs(idpLists.flat().filter(Boolean));
+      setGateways(Array.isArray(gatewayData) ? gatewayData : []);
       setResources(Array.isArray(resourceData) ? resourceData : []);
       setGroups(Array.isArray(groupData) ? groupData : []);
       setDeviceCheckOptions(deviceCheckOptionsFromReports(Array.isArray(deviceData) ? deviceData : []));
@@ -369,6 +374,7 @@ export default function Policies() {
         saving={saving}
         onBack={() => setEditor(null)}
         onSave={handleSavePolicy}
+        onUnassignAssignment={handleUnassignAssignment}
         onToggleSection={toggleEditorSection}
         onSelectSection={(activeSection) => setEditor((current) => ({ ...current, activeSection }))}
       />
@@ -376,7 +382,7 @@ export default function Policies() {
   }
 
   return (
-    <div className="space-y-4 pb-8">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader
         title="Policies"
         subtitle="Manage access control policies and their assignments"
@@ -397,25 +403,27 @@ export default function Policies() {
         summary={compactCount}
       >
         <ListToolbarSelect value={levelFilter} onChange={handleLevelFilterChange} className="lg:min-w-[230px]">
-          <option value="all">Policy apply type</option>
+          <option value="all">All policy apply types</option>
           {LAYERS.map((layer) => (
             <option key={layer.value} value={layer.value}>{layer.label}</option>
           ))}
         </ListToolbarSelect>
       </ListToolbar>
 
-      <PolicyList
-        policies={policyPagination.pageItems}
-        loading={loading}
-        pageSize={policyPagination.pageSize}
-        assignmentsForPolicy={assignmentsForPolicy}
-        maps={maps}
-        onEdit={(policy) => openPolicyEditor('edit', policy)}
-        onApply={openAssignmentCreate}
-        onDuplicate={handleDuplicatePolicy}
-        onUnassign={setUnassignPolicyTarget}
-        onDelete={setDeletePolicyTarget}
-      />
+      <div className="min-h-0 flex-1">
+        <PolicyList
+          policies={policyPagination.pageItems}
+          loading={loading}
+          pageSize={policyPagination.pageSize}
+          assignmentsForPolicy={assignmentsForPolicy}
+          maps={maps}
+          onEdit={(policy) => openPolicyEditor('edit', policy)}
+          onApply={openAssignmentCreate}
+          onDuplicate={handleDuplicatePolicy}
+          onUnassign={setUnassignPolicyTarget}
+          onDelete={setDeletePolicyTarget}
+        />
+      </div>
 
       {/* <div className="pt-2">
         <Pagination

@@ -98,7 +98,7 @@ func (s *Server) handleAdminPasskeyRegisterFinish(w http.ResponseWriter, r *http
 	}
 	s.pa.Auth.Users.AddMFAMethod(user.ID, "webauthn")
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("admin_passkey_enrolled", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey enrolled after password and TOTP verification", true)
+		s.pa.Audit.LogEvent("admin_passkey_enrolled", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey enrolled after password and Authenticator app verification", true)
 	}
 	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
 	if err != nil {

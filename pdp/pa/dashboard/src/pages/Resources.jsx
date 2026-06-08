@@ -13,15 +13,15 @@ import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
-import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui/FormField';
 import Pagination from '../components/ui/Pagination';
+import StatusText from '../components/ui/StatusText';
+import ResourceTypeText from '../components/ui/ResourceTypeText';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { usePublicConfig } from '../config/publicConfig';
 import { navigateWithReturn } from '../utils/navigation';
-import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
 const typeMeta = [
   { value: 'web', label: 'WEB' },
@@ -257,7 +257,7 @@ export default function Resources() {
         </div>
       ),
     },
-    { key: 'type', label: 'Type', render: (value) => <Badge variant={resourceTypeBadgeVariant(value)}>{(value || '').toUpperCase()}</Badge> },
+    { key: 'type', label: 'Type', render: (value) => <ResourceTypeText type={value} /> },
     { key: 'tenant_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
     { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
@@ -267,7 +267,7 @@ export default function Resources() {
       render: (_, row) => <span className="text-mono text-xs">{catalogHost(row)}</span>,
     },
     { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
-    { key: 'enabled', label: 'Status', render: (value) => <Badge variant={value ? 'success' : 'danger'}>{value ? 'Enabled' : 'Disabled'}</Badge> },
+    { key: 'enabled', label: 'Status', render: (value) => <StatusText variant={value ? 'success' : 'danger'}>{value ? 'Enabled' : 'Disabled'}</StatusText> },
     {
       key: 'actions',
       label: 'Actions',
@@ -331,7 +331,7 @@ export default function Resources() {
   };
 
   return (
-    <>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader title="Resources" subtitle="Attach WEB, SSH, and RDP resources to an organization gateway" createLabel="Add Resource" onCreate={() => openCreate()} />
 
       {error && (
@@ -365,16 +365,19 @@ export default function Resources() {
         </ListToolbarSelect>
       </ListToolbar>
 
-      <DataTable
-        columns={columns}
-        data={resourcePagination.pageItems}
-        loading={loading}
-        minRows={resourcePagination.pageSize}
-        emptyIcon={Server}
-        emptyTitle={hasFilters ? 'No resources match filters' : 'No resources configured'}
-        emptyMessage={hasFilters ? 'Adjust search or filters to find resources.' : 'Create a gateway first, then attach protected resources to it.'}
-        onRowClick={(row) => navigateWithReturn(navigate, `/resources/${encodeURIComponent(row.id)}`, location)}
-      />
+      <div className="min-h-0 flex-1">
+        <DataTable
+          columns={columns}
+          data={resourcePagination.pageItems}
+          loading={loading}
+          minRows={resourcePagination.pageSize}
+          emptyIcon={Server}
+          emptyTitle={hasFilters ? 'No resources match filters' : 'No resources configured'}
+          emptyMessage={hasFilters ? 'Adjust search or filters to find resources.' : 'Create a gateway first, then attach protected resources to it.'}
+          fillHeight
+          onRowClick={(row) => navigateWithReturn(navigate, `/resources/${encodeURIComponent(row.id)}`, location)}
+        />
+      </div>
 
       {/* <div className="pt-6">
         <Pagination
@@ -483,6 +486,6 @@ export default function Resources() {
         loadingLabel="Reactivating..."
         loading={reactivating}
       />
-    </>
+    </div>
   );
 }

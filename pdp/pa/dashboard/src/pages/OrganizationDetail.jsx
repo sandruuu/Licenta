@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  Ban,
   Building2,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   Plus,
   Shield,
@@ -11,22 +14,25 @@ import {
 import {
   getGateways,
   getIdPs,
+  getDirectoryGroups,
+  getDirectoryUsers,
   getResources,
   getOrganizations,
   createIdP,
+  createResource,
   discoverIdP,
   updateOrganization,
 } from '../api';
-import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import {
-  BackIconButton,
   DetailDisclosure,
   DetailEmptyState as EmptyState,
   InlineBackButton,
 } from '../components/ui/Detail';
 import Modal from '../components/ui/Modal';
-import FormField, { FormCheckbox, FormInput } from '../components/ui/FormField';
+import FormField, { FormCheckbox, FormInput, FormSelect } from '../components/ui/FormField';
+import StatusText from '../components/ui/StatusText';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import OrganizationFormModal from '../components/organizations/OrganizationFormModal';
 import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
@@ -34,9 +40,27 @@ import StatusBadge from '../components/organizations/StatusBadge';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import { usePublicConfig } from '../config/publicConfig';
 import { navigateBack, navigateWithReturn } from '../utils/navigation';
-import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
-const summaryItemClass = 'block w-full max-w-3xl  px-4 py-3 text-left';
+const detailPanelClass = 'rounded-md border border-border bg-transparent';
+const summaryItemClass = 'block w-full rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-4 text-left shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
+const relatedSectionTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
+const relatedSectionCountClass = 'text-sm font-bold text-text-muted';
+const resourceTypeOptions = [
+  { value: 'web', label: 'WEB' },
+  { value: 'ssh', label: 'SSH' },
+  { value: 'rdp', label: 'RDP' },
+];
+
+function resourceProtocolLabel(resource) {
+  const type = String(resource?.type || 'resource').toUpperCase();
+  return resource?.port ? `${type} : ${resource.port}` : type;
+}
+
+function resourceTargetLabel(resource) {
+  if (resource?.external_url) return resource.external_url;
+  if (resource?.host) return resource.port ? `${resource.host}:${resource.port}` : resource.host;
+  return resource?.description || resource?.id || '-';
+}
 
 export default function OrganizationDetail() {
   const { organizationId = '' } = useParams();
@@ -49,11 +73,15 @@ export default function OrganizationDetail() {
   const [gateways, setGateways] = useState([]);
   const [resources, setResources] = useState([]);
   const [idps, setIdPs] = useState([]);
+  const [directoryUsers, setDirectoryUsers] = useState([]);
+  const [directoryGroups, setDirectoryGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editForm, setEditForm] = useState({});
   const [editOpen, setEditOpen] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revoking, setRevoking] = useState(false);
   const [idpOpen, setIdPOpen] = useState(false);
   const [idpForm, setIdPForm] = useState({});
   const [idpSaving, setIdPSaving] = useState(false);
@@ -62,22 +90,30 @@ export default function OrganizationDetail() {
   const [idpTestResult, setIdPTestResult] = useState(null);
   const [idpAdvancedOpen, setIdPAdvancedOpen] = useState(false);
   const [idpScimOpen, setIdPScimOpen] = useState(false);
+  const [resourceOpen, setResourceOpen] = useState(false);
+  const [resourceForm, setResourceForm] = useState({});
+  const [resourceSaving, setResourceSaving] = useState(false);
+  const [resourceError, setResourceError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [organizationData, gatewayData, resourceData, idpData] = await Promise.all([
+      const [organizationData, gatewayData, resourceData, idpData, directoryUserData, directoryGroupData] = await Promise.all([
         getOrganizations(),
         getGateways(),
         getResources(),
         getIdPs(organizationID),
+        getDirectoryUsers(organizationID).catch(() => []),
+        getDirectoryGroups(organizationID).catch(() => []),
       ]);
       const organizations = Array.isArray(organizationData) ? organizationData : [];
       setOrganization(organizations.find((item) => item.id === organizationID) || null);
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
       setResources(Array.isArray(resourceData) ? resourceData : []);
       setIdPs(Array.isArray(idpData) ? idpData : []);
+      setDirectoryUsers(Array.isArray(directoryUserData) ? directoryUserData : []);
+      setDirectoryGroups(Array.isArray(directoryGroupData) ? directoryGroupData : []);
     } catch (e) {
       setError(e.message || 'Failed to load organization data');
     } finally {
@@ -101,8 +137,11 @@ export default function OrganizationDetail() {
     return resources.filter((resource) => resource.tenant_id === organizationID || gatewayIDs.has(resource.gateway_id));
   }, [resources, organizationID, organizationGateways]);
 
-  const gatewayByID = useMemo(() => new Map(organizationGateways.map((gateway) => [gateway.id, gateway])), [organizationGateways]);
   const configuredIdP = idps[0] || null;
+  const resourceTypes = useMemo(() => resourceTypeOptions.map((item) => ({
+    ...item,
+    defaultPort: publicConfig.resource_default_ports?.[item.value] || 0,
+  })), [publicConfig.resource_default_ports]);
 
   const openEdit = () => {
     setEditForm({
@@ -139,6 +178,54 @@ export default function OrganizationDetail() {
     setIdPAdvancedOpen(false);
     setIdPScimOpen(false);
     setIdPOpen(true);
+  };
+
+  const openResourceCreate = () => {
+    const type = 'web';
+    const option = resourceTypes.find((item) => item.value === type);
+    setResourceForm({
+      name: '',
+      description: '',
+      type,
+      tenant_id: organizationID,
+      gateway_id: organizationGateways[0]?.id || '',
+      host: '',
+      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
+      external_url: '',
+      enabled: true,
+    });
+    setResourceError('');
+    setResourceOpen(true);
+  };
+
+  const selectResourceType = (type) => {
+    const option = resourceTypes.find((item) => item.value === type);
+    setResourceForm({ ...resourceForm, type, port: option?.defaultPort || resourceForm.port || 0 });
+  };
+
+  const saveResourceCreate = async () => {
+    setResourceSaving(true);
+    setResourceError('');
+    try {
+      await createResource({
+        name: resourceForm.name?.trim(),
+        description: resourceForm.description?.trim(),
+        type: resourceForm.type,
+        organization_id: organizationID,
+        gateway_id: resourceForm.gateway_id,
+        host: resourceForm.host?.trim(),
+        port: parseInt(resourceForm.port, 10) || 0,
+        external_url: resourceForm.external_url?.trim(),
+        enabled: resourceForm.enabled !== false,
+        metadata: {},
+      });
+      setResourceOpen(false);
+      await load();
+    } catch (e) {
+      setResourceError(e.message || 'Failed to create resource');
+    } finally {
+      setResourceSaving(false);
+    }
   };
 
   const saveIdP = async () => {
@@ -209,6 +296,25 @@ export default function OrganizationDetail() {
     }
   };
 
+  const revokeOrganization = async () => {
+    if (!organization?.id) return;
+    setRevoking(true);
+    setError('');
+    try {
+      await updateOrganization(organizationID, {
+        ...organization,
+        enabled: false,
+        domains: Array.isArray(organization.domains) ? organization.domains : [],
+      });
+      setRevokeOpen(false);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Failed to revoke organization');
+    } finally {
+      setRevoking(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="py-16 text-center text-text-muted">
@@ -240,154 +346,214 @@ export default function OrganizationDetail() {
         </div>
       )}
 
-      <section className="p-5">
-        <div className="space-y-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact onClick={() => navigateBack(navigate, '/organizations', location)}>
-                  <ArrowLeft size={16} />
-                </BackIconButton>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-2xl font-bold leading-tight text-text-primary">{organization.name}</h1>
-                    <StatusBadge enabled={organization.enabled} />
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                    <span className="inline-flex items-center gap-1">
-                      {organization.domain || 'No primary domain'}
-                    </span>
-                  </div>
+      <section className="space-y-5 pb-5 pr-3 pt-1">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                aria-label="Back to organizations"
+                onClick={() => navigateBack(navigate, '/organizations', location)}
+                className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center text-text-primary transition-colors hover:text-accent focus-visible:text-accent active:text-accent-hover"
+              >
+                <ChevronLeft size={34} strokeWidth={3} />
+              </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{organization.name}</h1>
+                  <StatusBadge enabled={organization.enabled} />
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
+                  <span className="inline-flex items-center gap-1">
+                    {organization.domain || 'No primary domain'}
+                  </span>
                 </div>
               </div>
-              {organization.description && <p className="mt-4 max-w-3xl text-sm text-text-secondary">{organization.description}</p>}
             </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <Button onClick={openEdit}>
-                <Edit2 size={14} />
-              </Button>
-            </div>
+            {organization.description && <p className="mt-4 max-w-3xl text-sm text-text-secondary">{organization.description}</p>}
           </div>
-
-          <div className="border-t border-border" />
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-[13px] font-bold uppercase tracking-[0.12em] text-text-muted">Primary authentication</p>
-              <button type="button" onClick={openAddIdP} className={`${summaryItemClass} mt-2`}>
-                <span className="block truncate text-base font-semibold text-text-primary hover:text-accent">
-                  {configuredIdP?.name || 'No identity provider configured'}
-                </span>
-                <span className="mt-1 block truncate text-xs text-text-secondary">
-                  {configuredIdP?.issuer || 'Add an OIDC provider to authenticate organization users.'}
-                </span>
-              </button>
-            </div>
-            <Button variant="secondary" className="w-fit self-start !shadow-none sm:self-center" onClick={openAddIdP}>
-              {configuredIdP ? 'View' : 'Add'}
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <Button
+              variant="danger"
+              onClick={() => setRevokeOpen(true)}
+              disabled={organization.enabled === false || revoking}
+            >
+              <Ban size={14} />
+              Revoke
+            </Button>
+            <Button onClick={openEdit}>
+              <Edit2 size={14} />
+              Edit
             </Button>
           </div>
+        </div>
 
-          <div className="border-t border-border" />
+        <div className="border-t border-border" />
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-[13px] font-bold uppercase tracking-[0.12em] text-text-muted">
-                Gateways ({organizationGateways.length})
-              </p>
-              {organizationGateways.length === 0 ? (
-                <p className="mt-1 text-base font-semibold text-text-primary">No gateways configured</p>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {organizationGateways.slice(0, 2).map((gateway) => (
-                    <button
-                      key={gateway.id}
-                      type="button"
-                      onClick={() => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(gateway.id)}`, location)}
-                      className={summaryItemClass}
-                    >
-                      <span className="flex min-w-0 flex-wrap items-center gap-2">
-                        <span className="truncate text-base font-semibold text-text-primary hover:text-accent">
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <section className={`${detailPanelClass} min-h-[460px] overflow-hidden`} aria-label="Organization infrastructure">
+            <OrganizationHierarchyFlow
+              organization={organization}
+              gateways={organizationGateways}
+              resources={organizationResources}
+              className="h-full min-h-[460px]"
+            />
+          </section>
+
+          <aside className={`${detailPanelClass} flex min-h-[460px] flex-col p-5`}>
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-bold leading-tight text-text-primary">Authentication source</h2>
+              <StatusText variant={configuredIdP ? configuredIdP.enabled === false ? 'danger' : 'success' : 'neutral'}>
+                {configuredIdP ? configuredIdP.enabled === false ? 'Disabled' : 'Enabled' : 'Not configured'}
+              </StatusText>
+            </div>
+
+            <div className="mt-6 grid gap-5">
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Name</p>
+                <p className="mt-2 truncate text-sm font-semibold text-text-primary">
+                  {configuredIdP?.name || 'No identity provider configured'}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Issuer</p>
+                <p className="mt-2 break-words text-sm font-semibold text-text-primary">
+                  {configuredIdP?.issuer || 'Add an OIDC provider to authenticate organization users.'}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Client ID</p>
+                <p className="mt-2 truncate text-sm font-semibold text-text-primary">{configuredIdP?.client_id || '-'}</p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">SCIM token</p>
+                <p className={`mt-2 text-sm font-bold uppercase ${configuredIdP?.has_scim_token ? 'text-[#638f67]' : 'text-[#b46a62]'}`}>
+                  {configuredIdP?.has_scim_token ? 'CONFIGURED' : 'NOT CONFIGURED'}
+                </p>
+              </div>
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Groups</p>
+                  <p className="mt-2 text-sm font-semibold text-text-primary">{directoryGroups.length}</p>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Users</p>
+                  <p className="mt-2 text-sm font-semibold text-text-primary">{directoryUsers.length}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-auto flex justify-end pt-6">
+              <Button className="!shadow-none" onClick={openAddIdP}>
+                <span>{configuredIdP ? 'View' : 'Add'}</span>
+                <ChevronRight size={18} strokeWidth={3} />
+              </Button>
+            </div>
+          </aside>
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-2">
+          <section className={`${detailPanelClass} p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h2 className={relatedSectionTitleClass}>
+                  Gateways <span className={relatedSectionCountClass}>({organizationGateways.length})</span>
+                </h2>
+              </div>
+              <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:self-center sm:justify-end">
+                <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/gateways?${organizationListFilter}`)}>
+                  View all
+                </Button>
+                <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => gatewayCreate.openGatewayCreate(organization)}>
+                  <Plus size={13} />
+                  New
+                </Button>
+              </div>
+            </div>
+
+            {organizationGateways.length === 0 ? (
+              <p className="mt-4 text-base font-semibold text-text-primary">No gateways configured</p>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {organizationGateways.slice(0, 4).map((gateway) => (
+                  <button
+                    key={gateway.id}
+                    type="button"
+                    onClick={() => navigateWithReturn(navigate, `/gateways/${encodeURIComponent(gateway.id)}`, location)}
+                    className={summaryItemClass}
+                  >
+                    <span className="flex min-w-0 items-start justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block text-[11px] font-bold uppercase tracking-[0.08em] text-text-muted">
+                          Gateway
+                        </span>
+                        <span className="mt-1 block truncate text-base font-semibold text-text-primary">
                           {gateway.name || gateway.id}
                         </span>
-                        <Badge variant={gateway.status === 'revoked' ? 'danger' : gateway.status === 'pending' ? 'warning' : 'success'}>
-                          {gateway.status || 'active'}
-                        </Badge>
+                        <span className="mt-1 block truncate text-xs text-text-secondary">
+                          {gateway.fqdn || gateway.id}
+                        </span>
                       </span>
-                      <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-                        <span className="text-mono">{gateway.fqdn || gateway.id}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/gateways?${organizationListFilter}`)}>
-                View all
-              </Button>
-              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => gatewayCreate.openGatewayCreate(organization)}>
-                <Plus size={13} />
-                New
-              </Button>
-            </div>
-          </div>
+                      <StatusText variant={gateway.status === 'revoked' ? 'danger' : gateway.status === 'pending' ? 'warning' : 'success'}>
+                        {gateway.status || 'active'}
+                      </StatusText>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
 
-          <div className="border-t border-border" />
+          <section className={`${detailPanelClass} p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h2 className={relatedSectionTitleClass}>
+                  Resources <span className={relatedSectionCountClass}>({organizationResources.length})</span>
+                </h2>
+              </div>
+              <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:self-center sm:justify-end">
+                <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${organizationListFilter}`)}>
+                  View all
+                </Button>
+                <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={openResourceCreate}>
+                  <Plus size={13} />
+                  New
+                </Button>
+              </div>
+            </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-[13px] font-bold uppercase tracking-[0.12em] text-text-muted">
-                Resources ({organizationResources.length})
-              </p>
-              {organizationResources.length === 0 ? (
-                <p className="mt-1 text-base font-semibold text-text-primary">No resources configured</p>
-              ) : (
-                <div className="mt-2 space-y-2">
-                  {organizationResources.slice(0, 2).map((resource) => (
-                    <button
-                      key={resource.id}
-                      type="button"
-                      onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}
-                      className={summaryItemClass}
-                    >
-                      <span className="flex min-w-0 flex-wrap items-center gap-2">
-                        <span className="truncate text-base font-semibold text-text-primary hover:text-accent">
+            {organizationResources.length === 0 ? (
+              <p className="mt-4 text-base font-semibold text-text-primary">No resources configured</p>
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {organizationResources.slice(0, 4).map((resource) => (
+                  <button
+                    key={resource.id}
+                    type="button"
+                    onClick={() => navigateWithReturn(navigate, `/resources/${encodeURIComponent(resource.id)}`, location)}
+                    className={summaryItemClass}
+                  >
+                    <span className="flex min-w-0 items-start justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="block text-[11px] font-bold uppercase tracking-[0.08em] text-text-muted">
+                          {resourceProtocolLabel(resource)}
+                        </span>
+                        <span className="mt-1 block truncate text-base font-semibold text-text-primary">
                           {resource.name || resource.id}
                         </span>
-                        <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
+                        <span className="mt-1 block truncate text-xs text-text-secondary">
+                          {resourceTargetLabel(resource)}
+                        </span>
                       </span>
-                      <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-                        <span>{gatewayByID.get(resource.gateway_id)?.name || resource.gateway_id || 'No gateway'}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex w-fit flex-wrap items-center gap-2 self-start sm:justify-end">
-              <Button variant="secondary" className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${organizationListFilter}`)}>
-                View all
-              </Button>
-              <Button className="!px-2.5 !py-1.5 !shadow-none" onClick={() => navigate(`/resources?${organizationListFilter}&create=1`)}>
-                <Plus size={13} />
-                New
-              </Button>
-            </div>
-          </div>
-
-          <div className="border-t border-border" />
-
-          <div>
-            <h2 className="text-[13px] font-bold uppercase tracking-[0.12em] text-text-muted">Organization Infrastructure</h2>
-            <div className="mt-4">
-              <OrganizationHierarchyFlow
-                organization={organization}
-                gateways={organizationGateways}
-                resources={organizationResources}
-              />
-            </div>
-          </div>
+                      <StatusText variant={resource.enabled === false ? 'danger' : 'success'}>
+                        {resource.enabled === false ? 'disabled' : 'enabled'}
+                      </StatusText>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
       </section>
 
@@ -398,6 +564,17 @@ export default function OrganizationDetail() {
         saving={editSaving}
         onClose={() => setEditOpen(false)}
         onSave={saveEdit}
+      />
+
+      <ConfirmDialog
+        open={revokeOpen}
+        onClose={() => setRevokeOpen(false)}
+        onConfirm={revokeOrganization}
+        title="Revoke organization"
+        message={`Revoke "${organization.name}"? New access through this organization will be disabled, while the organization record remains available for review.`}
+        confirmLabel="Revoke organization"
+        loadingLabel="Revoking..."
+        loading={revoking}
       />
 
       {gatewayCreate.open ? (
@@ -412,6 +589,62 @@ export default function OrganizationDetail() {
           onCreate={gatewayCreate.handleGatewayCreate}
         />
       ) : null}
+
+      <Modal
+        open={resourceOpen}
+        onClose={() => setResourceOpen(false)}
+        title={`Add Resource - ${organization.name}`}
+        size="3xl"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setResourceOpen(false)}>Cancel</Button>
+            <Button onClick={saveResourceCreate} disabled={resourceSaving || !resourceForm.gateway_id || !resourceForm.name?.trim()}>
+              {resourceSaving ? 'Saving...' : 'Create Resource'}
+            </Button>
+          </>
+        )}
+      >
+        {resourceError && <div className="rounded-md border border-danger bg-danger-muted p-3 text-xs text-danger">{resourceError}</div>}
+
+        <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-4">
+          <FormField label="Organization" className="mb-0 md:col-span-2">
+            <FormInput value={organization.name || organization.id} disabled />
+          </FormField>
+          <FormField label="Gateway" className="mb-0 md:col-span-2">
+            <FormSelect value={resourceForm.gateway_id || ''} onChange={(event) => setResourceForm({ ...resourceForm, gateway_id: event.target.value })}>
+              <option value="">Select gateway</option>
+              {organizationGateways.map((gateway) => (
+                <option key={gateway.id} value={gateway.id}>{gateway.name}</option>
+              ))}
+            </FormSelect>
+          </FormField>
+
+          <FormField label="Type" className="mb-0">
+            <FormSelect value={resourceForm.type || 'web'} onChange={(event) => selectResourceType(event.target.value)}>
+              {resourceTypes.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </FormSelect>
+          </FormField>
+          <FormField label="Port" className="mb-0">
+            <FormInput type="number" value={resourceForm.port || ''} onChange={(event) => setResourceForm({ ...resourceForm, port: event.target.value })} />
+          </FormField>
+          <FormField label="Name" className="mb-0 md:col-span-2">
+            <FormInput value={resourceForm.name || ''} onChange={(event) => setResourceForm({ ...resourceForm, name: event.target.value })} placeholder="Production Admin Portal" />
+          </FormField>
+
+          <FormField label="Internal Host" className="mb-0 md:col-span-2">
+            <FormInput value={resourceForm.host || ''} onChange={(event) => setResourceForm({ ...resourceForm, host: event.target.value })} placeholder="10.0.0.5 or server.internal" />
+          </FormField>
+          <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
+            <FormInput value={resourceForm.external_url || ''} onChange={(event) => setResourceForm({ ...resourceForm, external_url: event.target.value })} placeholder="https://app.example.com or ssh.example.com" />
+          </FormField>
+
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-2 md:col-span-4">
+            <FormCheckbox id="org-resource-enabled" checked={resourceForm.enabled !== false} onChange={(event) => setResourceForm({ ...resourceForm, enabled: event.target.checked })} label="Enabled" />
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={idpOpen}

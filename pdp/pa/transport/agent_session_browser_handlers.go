@@ -86,12 +86,14 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 		}); err != nil {
 			log.Printf("[AGENT-SESSION] Failed to cancel browser authentication session: session=%s err=%v", session.ID, err)
 		}
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", "", stepUpRemoteIP(r), models.DecisionDeny, "User authentication cancelled", false)
 		redirectBrowserCancelled(w, r)
 		return
 	}
 	email := strings.TrimSpace(r.Form.Get("email"))
 	idpCfg, ok := s.resolveAgentSessionIdentityProvider(session.TenantID, email)
 	if !ok {
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", email, stepUpRemoteIP(r), models.DecisionDeny, "Email does not match any organization directory", false)
 		renderEnrollmentPage(w, "Sign in", "Email does not match any organization directory.", email, true)
 		return
 	}
@@ -207,12 +209,14 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 	tokenResp, err := s.pa.Auth.Federation.ExchangeExternalCode(fedCfg, code, s.federatedCallbackURL(), session.PKCEVerifier)
 	if err != nil {
 		log.Printf("[AGENT-SESSION] Federation code exchange failed: session=%s err=%v", session.ID, err)
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", "", stepUpRemoteIP(r), models.DecisionDeny, "Organization sign-in failed", false)
 		http.Error(w, "Federation code exchange failed", http.StatusBadGateway)
 		return true
 	}
 	claims, err := s.pa.Auth.Federation.ValidateAndMapExternalClaims(fedCfg, tokenResp.IDToken, session.BrowserNonce, claimMapping)
 	if err != nil {
 		log.Printf("[AGENT-SESSION] Claim mapping failed: session=%s err=%v", session.ID, err)
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", "", stepUpRemoteIP(r), models.DecisionDeny, "Organization sign-in identity could not be verified", false)
 		http.Error(w, "Failed to extract identity from external IdP", http.StatusBadGateway)
 		return true
 	}
@@ -223,6 +227,7 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.Issuer, claims.Username, claims.Email, role, session.TenantID)
 	if err != nil {
 		log.Printf("[AGENT-SESSION] Federated user provisioning failed: session=%s err=%v", session.ID, err)
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", claims.Username, stepUpRemoteIP(r), models.DecisionDeny, "User account could not be prepared after organization sign-in", false)
 		http.Error(w, "User provisioning failed", http.StatusInternalServerError)
 		return true
 	}
@@ -232,6 +237,7 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 			live.Reason = "user_disabled"
 			return nil
 		})
+		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, user.ID, user.Username, stepUpRemoteIP(r), models.DecisionDeny, "User account is disabled", false)
 		renderEnrollmentPage(w, "Authentication denied", "Authentication was denied. Contact your administrator.", "", false)
 		return true
 	}
@@ -248,9 +254,20 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 		http.Error(w, "Authentication session could not be completed", http.StatusConflict)
 		return true
 	}
-	s.pa.Audit.LogEvent("agent_user_session_authenticated", user.ID, user.Username, r.RemoteAddr, "", "", "User authenticated for TrustAgent session via "+idpCfg.Issuer, true)
+	s.logAgentUserAuthenticationEvent("agent_user_authentication_approved", session, user.ID, user.Username, stepUpRemoteIP(r), models.DecisionAllow, "User authenticated via organization sign-in", true)
 	renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)
 	return true
+}
+
+func (s *Server) logAgentUserAuthenticationEvent(eventType string, session *agentSessionTransaction, userID, username, sourceIP, decision, details string, success bool) {
+	if s == nil || s.pa == nil || s.pa.Audit == nil {
+		return
+	}
+	resource := ""
+	if session != nil {
+		resource = strings.TrimSpace(session.DeviceID)
+	}
+	s.pa.Audit.LogEvent(eventType, userID, username, sourceIP, resource, decision, details, success)
 }
 
 func firstNonEmptyAgentSession(values ...string) string {

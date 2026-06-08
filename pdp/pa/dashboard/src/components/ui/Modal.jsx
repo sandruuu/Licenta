@@ -11,9 +11,16 @@ export default function Modal({ open, onClose, title, children, footer, size = '
 
   useEffect(() => {
     if (!open) return undefined;
+    const root = document.documentElement;
+    const previousRootOverflow = root.style.overflow;
+    const previousRootScrollbarGutter = root.style.scrollbarGutter;
     const previousOverflow = document.body.style.overflow;
+    root.style.overflow = 'hidden';
+    root.style.scrollbarGutter = 'auto';
     document.body.style.overflow = 'hidden';
     return () => {
+      root.style.overflow = previousRootOverflow;
+      root.style.scrollbarGutter = previousRootScrollbarGutter;
       document.body.style.overflow = previousOverflow;
     };
   }, [open]);
@@ -39,7 +46,7 @@ export default function Modal({ open, onClose, title, children, footer, size = '
             <X size={20} />
           </button>
         </div>
-        <div className={`p-6 space-y-4 overflow-y-auto ${bodyClassName}`}>
+        <div className={`space-y-4 overflow-y-auto p-6 [scrollbar-gutter:stable] ${bodyClassName}`}>
           {children}
         </div>
         {footer && (

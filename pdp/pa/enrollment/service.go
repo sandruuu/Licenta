@@ -119,17 +119,18 @@ type Config struct {
 }
 
 type Service struct {
-	mu                      sync.RWMutex
-	store                   *store.Store
-	signer                  CertificateSigner
-	interactiveIssuer       InteractiveDeviceCertificateIssuer
-	revoker                 CertificateRevoker
-	deviceRole              DeviceRoleResolver
-	enrollmentTokenIssuer   EnrollmentTokenIssuer
-	publisher               EventPublisher
-	certificateValidityDays int
-	browserSessionTTL       time.Duration
-	interactiveSessions     map[string]*InteractiveSession
+	mu                               sync.RWMutex
+	store                            *store.Store
+	signer                           CertificateSigner
+	interactiveIssuer                InteractiveDeviceCertificateIssuer
+	revoker                          CertificateRevoker
+	deviceRole                       DeviceRoleResolver
+	enrollmentTokenIssuer            EnrollmentTokenIssuer
+	publisher                        EventPublisher
+	certificateValidityDays          int
+	browserSessionTTL                time.Duration
+	interactiveSessions              map[string]*InteractiveSession
+	interactiveSessionExpiredHandler InteractiveSessionExpiredHandler
 }
 
 func NewService(store *store.Store, cfgs ...Config) *Service {

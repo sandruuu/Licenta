@@ -5,9 +5,6 @@ const variants = {
   info:    'bg-info-muted text-info',
   neutral: 'bg-surface-secondary text-text-muted',
   accent:  'bg-accent-muted text-accent',
-  resourceWeb: 'bg-[#dceff1] text-[#1f6f78]',
-  resourceSsh: 'bg-[#e7eaff] text-[#4353a3]',
-  resourceRdp: 'bg-[#efe7f7] text-[#7550a8]',
 };
 
 export default function Badge({ variant = 'neutral', children, className = '' }) {

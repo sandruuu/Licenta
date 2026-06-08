@@ -2,13 +2,11 @@ import { createElement } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { clearToken } from '../api';
 import BrandLogo from './ui/BrandLogo';
-import ThemeToggle from './ui/ThemeToggle';
 import {
-  LayoutDashboard,
   Server,
   Router,
   Radio,
-  Activity,
+  LaptopMinimalCheck,
   FileText,
   LogOut,
   Building2,
@@ -16,11 +14,6 @@ import {
 } from 'lucide-react';
 
 const navSections = [
-  {
-    items: [
-      { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
-    ],
-  },
   {
     items: [
       { to: '/organizations', icon: Building2, label: 'Organizations' },
@@ -32,7 +25,7 @@ const navSections = [
   {
     items: [
       { to: '/sessions', icon: Radio, label: 'Sessions' },
-      { to: '/device-health', icon: Activity, label: 'Devices' },
+      { to: '/device-data', icon: LaptopMinimalCheck, label: 'Devices' },
       { to: '/audit', icon: FileText, label: 'Audit' },
     ],
   },
@@ -47,21 +40,26 @@ export default function Layout() {
   };
 
   return (
-    <div className="min-h-screen">
+    <div className="h-screen overflow-hidden">
       <aside
         className="sidebar-shell group fixed left-1.5 top-1.5 z-40 flex h-[calc(100vh-12px)] w-[88px] flex-col gap-2 rounded-md p-2 transition-[width] duration-300 ease-out hover:w-[292px]"
       >
-        <div className="sidebar-panel flex h-20 shrink-0 items-center justify-center gap-0 rounded-md px-3 transition-colors group-hover:justify-start group-hover:gap-3">
-          <BrandLogo
-            className="flex w-full items-center justify-center gap-0 group-hover:justify-start group-hover:gap-3"
-            textWrapperClassName="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100"
-          />
+        <div className="sidebar-panel flex h-24 shrink-0 items-center justify-center gap-0 rounded-md px-2 transition-colors group-hover:justify-start group-hover:gap-2">
+          <NavLink to="/" title="TRUSTCloud" className="flex w-full items-center justify-center gap-0 no-underline group-hover:justify-start group-hover:gap-2">
+            <BrandLogo
+              className="flex w-full items-center justify-center gap-0 group-hover:justify-start group-hover:gap-2"
+              iconBoxClassName="grid h-16 w-16 shrink-0 place-items-center text-accent"
+              iconClassName="h-14 w-14"
+              textWrapperClassName="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100"
+              titleClassName="text-[22px] font-bold leading-none text-text-primary"
+            />
+          </NavLink>
         </div>
 
         <div className="sidebar-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md">
           <nav className="flex-1 overflow-y-auto px-3 py-4">
             {navSections.map((section, sectionIndex) => (
-              <div key={sectionIndex} className="mb-4">
+              <div key={sectionIndex} className={sectionIndex < navSections.length - 1 ? 'mb-1' : ''}>
                 <div className="space-y-1">
                   {section.items.map(({ to, icon, label, end }) => (
                     <NavLink
@@ -90,13 +88,6 @@ export default function Layout() {
           </nav>
 
           <div className="shrink-0 p-3">
-            <ThemeToggle
-              showLabel
-              borderless
-              collapsibleLabel
-              className="mb-2 justify-center group-hover:justify-start group-hover:gap-3"
-              labelClassName="w-0 opacity-0 group-hover:w-auto group-hover:opacity-100"
-            />
             <button
               type="button"
               onClick={handleLogout}
@@ -112,8 +103,8 @@ export default function Layout() {
         </div>
       </aside>
 
-      <main className="min-h-screen pl-[96px]">
-        <div className="p-8">
+      <main className="h-screen overflow-hidden pl-[96px]">
+        <div className="h-full overflow-y-auto overflow-x-hidden p-8">
           <Outlet />
         </div>
       </main>

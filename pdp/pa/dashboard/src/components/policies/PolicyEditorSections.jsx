@@ -1,30 +1,39 @@
 import { useState } from 'react';
-import { Check, FileText, Plus, X } from 'lucide-react';
-import Badge from '../ui/Badge';
-import {
-  DetailSummaryItem,
-  detailSectionTitleClass,
-} from '../ui/Detail';
+import { Check, FileText, Plus, Unlink, X } from 'lucide-react';
 import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '../ui/FormField';
-import { LayerBadge } from './PolicyBadges';
-import { sectionIcons } from './policyIcons';
+import StatusText from '../ui/StatusText';
+import { layerIcons, sectionIcons } from './policyIcons';
 import {
   ACCESS_CONDITION_GROUPS,
   AUTHENTICATION_POLICIES,
   COUNTRY_OPTIONS,
   NEW_USER_POLICIES,
+  STEP_UP_METHOD_OPTIONS,
   USER_LOCATION_ACTIONS,
   actionFromAuthenticationPolicy,
-  assignmentContextLabel,
   assignmentTargetLabel,
   countryLabel,
   createUserLocationRule,
+  isDefaultGlobalAssignment,
+  layerMeta,
   listToText,
+  normalizeStepUpMethods,
   normalizeUserLocationRules,
   requiredDeviceChecksFromValue,
   splitList,
   toggleListValue,
 } from './policyModel';
+
+const assignmentCardClass = 'block w-full rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-3 py-3 text-left shadow-[0_6px_14px_rgba(42,42,42,0.10)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_8px_16px_rgba(42,42,42,0.12)]';
+const sectionTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
+const sectionCountClass = 'text-sm font-bold text-text-muted';
+const shadowSafeContentClass = 'px-2 pb-5 pt-1';
+const optionClass = 'block rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-3 text-left shadow-[0_8px_16px_rgba(42,42,42,0.10)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.12)]';
+const optionSelectedClass = 'border-accent bg-[rgba(44,97,100,0.12)] shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
+
+function DetailsHeading({ children }) {
+  return <p className={sectionTitleClass}>{children}</p>;
+}
 
 function SectionToggle({ checked, onChange }) {
   return (
@@ -45,7 +54,14 @@ function SectionToggle({ checked, onChange }) {
   );
 }
 
-function AssignmentList({ assignments, maps }) {
+function assignmentLocationLabel(assignment, maps) {
+  const resource = maps.resources?.get(assignment.resource_id);
+  const gateway = maps.gateways?.get(resource?.gateway_id || assignment.gateway_id);
+  const organization = maps.organizations?.get(assignment.tenant_id);
+  return [gateway?.name || resource?.gateway_id, organization?.name || assignment.tenant_id].filter(Boolean).join(' / ');
+}
+
+function AssignmentList({ assignments, maps, saving, onUnassignRequest }) {
   if (!assignments.length) {
     return (
       <p className="mt-2 px-4 py-3 text-sm font-semibold text-text-secondary">
@@ -55,20 +71,44 @@ function AssignmentList({ assignments, maps }) {
   }
 
   return (
-    <div className="mt-2 space-y-2">
-      {assignments.map((assignment) => (
-        <DetailSummaryItem key={assignment.id} className="rounded-md border border-border-light bg-surface-card">
-          <span className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-base font-semibold text-text-primary">
-              {assignmentTargetLabel(assignment, maps)}
-            </span>
-            <LayerBadge level={assignment.level} />
-          </span>
-          <span className="mt-1 block truncate text-xs text-text-secondary">
-            {assignmentContextLabel(assignment, maps)}
-          </span>
-        </DetailSummaryItem>
-      ))}
+    <div className="mt-1 grid gap-2 px-2 pb-4 pt-1 lg:grid-cols-2">
+      {assignments.map((assignment) => {
+        const meta = layerMeta(assignment.level);
+        const Icon = layerIcons[assignment.level] || FileText;
+        const target = assignmentTargetLabel(assignment, maps);
+        const defaultAssignment = isDefaultGlobalAssignment(assignment);
+        return (
+          <div key={assignment.id} className={assignmentCardClass}>
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <p className="inline-flex min-w-0 items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-accent">
+                  <Icon size={12} className="shrink-0" />
+                  <span className="truncate">{meta.shortLabel}</span>
+                </p>
+                <button
+                  type="button"
+                  disabled={saving || defaultAssignment}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onUnassignRequest?.({ ...assignment, label: target });
+                  }}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-danger transition-colors hover:bg-danger-muted disabled:cursor-not-allowed disabled:text-text-muted disabled:opacity-60 disabled:hover:bg-transparent"
+                  title="Unassign"
+                  aria-label={`Unassign ${target}`}
+                >
+                  <Unlink size={14} />
+                </button>
+              </div>
+              <div className="min-w-0">
+                <p className="mt-2 truncate text-sm font-semibold text-text-primary">{target}</p>
+                <p className="mt-1 truncate text-xs font-semibold text-text-secondary">
+                  {assignmentLocationLabel(assignment, maps) || '-'}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -98,11 +138,14 @@ export function PolicyNavItem({ section, active, configured, onClick }) {
   );
 }
 
-export function DetailsSection({ form, setForm, assignments, maps }) {
+export function DetailsSection({ form, setForm, assignments, maps, saving, onUnassignRequest }) {
   return (
     <div>
-      <p className={detailSectionTitleClass}>Policy details</p>
-      <div className="mt-3 grid max-w-4xl gap-x-4 gap-y-1 md:grid-cols-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <DetailsHeading>Policy details</DetailsHeading>
+        <StatusText variant="success">Required</StatusText>
+      </div>
+      <div className={`mt-3 grid max-w-4xl gap-x-4 gap-y-1 md:grid-cols-2 ${shadowSafeContentClass}`}>
         <FormField label="Policy name" className="mb-3 md:col-span-2">
           <FormInput
             value={form.name}
@@ -126,8 +169,10 @@ export function DetailsSection({ form, setForm, assignments, maps }) {
       </div>
 
       <div className="mt-5">
-        <p className={detailSectionTitleClass}>Assignments ({assignments.length})</p>
-        <AssignmentList assignments={assignments} maps={maps} />
+        <DetailsHeading>
+          Assignments <span className={sectionCountClass}>({assignments.length})</span>
+        </DetailsHeading>
+        <AssignmentList assignments={assignments} maps={maps} saving={saving} onUnassignRequest={onUnassignRequest} />
       </div>
     </div>
   );
@@ -135,17 +180,15 @@ export function DetailsSection({ form, setForm, assignments, maps }) {
 
 function RadioOption({ name, value, selected, title, description, onSelect }) {
   return (
-    <label className={`block cursor-pointer rounded-md border px-4 py-3 transition-colors ${
-      selected ? 'border-accent bg-accent-muted' : 'border-border-light bg-surface-card hover:border-accent hover:bg-accent-muted'
-    }`}>
-      <input
-        type="radio"
-        name={name}
-        checked={selected}
-        onChange={() => onSelect(value)}
-        className="sr-only"
-      />
-      <span className="flex items-center gap-3">
+    <div className={`${optionClass} ${selected ? optionSelectedClass : ''}`}>
+      <label className="flex cursor-pointer items-center gap-3">
+        <input
+          type="radio"
+          name={name}
+          checked={selected}
+          onChange={() => onSelect(value)}
+          className="sr-only"
+        />
         <span className={`grid h-2 w-2 shrink-0 place-items-center rounded-full border ${
           selected ? 'border-accent bg-accent' : 'border-border bg-surface'
         }`} />
@@ -153,8 +196,8 @@ function RadioOption({ name, value, selected, title, description, onSelect }) {
           <span className="block text-sm font-bold text-text-primary">{title}</span>
           <span className="mt-1 block text-xs leading-5 text-text-secondary">{description}</span>
         </span>
-      </span>
-    </label>
+      </label>
+    </div>
   );
 }
 
@@ -176,60 +219,82 @@ export function NewUserSection({ form, setForm }) {
   );
 }
 
-export function AuthenticationPolicySection({ form, setForm }) {
-  const selectedStepUpMethods = splitList(form.step_up_methods || 'totp, webauthn');
+function StepUpMethodsCheckboxes({ form, setForm }) {
+  const selectedStepUpMethods = normalizeStepUpMethods(form.step_up_methods);
+  const requiredMethod = STEP_UP_METHOD_OPTIONS[0]?.value;
   const toggleStepUpMethod = (method) => {
+    if (method === requiredMethod) return;
     const nextMethods = toggleListValue(selectedStepUpMethods, method);
-    setForm({ ...form, step_up_methods: listToText(nextMethods.length ? nextMethods : ['totp', 'webauthn']) });
+    setForm({ ...form, step_up_methods: listToText(normalizeStepUpMethods(nextMethods)) });
   };
 
   return (
+    <div className="grid gap-2">
+      {STEP_UP_METHOD_OPTIONS.map((method) => {
+        const checked = selectedStepUpMethods.includes(method.value);
+        const required = method.value === requiredMethod;
+        return (
+          <label
+            key={method.value}
+            className={`inline-flex select-none items-center gap-2 text-sm font-semibold text-text-secondary ${
+              required ? 'cursor-default' : 'cursor-pointer hover:text-text-primary'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={required}
+              onChange={() => toggleStepUpMethod(method.value)}
+              className="peer sr-only"
+              aria-label={required ? `${method.label} required` : method.label}
+            />
+            <span
+              aria-hidden="true"
+              className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border transition-colors peer-focus-visible:ring-[3px] peer-focus-visible:ring-accent-muted ${
+                checked
+                  ? 'border-accent bg-accent text-white-smoke'
+                  : 'border-border bg-surface text-transparent'
+              }`}
+            >
+              <Check size={14} strokeWidth={3} />
+            </span>
+            <span>{method.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+export function AuthenticationPolicySection({ form, setForm }) {
+  return (
     <div className="grid max-w-4xl gap-5">
       <div className="grid max-w-3xl gap-3">
-        {AUTHENTICATION_POLICIES.map((option) => (
-          <RadioOption
-            key={option.value}
-            name="authentication-policy"
-            value={option.value}
-            selected={(form.authentication_policy || 'enforce_mfa') === option.value}
-            title={option.title}
-            description={option.description}
-            onSelect={(value) => setForm({
-              ...form,
-              authentication_policy: value,
-              action: actionFromAuthenticationPolicy(value),
-            })}
-          />
-        ))}
-      </div>
-
-      {(form.authentication_policy || 'enforce_mfa') === 'enforce_mfa' && (
-        <div className="grid gap-4 border-t border-border-light pt-4">
-          <FormField label="Step-up methods" className="mb-0">
-            <div className="grid gap-2 sm:grid-cols-2">
-              {[
-                { value: 'totp', label: 'Authenticator app' },
-                { value: 'webauthn', label: 'Passkey or security key' },
-              ].map((method) => {
-                const checked = selectedStepUpMethods.includes(method.value);
-                return (
-                  <button
-                    type="button"
-                    key={method.value}
-                    onClick={() => toggleStepUpMethod(method.value)}
-                    className={`rounded-md border px-3 py-2 text-left text-sm font-bold transition-colors ${
-                      checked ? 'border-accent bg-accent-muted text-accent' : 'border-border-light bg-surface hover:border-accent'
-                    }`}
-                    aria-pressed={checked}
-                  >
-                    {method.label}
-                  </button>
-                );
+      {AUTHENTICATION_POLICIES.map((option) => {
+        const selected = (form.authentication_policy || 'enforce_mfa') === option.value;
+        return (
+          <div key={option.value} className={`grid gap-2 ${option.value === 'enforce_mfa' && selected ? 'mb-2' : ''}`}>
+            <RadioOption
+              name="authentication-policy"
+              value={option.value}
+              selected={selected}
+              title={option.title}
+              description={option.description}
+              onSelect={(value) => setForm({
+                ...form,
+                authentication_policy: value,
+                action: actionFromAuthenticationPolicy(value),
               })}
-            </div>
-          </FormField>
-        </div>
-      )}
+            />
+            {option.value === 'enforce_mfa' && selected ? (
+              <div className="ml-7 mt-2">
+                <StepUpMethodsCheckboxes form={form} setForm={setForm} />
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      </div>
     </div>
   );
 }
@@ -237,7 +302,7 @@ export function AuthenticationPolicySection({ form, setForm }) {
 export function RiskBasedAuthenticationSection() {
   return (
     <div className="grid max-w-4xl gap-4">
-      <div className="rounded-md border border-border-light bg-surface-card p-4">
+      <div className="rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] p-4 shadow-[0_8px_16px_rgba(42,42,42,0.10)]">
         <p className="text-sm font-bold text-text-primary">Require MFA when risk is detected</p>
         <p className="mt-2 max-w-3xl text-xs leading-5 text-text-secondary">
           Uses the internal detectors for new location, unrealistic travel, and user baseline anomaly.
@@ -491,14 +556,17 @@ export function UserLocationSection({ form, setForm }) {
     <div className="grid max-w-4xl gap-5">
       <div className="grid gap-4">
         {rules.map((rule, index) => (
-          <div key={`location-rule-${index}`} className="rounded-md border border-border-light bg-surface-card p-4">
+          <div
+            key={`location-rule-${index}`}
+            className="rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] p-4 shadow-[0_8px_16px_rgba(42,42,42,0.10)]"
+          >
             <div className="mb-3 flex items-start justify-between gap-3">
               <p className="text-sm font-bold text-text-primary">Rule {index + 1}</p>
               {rules.length > 1 && (
                 <button
                   type="button"
                   onClick={() => removeRule(index)}
-                  className="grid h-8 w-8 place-items-center rounded-md border border-border-light text-text-muted hover:border-danger hover:text-danger"
+                  className="grid h-8 w-8 place-items-center rounded-md text-text-muted transition-colors hover:bg-danger-muted hover:text-danger"
                   aria-label={`Remove rule ${index + 1}`}
                 >
                   <X size={15} />
@@ -535,9 +603,6 @@ export function UserLocationSection({ form, setForm }) {
           value={form.user_location_default_action || 'allow'}
           onChange={(action) => setForm((current) => ({ ...current, user_location_default_action: action }))}
         />
-        <p className="mt-4 max-w-3xl text-xs font-semibold leading-5 text-text-secondary">
-          Access attempts from internal IPs and unknown countries use the unknown locations setting.
-        </p>
       </div>
 
       <div className="border-t border-border-light pt-5">
@@ -547,6 +612,9 @@ export function UserLocationSection({ form, setForm }) {
           value={form.user_location_unknown_action || 'allow'}
           onChange={(action) => setForm((current) => ({ ...current, user_location_unknown_action: action }))}
         />
+        <p className="mt-4 max-w-3xl text-xs font-semibold leading-5 text-text-secondary">
+          Access attempts from internal IPs and unknown countries use the unknown locations setting.
+        </p>
       </div>
     </div>
   );
@@ -633,12 +701,6 @@ export function ActionSection({ form, setForm }) {
 }
 
 export function StepUpSection({ form, setForm }) {
-  const selectedStepUpMethods = splitList(form.step_up_methods || 'totp, webauthn');
-  const toggleStepUpMethod = (method) => {
-    const nextMethods = toggleListValue(selectedStepUpMethods, method);
-    setForm({ ...form, step_up_methods: listToText(nextMethods.length ? nextMethods : ['totp', 'webauthn']) });
-  };
-
   if (form.action !== 'step_up_required') {
     return (
       <p className="rounded-md border border-border-light bg-surface-card px-4 py-3 text-sm font-semibold text-text-secondary">
@@ -650,27 +712,7 @@ export function StepUpSection({ form, setForm }) {
   return (
     <div className="grid max-w-4xl gap-4">
       <FormField label="Step-up methods" className="mb-0">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {[
-            { value: 'totp', label: 'Authenticator app' },
-            { value: 'webauthn', label: 'Passkey or security key' },
-          ].map((method) => {
-            const checked = selectedStepUpMethods.includes(method.value);
-            return (
-              <button
-                type="button"
-                key={method.value}
-                onClick={() => toggleStepUpMethod(method.value)}
-                className={`rounded-md border px-3 py-2 text-left text-sm font-bold transition-colors ${
-                  checked ? 'border-accent bg-accent-muted text-accent' : 'border-border-light bg-surface hover:border-accent'
-                }`}
-                aria-pressed={checked}
-              >
-                {method.label}
-              </button>
-            );
-          })}
-        </div>
+        <StepUpMethodsCheckboxes form={form} setForm={setForm} />
       </FormField>
     </div>
   );
@@ -749,11 +791,13 @@ export function DeviceSection({ form, setForm, deviceCheckOptions }) {
 
   return (
     <div className="grid max-w-4xl gap-4">
-      <p className="max-w-3xl rounded-md border border-border-light bg-surface-card px-4 py-3 text-xs font-semibold leading-5 text-text-secondary">
-        If required device health checks fail: Block access.
-      </p>
+      <div className="max-w-3xl rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-3 shadow-[0_8px_16px_rgba(42,42,42,0.10)]">
+        <p className="text-xs font-semibold leading-5 text-text-primary">
+          If required device data checks fail: Block access.
+        </p>
+      </div>
       <FormField
-        label="Required device health checks"
+        label="Required device data checks"
         className="mb-0"
       >
         <div className="grid max-w-3xl gap-3">
@@ -783,8 +827,10 @@ export function DeviceSection({ form, setForm, deviceCheckOptions }) {
                 type="button"
                 key={option.value}
                 onClick={() => toggleCheck(option.value)}
-                className={`block rounded-md border px-4 py-3 text-left transition-colors ${
-                  checked ? 'border-accent bg-accent-muted' : 'border-border-light bg-surface-card hover:border-accent hover:bg-accent-muted'
+                className={`block rounded-md border px-4 py-3 text-left transition-[border-color,background-color,box-shadow] duration-150 ${
+                  checked
+                    ? 'border-accent bg-[rgba(44,97,100,0.12)] shadow-[0_8px_16px_rgba(42,42,42,0.12)]'
+                    : 'border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] shadow-[0_8px_16px_rgba(42,42,42,0.10)] hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.12)]'
                 }`}
                 aria-pressed={checked}
               >
@@ -813,28 +859,24 @@ export function PolicyConfigSection({ section, added, onToggle, children }) {
     <div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className={detailSectionTitleClass}>{section.label}</p>
+          <p className={sectionTitleClass}>{section.label}</p>
           <p className="mt-1 max-w-3xl text-sm text-text-secondary">{section.description}</p>
         </div>
         {section.required ? (
-          <Badge variant="accent">Required</Badge>
+          <StatusText variant="success">Required</StatusText>
         ) : onToggle ? (
           <div className="flex h-8 shrink-0 items-center gap-2">
             <span className="text-xs font-bold leading-none text-text-secondary">Add</span>
             <SectionToggle checked={added} onChange={onToggle} />
           </div>
         ) : (
-          <Badge variant={added ? 'accent' : 'neutral'}>{added ? 'Active' : 'Inactive'}</Badge>
+          <StatusText variant={added ? 'success' : 'neutral'}>{added ? 'Active' : 'Inactive'}</StatusText>
         )}
       </div>
-      <div className="mt-4">
+      <div className={`mt-3 ${shadowSafeContentClass}`}>
         {section.required || added ? (
           children
-        ) : (
-          <p className="rounded-md border border-border-light bg-surface-card px-4 py-3 text-sm font-semibold text-text-secondary">
-            Turn on Add to include this condition in the saved policy.
-          </p>
-        )}
+        ) : null}
       </div>
     </div>
   );

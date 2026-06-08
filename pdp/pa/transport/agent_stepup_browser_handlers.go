@@ -87,6 +87,7 @@ func (s *Server) handleBrowserStepUp(w http.ResponseWriter, r *http.Request) {
 		}
 		if browserFormCancelled(r) {
 			s.pa.StepUps.Deny(challenge.ID, "user_cancelled")
+			s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up cancelled by user", false)
 			redirectBrowserCancelled(w, r)
 			return
 		}
@@ -142,7 +143,8 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 	if s.userHasTOTPConfigured(user) {
 		if err := s.pa.Auth.Users.VerifyMFA(challenge.UserID, code); err != nil {
 			log.Printf("[STEP-UP] TOTP verification failed: challenge=%s user=%s err=%v", challenge.ID, challenge.UserID, err)
-			if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "invalid TOTP code"); !retryAllowed {
+			if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "invalid Authenticator app code"); !retryAllowed {
+				s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many invalid Authenticator app codes", false)
 				renderEnrollmentPage(w, "Verification denied", "Too many failed verification attempts. Try accessing the protected resource again.", "", false)
 				return
 			}
@@ -161,7 +163,8 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 		}
 		if err := s.pa.Auth.Users.ActivateTOTPSecret(challenge.UserID, secret, code); err != nil {
 			log.Printf("[STEP-UP] TOTP enrollment verification failed: challenge=%s user=%s err=%v", challenge.ID, challenge.UserID, err)
-			if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "invalid TOTP setup code"); !retryAllowed {
+			if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "invalid Authenticator app setup code"); !retryAllowed {
+				s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many invalid Authenticator app setup codes", false)
 				renderEnrollmentPage(w, "Verification denied", "Too many failed verification attempts. Try accessing the protected resource again.", "", false)
 				return
 			}
@@ -169,7 +172,7 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 			return
 		}
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("agent_mfa_enrolled", challenge.UserID, challenge.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "TOTP enrolled during resource step-up", true)
+			s.pa.Audit.LogEvent("agent_mfa_enrolled", challenge.UserID, challenge.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "Authenticator app enrolled during resource step-up", true)
 		}
 		log.Printf("[STEP-UP] TOTP enrolled during challenge=%s user=%s", challenge.ID, challenge.UserID)
 	}
@@ -185,7 +188,7 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, r.RemoteAddr, completed.ResourceID, models.DecisionAllow, "Step-up completed via PDP TOTP", true)
+		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Authenticator app", true)
 	}
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=totp expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	renderEnrollmentPage(w, "Verification complete", stepUpResourceCompleteMessage, "", false)
@@ -226,6 +229,7 @@ func (s *Server) handleStepUpReauth(w http.ResponseWriter, r *http.Request, chal
 	if err != nil || authenticated == nil || authenticated.ID != user.ID {
 		s.pa.Store.RecordFailedLogin(user.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "primary re-authentication failed"); !retryAllowed {
+			s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many failed primary re-authentication attempts", false)
 			renderEnrollmentPage(w, "Verification denied", "Too many failed verification attempts. Try accessing the protected resource again.", "", false)
 			return
 		}
@@ -244,6 +248,13 @@ func (s *Server) handleStepUpReauth(w http.ResponseWriter, r *http.Request, chal
 		s.pa.Audit.LogEvent("agent_mfa_enrollment_reauth", user.ID, user.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "Primary re-authentication completed for MFA enrollment", true)
 	}
 	http.Redirect(w, r, stepUpMethodURL(challenge.ID, targetMethod), http.StatusSeeOther)
+}
+
+func (s *Server) logResourceStepUpEvent(eventType string, challenge *pa.StepUpChallenge, sourceIP, decision, details string, success bool) {
+	if s == nil || s.pa == nil || s.pa.Audit == nil || challenge == nil {
+		return
+	}
+	s.pa.Audit.LogEvent(eventType, challenge.UserID, challenge.Username, sourceIP, challenge.ResourceID, decision, details, success)
 }
 
 func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge, errorMessage, selectedMethod string) {
@@ -1066,6 +1077,7 @@ func (s *Server) handleStepUpWebAuthnFinish(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		log.Printf("[STEP-UP] WebAuthn finish failed: challenge=%s user=%s err=%v", challenge.ID, user.ID, err)
 		if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "WebAuthn verification failed"); !retryAllowed {
+			s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many failed passkey attempts", false)
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed verification attempts"})
 			return
 		}
@@ -1088,7 +1100,7 @@ func (s *Server) handleStepUpWebAuthnFinish(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, r.RemoteAddr, completed.ResourceID, models.DecisionAllow, "Step-up completed via PDP WebAuthn", true)
+		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Passkey", true)
 	}
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=webauthn expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
@@ -1163,6 +1175,7 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 	if err != nil {
 		log.Printf("[STEP-UP] WebAuthn registration finish failed: challenge=%s user=%s err=%v", challenge.ID, user.ID, err)
 		if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "WebAuthn setup failed"); !retryAllowed {
+			s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many failed passkey setup attempts", false)
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many failed verification attempts"})
 			return
 		}
@@ -1204,7 +1217,7 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, r.RemoteAddr, completed.ResourceID, models.DecisionAllow, "Step-up completed via PDP WebAuthn enrollment", true)
+		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Passkey enrollment", true)
 	}
 	log.Printf("[STEP-UP] WebAuthn enrolled and completed challenge=%s user=%s resource=%s expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})

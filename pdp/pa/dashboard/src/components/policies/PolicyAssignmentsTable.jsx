@@ -1,5 +1,5 @@
 import { Edit2, Trash2 } from 'lucide-react';
-import Badge from '../ui/Badge';
+import StatusText from '../ui/StatusText';
 import { LayerBadge } from './PolicyBadges';
 import { actionMeta, assignmentContextLabel, assignmentTargetLabel } from './policyModel';
 
@@ -28,7 +28,7 @@ export default function PolicyAssignmentsTable({ assignments, maps, onEdit, onDe
               <p className="mt-1 truncate text-xs font-semibold text-text-muted">{assignmentContextLabel(assignment, maps)}</p>
             </div>
             <div className="flex justify-end gap-1">
-              <Badge variant={assignment.enabled === false ? 'danger' : 'success'}>{assignment.enabled === false ? 'Disabled' : 'Active'}</Badge>
+              <StatusText variant={assignment.enabled === false ? 'danger' : 'success'}>{assignment.enabled === false ? 'Disabled' : 'Active'}</StatusText>
               <button onClick={() => onEdit(assignment)} className="rounded-md p-2 text-text-secondary hover:bg-surface-secondary hover:text-accent" title="Replace">
                 <Edit2 size={16} />
               </button>

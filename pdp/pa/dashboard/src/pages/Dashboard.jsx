@@ -13,8 +13,6 @@ import {
 } from 'recharts';
 import {
   Activity,
-  Clock3,
-  FileText,
   PieChart as PieChartIcon,
 } from 'lucide-react';
 import {
@@ -22,7 +20,6 @@ import {
   getDashboardStats,
 } from '../api';
 import PageHeader from '../components/ui/PageHeader';
-import { formatDateTime } from '../utils/format';
 
 const CHART_COLORS = {
   accent: 'color-mix(in srgb, var(--color-accent) 68%, var(--color-white-smoke))',
@@ -63,6 +60,8 @@ const AXIS_STYLE = {
   fontSize: 12,
   fontWeight: 700,
 };
+
+const dashboardPanelClass = 'flex h-full flex-col rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] shadow-[0_8px_16px_rgba(42,42,42,0.10)]';
 
 function asList(data) {
   if (Array.isArray(data)) return data;
@@ -167,12 +166,10 @@ function totalValue(data) {
 
 function DashboardPanel({ icon: Icon, title, right, children, className = '', bodyClassName = 'p-5' }) {
   return (
-    <section className={`flex h-full flex-col rounded-md border border-border bg-surface-card shadow-surface ${className}`}>
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+    <section className={`${dashboardPanelClass} ${className}`}>
+      <div className="flex items-center justify-between gap-3 border-b border-[rgba(44,97,100,0.25)] px-5 py-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-accent-muted text-accent">
-            {createElement(Icon, { size: 18 })}
-          </div>
+          {createElement(Icon, { size: 18, className: 'shrink-0 text-accent' })}
           <h2 className="truncate text-base font-bold text-text-primary">{title}</h2>
         </div>
         {right}
@@ -197,7 +194,7 @@ function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
 
   return (
-    <div className="rounded-md border border-border bg-surface-card px-3 py-2 shadow-panel">
+    <div className="rounded-md border border-[rgba(44,97,100,0.55)] bg-surface-card px-3 py-2 shadow-[0_8px_16px_rgba(42,42,42,0.12)]">
       {label && <p className="mb-1 text-xs font-bold uppercase text-text-muted">{label}</p>}
       <div className="space-y-1">
         {payload.map((item) => (
@@ -304,45 +301,10 @@ function ActivityAreaChart({ data, height = 260 }) {
   );
 }
 
-function ActivityFeed({ entries }) {
-  if (entries.length === 0) {
-    return (
-      <div className="grid place-items-center rounded-md border border-dashed border-border p-10 text-center">
-        <FileText size={36} className="mb-3 text-text-muted" />
-        <p className="text-sm font-bold text-text-primary">No audit events</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="divide-y divide-border-light">
-      {entries.map((entry, index) => {
-        const label = classifyAuditEntry(entry);
-        return (
-          <div key={entry.id || `${entry.timestamp}-${index}`} className="grid gap-3 py-4 first:pt-0 last:pb-0 lg:grid-cols-[1fr_150px_120px] lg:items-center">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <DecisionPill label={label} />
-                <span className="truncate text-sm font-bold text-text-primary">{entry.event_type || 'event'}</span>
-              </div>
-              <p className="mt-1 truncate text-sm font-semibold text-text-secondary">
-                {entry.username || 'system'}{entry.resource ? ` -> ${entry.resource}` : ''}
-              </p>
-            </div>
-            <span className="text-mono text-xs text-text-muted">{entry.source_ip || '-'}</span>
-            <span className="text-mono text-xs text-text-muted lg:text-right">{formatDateTime(entry.timestamp)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function DashboardSkeleton() {
   const panels = [
     { className: 'xl:col-span-8', chartClassName: 'h-[280px]' },
     { className: 'xl:col-span-4', chartClassName: 'h-[280px]' },
-    { className: 'xl:col-span-12', chartClassName: 'h-[220px]' },
   ];
 
   return (
@@ -350,17 +312,17 @@ function DashboardSkeleton() {
       {panels.map((panel, index) => (
         <section
           key={panel.className}
-          className={`overflow-hidden rounded-md border border-border bg-surface-card shadow-surface ${panel.className}`}
+          className={`${dashboardPanelClass} overflow-hidden ${panel.className}`}
         >
-          <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="flex items-center justify-between gap-3 border-b border-[rgba(44,97,100,0.25)] px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 animate-pulse rounded-md bg-surface-hover" />
+              <div className="h-4 w-4 animate-pulse rounded bg-[rgba(44,97,100,0.18)]" />
               <div className="h-4 w-40 animate-pulse rounded bg-surface-hover" />
             </div>
             <div className="h-6 w-20 animate-pulse rounded-full bg-surface-hover" />
           </div>
           <div className="space-y-5 p-5">
-            <div className={`grid place-items-center rounded-md bg-surface-hover/50 ${panel.chartClassName}`}>
+            <div className={`grid place-items-center rounded-md border border-[rgba(44,97,100,0.35)] bg-[rgba(44,97,100,0.04)] ${panel.chartClassName}`}>
               <div className="h-28 w-28 animate-pulse rounded-full bg-surface-hover" />
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
@@ -453,14 +415,6 @@ export default function Dashboard() {
           className="xl:col-span-4"
         >
           <DonutChart data={decisionData} centerLabel="Events" compact />
-        </DashboardPanel>
-
-        <DashboardPanel
-          icon={Clock3}
-          title="Recent Security Activity"
-          className="xl:col-span-12"
-        >
-          <ActivityFeed entries={audit.slice(0, 8)} />
         </DashboardPanel>
       </div>
     </>

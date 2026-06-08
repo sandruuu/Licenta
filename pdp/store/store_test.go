@@ -28,6 +28,100 @@ func TestConsumeTokenOnceIsAtomicReplayGuard(t *testing.T) {
 	}
 }
 
+func TestAddAuditEntrySuppressesOIDCProtocolEvents(t *testing.T) {
+	s := New(t.TempDir())
+	if err := s.InitDB(); err != nil {
+		t.Fatalf("InitDB returned error: %v", err)
+	}
+	defer s.Close()
+
+	s.AddAuditEntry(&models.AuditEntry{
+		ID:        "aud-oidc",
+		Timestamp: time.Now(),
+		EventType: "oidc_token_exchange",
+		Username:  "alice",
+		Details:   "Token exchange",
+		Success:   true,
+	})
+	s.AddAuditEntry(&models.AuditEntry{
+		ID:        "aud-admin",
+		Timestamp: time.Now(),
+		EventType: "admin_login",
+		Username:  "alice",
+		Details:   "Admin login",
+		Success:   true,
+	})
+
+	entries := s.GetAuditLog(10)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(entries))
+	}
+	if entries[0].EventType != "admin_login" {
+		t.Fatalf("event type = %q, want admin_login", entries[0].EventType)
+	}
+}
+
+func TestInitDBRemovesSuppressedAuditEntriesAndRechains(t *testing.T) {
+	dataDir := t.TempDir()
+	dbPath := filepath.Join(dataDir, "trustcloud.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open audit db: %v", err)
+	}
+	_, err = db.Exec(`CREATE TABLE audit_log (
+		id TEXT PRIMARY KEY,
+		timestamp TEXT DEFAULT '',
+		event_type TEXT DEFAULT '',
+		user_id TEXT DEFAULT '',
+		username TEXT DEFAULT '',
+		source_ip TEXT DEFAULT '',
+		resource TEXT DEFAULT '',
+		decision TEXT DEFAULT '',
+		details TEXT DEFAULT '',
+		success INTEGER DEFAULT 0,
+		tenant_id TEXT DEFAULT ''
+	)`)
+	if err != nil {
+		t.Fatalf("create audit table: %v", err)
+	}
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, entry := range []models.AuditEntry{
+		{ID: "aud-before", Timestamp: base, EventType: "admin_login", Username: "alice", Details: "Admin login", Success: true},
+		{ID: "aud-oidc", Timestamp: base.Add(time.Second), EventType: "oidc_token_refresh", Username: "alice", Details: "Refresh", Success: true},
+		{ID: "aud-after", Timestamp: base.Add(2 * time.Second), EventType: "session_revoked", Username: "alice", Details: "Session revoked", Success: true},
+	} {
+		if _, err := db.Exec(`INSERT INTO audit_log
+			(id, timestamp, event_type, user_id, username, source_ip, resource, decision, details, success, tenant_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			entry.ID, fmtTime(entry.Timestamp), entry.EventType, entry.UserID, entry.Username,
+			entry.SourceIP, entry.Resource, entry.Decision, entry.Details, b2i(entry.Success), entry.TenantID); err != nil {
+			t.Fatalf("insert audit entry %s: %v", entry.ID, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close audit db: %v", err)
+	}
+
+	s := NewWithDatabasePath(dataDir, dbPath)
+	if err := s.InitDB(); err != nil {
+		t.Fatalf("InitDB returned error: %v", err)
+	}
+	defer s.Close()
+
+	entries := s.GetAuditLog(10)
+	if len(entries) != 2 {
+		t.Fatalf("audit entries = %d, want 2", len(entries))
+	}
+	for _, entry := range entries {
+		if isSuppressedAuditEvent(entry.EventType) {
+			t.Fatalf("suppressed audit event still present: %s", entry.EventType)
+		}
+	}
+	if err := s.VerifyAuditChain(); err != nil {
+		t.Fatalf("VerifyAuditChain returned error: %v", err)
+	}
+}
+
 func TestIdentityProviderConfigsAreUniquePerTenant(t *testing.T) {
 	s := New(t.TempDir())
 	if err := s.InitDB(); err != nil {

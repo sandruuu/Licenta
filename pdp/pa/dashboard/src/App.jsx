@@ -91,7 +91,8 @@ function App() {
           <Route path="gateways/:gatewayId" element={<GatewayDetail />} />
           <Route path="protect-app" element={<ProtectApp />} />
           <Route path="sessions" element={<Sessions />} />
-          <Route path="device-health" element={<DeviceHealth />} />
+          <Route path="device-data" element={<DeviceHealth />} />
+          <Route path="device-health" element={<Navigate to="/device-data" replace />} />
           <Route path="audit" element={<Audit />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

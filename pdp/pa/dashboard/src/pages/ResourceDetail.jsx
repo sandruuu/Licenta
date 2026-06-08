@@ -2,13 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  ChevronLeft,
   Edit2,
   Server,
   ShieldCheck,
 } from 'lucide-react';
 import {
   getDirectoryGroups,
-  getDirectoryUsers,
   getGateways,
   getOrganizations,
   getPolicies,
@@ -16,32 +16,31 @@ import {
   getResources,
   updateResource,
 } from '../api';
-import Badge from '../components/ui/Badge';
 import {
-  BackIconButton,
-  DetailDivider,
   DetailEmptyState as EmptyState,
-  DetailSummaryItem,
-  detailSectionTitleClass,
   InlineBackButton,
 } from '../components/ui/Detail';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '../components/ui/FormField';
+import StatusText from '../components/ui/StatusText';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
-import { formatDateTime } from '../utils/format';
+import { layerIcons } from '../components/policies/policyIcons';
 import { navigateBack } from '../utils/navigation';
-import { actionMeta } from '../components/policies/policyModel';
-import { resourceTypeBadgeVariant } from '../utils/resourceTypes';
 
-function DetailValue({ label, value, mono = false }) {
+const detailPanelClass = 'rounded-md border border-border bg-transparent';
+const summaryItemClass = 'block w-full rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-4 text-left shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]';
+const relatedSectionTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
+const relatedSectionCountClass = 'text-sm font-bold text-text-muted';
+
+function DetailField({ label, value, mono = false }) {
   return (
-    <DetailSummaryItem>
-      <span className="block text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{label}</span>
-      <span className={`mt-1 block truncate text-base font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
-        {value || '-'}
-      </span>
-    </DetailSummaryItem>
+    <div className="min-w-0">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">{label}</p>
+      <p className={`mt-2 truncate text-sm font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
+        {value === undefined || value === null || value === '' ? '-' : value}
+      </p>
+    </div>
   );
 }
 
@@ -60,17 +59,17 @@ function groupMatchesAssignment(group, assignment) {
   ));
 }
 
-function usersForGroup(group, usersByID) {
-  return arrayFrom(group?.member_ids)
-    .map((userID) => usersByID.get(userID))
-    .filter(Boolean)
-    .sort((left, right) => String(left.display_name || left.user_name || '').localeCompare(String(right.display_name || right.user_name || '')));
+function assignmentTypeLabel(assignment) {
+  if (assignment?.level === 'resource_group') return 'Resource + Group';
+  if (assignment?.level === 'resource') return 'Resource';
+  return 'Policy';
 }
 
-function policyVariant(action) {
-  if (action === 'deny') return 'danger';
-  if (action === 'step_up_required') return 'warning';
-  return 'success';
+function assignmentTargetText(resource, assignment, group) {
+  if (assignment?.level === 'resource_group') {
+    return `${resource?.name || assignment.resource_id || 'Resource'} + ${group?.display_name || assignment.group_name || assignment.group_id || 'Group'}`;
+  }
+  return resource?.name || assignment?.resource_id || 'Resource';
 }
 
 function externalHost(resource) {
@@ -97,7 +96,6 @@ export default function ResourceDetail() {
   const [policies, setPolicies] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [directoryGroups, setDirectoryGroups] = useState([]);
-  const [directoryUsers, setDirectoryUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
@@ -119,12 +117,11 @@ export default function ResourceDetail() {
       const selectedResource = resourceList.find((item) => item.id === resourceID) || null;
       const selectedGateway = gatewayList.find((item) => item.id === selectedResource?.gateway_id) || null;
       const organizationID = selectedResource?.tenant_id || selectedGateway?.tenant_id || selectedGateway?.tenant_ids?.[0] || '';
-      const [policyData, assignmentData, groupData, userData] = organizationID ? await Promise.all([
+      const [policyData, assignmentData, groupData] = organizationID ? await Promise.all([
         getPolicies().catch(() => []),
         getPolicyAssignments().catch(() => []),
         getDirectoryGroups(organizationID).catch(() => []),
-        getDirectoryUsers(organizationID).catch(() => []),
-      ]) : [[], [], [], []];
+      ]) : [[], [], []];
 
       setResource(selectedResource);
       setGateway(selectedGateway);
@@ -132,7 +129,6 @@ export default function ResourceDetail() {
       setPolicies(arrayFrom(policyData));
       setAssignments(arrayFrom(assignmentData));
       setDirectoryGroups(arrayFrom(groupData));
-      setDirectoryUsers(arrayFrom(userData));
     } catch (e) {
       setError(e.message || 'Failed to load resource data');
     } finally {
@@ -208,7 +204,6 @@ export default function ResourceDetail() {
   const target = `${resource.host || '-'}${resource.port ? `:${resource.port}` : ''}`;
   const catalogFQDN = externalHost(resource);
   const policiesByID = new Map(policies.map((policy) => [policy.id, policy]));
-  const usersByID = new Map(directoryUsers.map((user) => [user.id, user]));
   const resourceAssignments = assignments
     .filter((assignment) => assignment?.enabled !== false)
     .filter((assignment) => sameID(assignment.tenant_id, resource.tenant_id))
@@ -223,7 +218,6 @@ export default function ResourceDetail() {
         assignment,
         group,
         policy,
-        users: usersForGroup(group, usersByID),
       };
     });
   const resourceWideAccess = resourceAssignments
@@ -233,58 +227,89 @@ export default function ResourceDetail() {
       policy: policiesByID.get(assignment.policy_id),
     }));
   const hasExplicitAccessPolicy = resourceAssignments.length > 0;
+  const policyCards = [
+    ...groupAccess.map(({ assignment, group, policy }) => ({
+      id: assignment.id,
+      level: assignment.level,
+      type: assignmentTypeLabel(assignment),
+      policyName: policy?.name || assignment.policy_id || 'Policy',
+      target: assignmentTargetText(resource, assignment, group),
+    })),
+    ...resourceWideAccess.map(({ assignment, policy }) => ({
+      id: assignment.id,
+      level: assignment.level,
+      type: assignmentTypeLabel(assignment),
+      policyName: policy?.name || assignment.policy_id || 'Policy',
+      target: assignmentTargetText(resource, assignment, null),
+    })),
+  ];
 
   return (
     <div className="space-y-7">
       {error && <div className="rounded-md border border-danger bg-danger-muted p-3 text-sm text-danger">{error}</div>}
 
-      <section className="p-5">
-        <div className="space-y-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-start gap-3">
-                <BackIconButton compact title="Back" onClick={handleBack}>
-                  <ArrowLeft size={16} />
-                </BackIconButton>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-2xl font-bold leading-tight text-text-primary">{resource.name || resource.id}</h1>
-                    <Badge variant={resourceTypeBadgeVariant(resource.type)}>{(resource.type || '-').toUpperCase()}</Badge>
-                    <Badge variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</Badge>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
-                    <span>{gateway?.name}</span>
-                  </div>
+      <section className="space-y-5 pb-5 pr-3 pt-1">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={handleBack}
+                className="-ml-2 inline-flex h-11 w-11 shrink-0 items-center justify-center text-text-primary transition-colors hover:text-accent focus-visible:text-accent active:text-accent-hover"
+              >
+                <ChevronLeft size={34} strokeWidth={3} />
+              </button>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{resource.name || resource.id}</h1>
+                  <StatusText variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</StatusText>
                 </div>
               </div>
-              {resource.description && <p className="mt-4 max-w-3xl text-sm text-text-secondary">{resource.description}</p>}
             </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              <Button onClick={openEdit}>
-                <Edit2 size={14} />
-              </Button>
-            </div>
+            {resource.description && <p className="mt-4 max-w-3xl text-sm text-text-secondary">{resource.description}</p>}
           </div>
-          <DetailDivider />
-
-          <div>
-            <p className={detailSectionTitleClass}>Resource Configuration</p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              <DetailValue label="Target" value={target} mono />
-              <DetailValue label="External FQDN" value={catalogFQDN} mono />
-              <DetailValue label="Certificate Mode" value={resource.cert_mode} />
-              <DetailValue label="Certificate Domain" value={resource.cert_domain} mono />
-              <DetailValue label="Certificate Expiry" value={formatDateTime(resource.cert_expiry)} />
-            </div>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <Button onClick={openEdit}>
+              <Edit2 size={14} />
+              Edit
+            </Button>
           </div>
-          <DetailDivider />
+        </div>
 
-          <div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className={detailSectionTitleClass}>Access Policies</p>
-              <Badge variant={hasExplicitAccessPolicy ? 'success' : 'danger'}>
-                {hasExplicitAccessPolicy ? 'Explicit' : 'Deny Default'}
-              </Badge>
+        <div className="border-t border-border" />
+
+        <section className={`${detailPanelClass} p-5`}>
+          <h2 className={relatedSectionTitleClass}>Resources configuration</h2>
+          <div className="mt-5 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+            <DetailField label="Type" value={String(resource.type || '-').toUpperCase()} />
+            <DetailField label="External host" value={catalogFQDN} mono />
+            <DetailField label="Port" value={resource.port} mono />
+            <DetailField label="Internal host" value={resource.host || target} mono />
+            <DetailField label="Organization" value={organization?.name || resource.tenant_id} />
+            <DetailField label="Gateway" value={gateway?.name || gateway?.id} />
+          </div>
+        </section>
+
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <section className={`${detailPanelClass} min-h-[460px] overflow-hidden`} aria-label="Resource infrastructure">
+            {organization?.id ? (
+              <OrganizationHierarchyFlow
+                organization={organization}
+                gateways={gateway ? [gateway] : []}
+                resources={[resource]}
+                className="h-full min-h-[460px]"
+              />
+            ) : (
+              <EmptyState icon={Server} title="No organization" message="This resource is not assigned to an organization." />
+            )}
+          </section>
+
+          <aside className={`${detailPanelClass} min-h-[460px] p-5`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <h2 className={relatedSectionTitleClass}>
+                Policies <span className={relatedSectionCountClass}>({resourceAssignments.length})</span>
+              </h2>
             </div>
 
             {!hasExplicitAccessPolicy ? (
@@ -296,55 +321,23 @@ export default function ResourceDetail() {
                 />
               </div>
             ) : (
-              <div className="mt-4 space-y-3">
-                {groupAccess.map(({ assignment, group, policy, users }) => (
-                  <div key={assignment.id} className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-bold text-text-primary">{group?.display_name || assignment.group_name || assignment.group_id || 'Group'}</p>
-                        <p className="mt-1 text-xs font-semibold text-text-muted">{policy?.name || assignment.policy_id}</p>
-                      </div>
-                      <Badge variant={policyVariant(policy?.action)}>{actionMeta(policy?.action).short}</Badge>
+              <div className="mt-4 grid gap-3">
+                {policyCards.map((card) => {
+                  const TypeIcon = layerIcons[card.level] || ShieldCheck;
+                  return (
+                    <div key={card.id} className={summaryItemClass}>
+                      <p className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.12em] text-accent">
+                        <TypeIcon size={13} className="shrink-0" aria-hidden="true" />
+                        <span>{card.type}</span>
+                      </p>
+                      <p className="mt-3 truncate text-base font-bold text-text-primary">{card.policyName}</p>
+                      <p className="mt-2 truncate text-sm font-semibold text-text-secondary">{card.target}</p>
                     </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {users.length ? users.slice(0, 10).map((user) => (
-                        <Badge key={user.id} variant={user.active === false ? 'danger' : 'neutral'} className="normal-case tracking-normal">
-                          {user.display_name || user.user_name || user.email || user.id}
-                        </Badge>
-                      )) : (
-                        <span className="text-xs font-semibold text-text-muted">No directory users in this group</span>
-                      )}
-                      {users.length > 10 && <Badge variant="neutral">+{users.length - 10}</Badge>}
-                    </div>
-                  </div>
-                ))}
-
-                {resourceWideAccess.map(({ assignment, policy }) => (
-                  <div key={assignment.id} className="rounded-md border border-border bg-surface-card p-4 shadow-surface">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-bold text-text-primary">All eligible organization users</p>
-                        <p className="mt-1 text-xs font-semibold text-text-muted">{policy?.name || assignment.policy_id}</p>
-                      </div>
-                      <Badge variant={policyVariant(policy?.action)}>{actionMeta(policy?.action).short}</Badge>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-          </div>
-          <DetailDivider />
-
-              <div>
-                <h2 className={detailSectionTitleClass}>Resource Infrastructure</h2>
-                <div className="mt-4">
-                  <OrganizationHierarchyFlow
-                    organization={organization}
-                    gateways={gateway ? [gateway] : []}
-                    resources={[resource]}
-                  />
-                </div>
-              </div>
+          </aside>
         </div>
       </section>
 

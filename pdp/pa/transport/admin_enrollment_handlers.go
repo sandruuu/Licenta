@@ -68,7 +68,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 
 		s.pa.Audit.LogEvent("enrollment_approved", "", adminUser,
-			r.RemoteAddr, "", "", "Approved device "+enrollment.DeviceID, true)
+			stepUpRemoteIP(r), enrollment.DeviceID, models.DecisionAllow, "Device enrollment approved", true)
 
 		log.Printf("[ENROLL] Approved: id=%s device=%s by=%s", enrollmentID, enrollment.DeviceID, adminUser)
 
@@ -88,7 +88,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		}
 
 		s.pa.Audit.LogEvent("enrollment_revoked", "", adminUser,
-			r.RemoteAddr, "", "", "Revoked device "+enrollment.DeviceID, true)
+			stepUpRemoteIP(r), enrollment.DeviceID, models.DecisionDeny, "Device enrollment revoked", true)
 
 		log.Printf("[ENROLL] Revoked: id=%s device=%s by=%s", enrollmentID, enrollment.DeviceID, adminUser)
 

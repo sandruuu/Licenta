@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"net"
 	"testing"
 	"time"
 
@@ -72,7 +73,11 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	serviceCtx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: *deviceTLSState(deviceCert)}})
+	const sourceIP = "203.0.113.42"
+	serviceCtx := peer.NewContext(context.Background(), &peer.Peer{
+		Addr:     &net.TCPAddr{IP: net.ParseIP(sourceIP), Port: 54321},
+		AuthInfo: credentials.TLSInfo{State: *deviceTLSState(deviceCert)},
+	})
 	serviceCtx = context.WithValue(serviceCtx, deviceEnrollmentContextKey, enrollment)
 	responseCh := make(chan *structpb.Struct, 1)
 	errorCh := make(chan error, 1)
@@ -101,6 +106,13 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	case response := <-responseCh:
 		if structFieldString(response, "decision") != "allow" || structFieldString(response, "session_token") == "" || structFieldString(response, "gateway_endpoint") != "gateway.example.test:9443" || structFieldString(response, "gateway_server_name") != "gateway.example.test" {
 			t.Fatalf("authorization response = %+v", response.AsMap())
+		}
+		session, found := store.GetSession(structFieldString(response, "session_id"))
+		if !found {
+			t.Fatalf("saved session not found for response = %+v", response.AsMap())
+		}
+		if session.SourceIP != sourceIP {
+			t.Fatalf("saved session source_ip = %q, want %q", session.SourceIP, sourceIP)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AuthorizeResource did not finish")
