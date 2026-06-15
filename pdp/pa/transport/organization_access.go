@@ -47,7 +47,7 @@ func organizationAllowed(allowed map[string]bool, organizationID string) bool {
 func filterResourcesByOrganization(resources []*models.Resource, allowed map[string]bool) []*models.Resource {
 	filtered := make([]*models.Resource, 0, len(resources))
 	for _, resource := range resources {
-		if resource != nil && organizationAllowed(allowed, resource.TenantID) {
+		if resource != nil && organizationAllowed(allowed, resource.OrganizationID) {
 			filtered = append(filtered, resource)
 		}
 	}
@@ -57,7 +57,7 @@ func filterResourcesByOrganization(resources []*models.Resource, allowed map[str
 func filterDeviceDataByOrganization(reports []*models.DeviceDataReport, allowed map[string]bool) []*models.DeviceDataReport {
 	filtered := make([]*models.DeviceDataReport, 0, len(reports))
 	for _, report := range reports {
-		if report != nil && organizationAllowed(allowed, report.TenantID) {
+		if report != nil && organizationAllowed(allowed, report.OrganizationID) {
 			filtered = append(filtered, report)
 		}
 	}
@@ -67,7 +67,7 @@ func filterDeviceDataByOrganization(reports []*models.DeviceDataReport, allowed 
 func filterSessionsByOrganization(sessions []*models.Session, allowed map[string]bool) []*models.Session {
 	filtered := make([]*models.Session, 0, len(sessions))
 	for _, session := range sessions {
-		if session != nil && organizationAllowed(allowed, session.TenantID) {
+		if session != nil && organizationAllowed(allowed, session.OrganizationID) {
 			filtered = append(filtered, session)
 		}
 	}
@@ -77,7 +77,7 @@ func filterSessionsByOrganization(sessions []*models.Session, allowed map[string
 func filterAuditByOrganization(entries []*models.AuditEntry, allowed map[string]bool) []*models.AuditEntry {
 	filtered := make([]*models.AuditEntry, 0, len(entries))
 	for _, entry := range entries {
-		if entry != nil && (strings.TrimSpace(entry.TenantID) == "" || organizationAllowed(allowed, entry.TenantID)) {
+		if entry != nil && (strings.TrimSpace(entry.OrganizationID) == "" || organizationAllowed(allowed, entry.OrganizationID)) {
 			filtered = append(filtered, entry)
 		}
 	}

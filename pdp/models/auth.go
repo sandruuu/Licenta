@@ -41,13 +41,6 @@ type MFAEnrollResponse struct {
 	Message     string `json:"message"`
 }
 
-// RegisterRequest represents a new user registration.
-type RegisterRequest struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
 // MFAVerifyRequest completes the second login step for the PDP dashboard.
 type MFAVerifyRequest struct {
 	ChallengeID string `json:"challenge_id"`

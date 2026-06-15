@@ -9,28 +9,28 @@ import (
 )
 
 type adminDirectoryUser struct {
-	ID          string            `json:"id"`
-	TenantID    string            `json:"organization_id"`
-	IdPID       string            `json:"idp_id"`
-	ExternalID  string            `json:"external_id,omitempty"`
-	UserName    string            `json:"user_name"`
-	DisplayName string            `json:"display_name,omitempty"`
-	Email       string            `json:"email,omitempty"`
-	Active      bool              `json:"active"`
-	Attributes  map[string]string `json:"attributes,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID             string            `json:"id"`
+	OrganizationID string            `json:"organization_id"`
+	IdPID          string            `json:"idp_id"`
+	ExternalID     string            `json:"external_id,omitempty"`
+	UserName       string            `json:"user_name"`
+	DisplayName    string            `json:"display_name,omitempty"`
+	Email          string            `json:"email,omitempty"`
+	Active         bool              `json:"active"`
+	Attributes     map[string]string `json:"attributes,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
 type adminDirectoryGroup struct {
-	ID          string    `json:"id"`
-	TenantID    string    `json:"organization_id"`
-	IdPID       string    `json:"idp_id"`
-	ExternalID  string    `json:"external_id,omitempty"`
-	DisplayName string    `json:"display_name"`
-	MemberIDs   []string  `json:"member_ids"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	OrganizationID string    `json:"organization_id"`
+	IdPID          string    `json:"idp_id"`
+	ExternalID     string    `json:"external_id,omitempty"`
+	DisplayName    string    `json:"display_name"`
+	MemberIDs      []string  `json:"member_ids"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (s *Server) handleAdminDirectoryUsers(w http.ResponseWriter, r *http.Request) {
@@ -43,13 +43,13 @@ func (s *Server) handleAdminDirectoryUsers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	tenantID := organizationIDFromQuery(r)
-	if tenantID != "" && !s.requireOrganizationAccess(w, r, tenantID) {
+	organizationID := organizationIDFromQuery(r)
+	if organizationID != "" && !s.requireOrganizationAccess(w, r, organizationID) {
 		return
 	}
 	idpID := strings.TrimSpace(r.URL.Query().Get("idp_id"))
-	users := s.pa.Store.ListDirectoryUsersFiltered(tenantID, idpID)
-	if tenantID == "" {
+	users := s.pa.Store.ListDirectoryUsersFiltered(organizationID, idpID)
+	if organizationID == "" {
 		users = filterDirectoryUsersByOrganization(users, s.allowedOrganizationIDs(r))
 	}
 
@@ -59,17 +59,17 @@ func (s *Server) handleAdminDirectoryUsers(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		response = append(response, adminDirectoryUser{
-			ID:          user.ID,
-			TenantID:    user.TenantID,
-			IdPID:       user.IdPID,
-			ExternalID:  user.ExternalID,
-			UserName:    user.UserName,
-			DisplayName: user.DisplayName,
-			Email:       user.Email,
-			Active:      user.Active,
-			Attributes:  user.Attributes,
-			CreatedAt:   user.CreatedAt,
-			UpdatedAt:   user.UpdatedAt,
+			ID:             user.ID,
+			OrganizationID: user.OrganizationID,
+			IdPID:          user.IdPID,
+			ExternalID:     user.ExternalID,
+			UserName:       user.UserName,
+			DisplayName:    user.DisplayName,
+			Email:          user.Email,
+			Active:         user.Active,
+			Attributes:     user.Attributes,
+			CreatedAt:      user.CreatedAt,
+			UpdatedAt:      user.UpdatedAt,
 		})
 	}
 
@@ -86,13 +86,13 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	tenantID := organizationIDFromQuery(r)
-	if tenantID != "" && !s.requireOrganizationAccess(w, r, tenantID) {
+	organizationID := organizationIDFromQuery(r)
+	if organizationID != "" && !s.requireOrganizationAccess(w, r, organizationID) {
 		return
 	}
 	idpID := strings.TrimSpace(r.URL.Query().Get("idp_id"))
-	groups := s.pa.Store.ListDirectoryGroupsFiltered(tenantID, idpID)
-	if tenantID == "" {
+	groups := s.pa.Store.ListDirectoryGroupsFiltered(organizationID, idpID)
+	if organizationID == "" {
 		groups = filterDirectoryGroupsByOrganization(groups, s.allowedOrganizationIDs(r))
 	}
 
@@ -101,7 +101,7 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 		if group == nil {
 			continue
 		}
-		members := s.pa.Store.ListDirectoryGroupMembers(group.TenantID, group.IdPID, group.ID)
+		members := s.pa.Store.ListDirectoryGroupMembers(group.OrganizationID, group.IdPID, group.ID)
 		memberIDs := make([]string, 0, len(members))
 		for _, member := range members {
 			if member != nil && strings.TrimSpace(member.UserID) != "" {
@@ -109,14 +109,14 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		response = append(response, adminDirectoryGroup{
-			ID:          group.ID,
-			TenantID:    group.TenantID,
-			IdPID:       group.IdPID,
-			ExternalID:  group.ExternalID,
-			DisplayName: group.DisplayName,
-			MemberIDs:   memberIDs,
-			CreatedAt:   group.CreatedAt,
-			UpdatedAt:   group.UpdatedAt,
+			ID:             group.ID,
+			OrganizationID: group.OrganizationID,
+			IdPID:          group.IdPID,
+			ExternalID:     group.ExternalID,
+			DisplayName:    group.DisplayName,
+			MemberIDs:      memberIDs,
+			CreatedAt:      group.CreatedAt,
+			UpdatedAt:      group.UpdatedAt,
 		})
 	}
 
@@ -126,7 +126,7 @@ func (s *Server) handleAdminDirectoryGroups(w http.ResponseWriter, r *http.Reque
 func filterDirectoryUsersByOrganization(users []*models.DirectoryUser, allowed map[string]bool) []*models.DirectoryUser {
 	filtered := make([]*models.DirectoryUser, 0, len(users))
 	for _, user := range users {
-		if user != nil && organizationAllowed(allowed, user.TenantID) {
+		if user != nil && organizationAllowed(allowed, user.OrganizationID) {
 			filtered = append(filtered, user)
 		}
 	}
@@ -136,7 +136,7 @@ func filterDirectoryUsersByOrganization(users []*models.DirectoryUser, allowed m
 func filterDirectoryGroupsByOrganization(groups []*models.DirectoryGroup, allowed map[string]bool) []*models.DirectoryGroup {
 	filtered := make([]*models.DirectoryGroup, 0, len(groups))
 	for _, group := range groups {
-		if group != nil && organizationAllowed(allowed, group.TenantID) {
+		if group != nil && organizationAllowed(allowed, group.OrganizationID) {
 			filtered = append(filtered, group)
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
 	"pdp/store"
 )
@@ -1184,12 +1185,7 @@ func TestPolicyMatchesNestedDevicePostureHealth(t *testing.T) {
 
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s := store.New(t.TempDir())
-	if err := s.InitDB(); err != nil {
-		t.Fatalf("InitDB() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return testdb.NewStore(t)
 }
 
 func businessHoursTime() time.Time {

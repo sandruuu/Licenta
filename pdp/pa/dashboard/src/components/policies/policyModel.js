@@ -325,7 +325,7 @@ export const EMPTY_POLICY_FORM = {
 
 export const EMPTY_ASSIGNMENT_FORM = {
   policy_id: '',
-  tenant_id: '',
+  organization_id: '',
   level: 'organization',
   resource_id: '',
   resource_ids: [],
@@ -629,14 +629,14 @@ export function layerWeight(level) {
 }
 
 export function assignmentScopeLabel(assignment, maps) {
-  const organization = maps.organizations?.get(assignment.tenant_id)?.name || assignment.tenant_id || '';
+  const organization = maps.organizations?.get(assignment.organization_id)?.name || assignment.organization_id || '';
   const group = maps.groups?.get(assignment.group_id);
   const idp = group?.idp_id ? maps.idps?.get(group.idp_id) : null;
   return [organization, idp?.name || group?.idp_id].filter(Boolean).join(' / ');
 }
 
 export function targetLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id || 'Organization';
+  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
   const resource = maps.resources.get(assignment.resource_id)?.name || assignment.resource_id || 'Resource';
   const group = maps.groups.get(assignment.group_id)?.display_name || assignment.group_name || assignment.group_id || 'Group';
   if (assignment.level === 'resource_group') return `${resource} + ${group}`;
@@ -646,7 +646,7 @@ export function targetLabel(assignment, maps) {
 }
 
 export function assignmentTargetLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id || 'Organization';
+  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
   const resource = maps.resources.get(assignment.resource_id)?.name || assignment.resource_id || 'Application';
   const group = maps.groups.get(assignment.group_id)?.display_name || assignment.group_name || assignment.group_id || 'Group';
   if (assignment.level === 'organization') return `All applications in ${organization}`;
@@ -657,7 +657,7 @@ export function assignmentTargetLabel(assignment, maps) {
 }
 
 export function assignmentContextLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id || 'Organization';
+  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
   const group = maps.groups?.get(assignment.group_id);
   const idp = group?.idp_id ? maps.idps?.get(group.idp_id) : null;
   const context = [organization, idp?.name || group?.idp_id].filter(Boolean).join(' / ');
@@ -695,7 +695,7 @@ export function selectedCountForLayer(form) {
     const groupCount = form.group_ids?.length || (form.group_name?.trim() ? 1 : 0);
     return resourceCount * groupCount;
   }
-  return form.tenant_id ? 1 : 0;
+  return form.organization_id ? 1 : 0;
 }
 
 export function toggleListValue(list = [], value) {

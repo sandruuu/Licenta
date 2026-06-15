@@ -19,7 +19,7 @@ const PASSKEY_ENROLLMENT_PURPOSE = 'passkey_enrollment';
 const PASSKEY_PURPOSE_REQUIRED_ERROR = 'Passkey enrollment requires a TOTP challenge. Restart the PDP service and try again.';
 const PASSKEY_REGISTERING_ERROR = 'Identity verified. Create your passkey to continue.';
 const PASSKEY_DOMAIN_ERROR =
-  'Passkey domain mismatch. Open https://localhost:8443 or update WebAuthn RP settings for this domain.';
+  'Passkey domain mismatch. Open the configured PDP URL or update WebAuthn RP settings for this domain.';
 const PASSKEY_CANCELLED_ERROR = 'Passkey setup was cancelled or timed out. Try again when the passkey prompt appears.';
 const PASSKEY_DEVICE_ERROR = 'This device cannot save a passkey right now. Check passkey, Face ID, and iCloud Keychain settings.';
 const PASSKEY_SESSION_ERROR = 'Passkey setup session expired. Sign in with password and TOTP again.';
@@ -462,7 +462,7 @@ function AdminLogin() {
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="pdp-admin@demo.trustcloud.test"
+                placeholder="admin@company.com"
                 autoComplete="email"
                 autoFocus
                 required
@@ -527,7 +527,7 @@ function AdminLogin() {
                 type="email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="pdp-admin@demo.trustcloud.test"
+                placeholder="admin@company.com"
                 autoComplete="email"
                 autoFocus
                 required

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pdp/internal/testredis"
 )
 
 func TestGatewayControlRegistryReturnsGatewayAckErrors(t *testing.T) {
@@ -51,7 +53,7 @@ func TestGatewayControlRegistryReturnsGatewayAckErrors(t *testing.T) {
 }
 
 func TestGatewayControlRegistryRequiresConnectedGateway(t *testing.T) {
-	registry := NewGatewayControlRegistry()
+	registry := NewGatewayControlRegistry(testredis.NewClient(t))
 	err := registry.Heartbeat(context.Background(), "gw-missing")
 	if err == nil || !strings.Contains(err.Error(), ErrGatewayControlNotConnected.Error()) {
 		t.Fatalf("Heartbeat() error = %v, want not connected", err)

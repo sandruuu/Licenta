@@ -47,9 +47,7 @@ func (service *Service) ListResources() ([]*models.Resource, error) {
 	if err := service.readyStore(); err != nil {
 		return nil, err
 	}
-	resources := service.store.ListResources()
-	clearResourceClientFields(resources...)
-	return resources, nil
+	return service.store.ListResources(), nil
 }
 
 func (service *Service) CreateResource(resource models.Resource) (*models.Resource, error) {
@@ -80,9 +78,6 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	resource.CreatedAt = now
 	resource.UpdatedAt = now
 	resource.Enabled = true
-	resource.ClientID = ""
-	resource.ClientSecret = ""
-	resource.AllowedRoles = nil
 
 	service.store.SaveResource(&resource)
 	service.publishResourceEvent(&resource, "created", "resource_created", false)
@@ -111,7 +106,7 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyBoolField(fields, "enabled", &updated.Enabled)
 	applyStringSliceField(fields, "tags", &updated.Tags)
 	applyStringMapField(fields, "metadata", &updated.Metadata)
-	applyStringField(fields, "tenant_id", &updated.TenantID)
+	applyStringField(fields, "organization_id", &updated.OrganizationID)
 	applyStringField(fields, "gateway_id", &updated.GatewayID)
 
 	if !validResourceType(updated.Type) {
@@ -161,7 +156,6 @@ func (service *Service) resourceByID(id string) (*models.Resource, error) {
 	if !ok {
 		return nil, ErrResourceNotFound
 	}
-	clearResourceClientFields(resource)
 	return resource, nil
 }
 
@@ -189,7 +183,7 @@ func (service *Service) publishResourceEvent(resource *models.Resource, action, 
 	service.publisher.PublishCAEPEvent(events.TopicResourcesUpdated, map[string]string{
 		"resource_id":      resource.ID,
 		"app_id":           resource.ID,
-		"tenant_id":        resource.TenantID,
+		"organization_id":  resource.OrganizationID,
 		"gateway_id":       resource.GatewayID,
 		"action":           action,
 		"reason":           reason,
@@ -208,7 +202,7 @@ func resourceUpdateRevokesSessions(existing, updated *models.Resource) bool {
 		strings.TrimSpace(existing.Host) != strings.TrimSpace(updated.Host) ||
 		existing.Port != updated.Port ||
 		strings.TrimSpace(existing.ExternalURL) != strings.TrimSpace(updated.ExternalURL) ||
-		strings.TrimSpace(existing.TenantID) != strings.TrimSpace(updated.TenantID) ||
+		strings.TrimSpace(existing.OrganizationID) != strings.TrimSpace(updated.OrganizationID) ||
 		strings.TrimSpace(existing.GatewayID) != strings.TrimSpace(updated.GatewayID)
 }
 
@@ -216,26 +210,26 @@ func (service *Service) validateResourceScope(resource *models.Resource) error {
 	if resource == nil {
 		return fmt.Errorf("%w: resource is required", ErrInvalidRequest)
 	}
-	tenantID := strings.TrimSpace(resource.TenantID)
+	organizationID := strings.TrimSpace(resource.OrganizationID)
 	gatewayID := strings.TrimSpace(resource.GatewayID)
-	if tenantID == "" {
+	if organizationID == "" {
 		return fmt.Errorf("%w: organization_id is required", ErrInvalidRequest)
 	}
 	if gatewayID == "" {
 		return fmt.Errorf("%w: gateway_id is required", ErrInvalidRequest)
 	}
-	tenant, ok := service.store.GetTenant(tenantID)
-	if !ok || tenant == nil || !tenant.Enabled {
+	organization, ok := service.store.GetOrganization(organizationID)
+	if !ok || organization == nil || !organization.Enabled {
 		return fmt.Errorf("%w: organization not found or disabled", ErrInvalidRequest)
 	}
 	gateway, ok := service.store.GetGateway(gatewayID)
 	if !ok || gateway == nil {
 		return fmt.Errorf("%w: gateway not found", ErrInvalidRequest)
 	}
-	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, tenantID) {
+	if strings.TrimSpace(gateway.OrganizationID) == "" || !strings.EqualFold(gateway.OrganizationID, organizationID) {
 		return fmt.Errorf("%w: gateway does not belong to organization", ErrInvalidRequest)
 	}
-	resource.TenantID = tenantID
+	resource.OrganizationID = organizationID
 	resource.GatewayID = gatewayID
 	return nil
 }
@@ -272,16 +266,6 @@ func normalizeWebResource(resource *models.Resource) error {
 		return fmt.Errorf("%w: web resources must use HTTPS external_url", ErrInvalidRequest)
 	}
 	return nil
-}
-
-func clearResourceClientFields(resources ...*models.Resource) {
-	for _, resource := range resources {
-		if resource == nil {
-			continue
-		}
-		resource.ClientID = ""
-		resource.ClientSecret = ""
-	}
 }
 
 func applyStringField(fields map[string]json.RawMessage, name string, target *string) {

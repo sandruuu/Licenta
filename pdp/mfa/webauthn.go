@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"pdp/config"
@@ -44,7 +43,7 @@ func (u *WebAuthnUser) WebAuthnCredentials() []webauthn.Credential {
 }
 
 // ─────────────────────────────────────────────
-// Challenge Session Store (in-memory, 5 min TTL)
+// Challenge storage (Redis-backed, short TTL)
 // ─────────────────────────────────────────────
 
 type challengeSession struct {
@@ -59,18 +58,25 @@ type challengeSession struct {
 // WebAuthnProvider wraps the go-webauthn library and manages challenge
 // sessions for registration and authentication ceremonies.
 type WebAuthnProvider struct {
-	wa *webauthn.WebAuthn
-
-	mu       sync.Mutex
-	sessions map[string]*challengeSession // key = userID + ceremony + step-up challenge
+	wa    *webauthn.WebAuthn
+	state RuntimeStateStore
 
 	challengeTTL    time.Duration
 	cleanupInterval time.Duration
 }
 
+type RuntimeStateStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	DeleteEphemeralState(kind, key string) error
+	CleanExpiredEphemeralState(now time.Time) int
+}
+
+const webAuthnSessionStateKind = "webauthn_session"
+
 // NewWebAuthnProvider creates a WebAuthn relying party.
 // Returns nil if WebAuthn is not configured (RPID is empty).
-func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
+func NewWebAuthnProvider(cfg *config.Config, state RuntimeStateStore) *WebAuthnProvider {
 	if cfg == nil {
 		return nil
 	}
@@ -103,7 +109,7 @@ func NewWebAuthnProvider(cfg *config.Config) *WebAuthnProvider {
 
 	p := &WebAuthnProvider{
 		wa:              wa,
-		sessions:        make(map[string]*challengeSession),
+		state:           state,
 		challengeTTL:    cfg.Runtime.WebAuthnChallengeTTL,
 		cleanupInterval: cfg.Runtime.WebAuthnCleanupInterval,
 	}
@@ -228,44 +234,58 @@ func sessionKey(userID, ceremony, contextID string) string {
 }
 
 func (p *WebAuthnProvider) storeSession(userID, ceremony, contextID string, data *webauthn.SessionData) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.sessions[sessionKey(userID, ceremony, contextID)] = &challengeSession{
+	if p == nil || p.state == nil || data == nil {
+		return
+	}
+	session := &challengeSession{
 		Data:      data,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().UTC(),
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		log.Printf("[MFA] WebAuthn session marshal failed: %v", err)
+		return
+	}
+	key := sessionKey(userID, ceremony, contextID)
+	if err := p.state.SaveEphemeralState(webAuthnSessionStateKind, key, raw, session.CreatedAt.Add(p.challengeTTL)); err != nil {
+		log.Printf("[MFA] WebAuthn session save failed: %v", err)
 	}
 }
 
 func (p *WebAuthnProvider) loadSession(userID, ceremony, contextID string) (*webauthn.SessionData, bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	s, ok := p.sessions[sessionKey(userID, ceremony, contextID)]
+	if p == nil || p.state == nil {
+		return nil, false
+	}
+	key := sessionKey(userID, ceremony, contextID)
+	raw, ok := p.state.GetEphemeralState(webAuthnSessionStateKind, key)
 	if !ok {
 		return nil, false
 	}
+	var s challengeSession
+	if err := json.Unmarshal(raw, &s); err != nil {
+		_ = p.state.DeleteEphemeralState(webAuthnSessionStateKind, key)
+		return nil, false
+	}
 	if time.Since(s.CreatedAt) > p.challengeTTL {
-		delete(p.sessions, sessionKey(userID, ceremony, contextID))
+		_ = p.state.DeleteEphemeralState(webAuthnSessionStateKind, key)
 		return nil, false
 	}
 	return s.Data, true
 }
 
 func (p *WebAuthnProvider) deleteSession(userID, ceremony, contextID string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.sessions, sessionKey(userID, ceremony, contextID))
+	if p == nil || p.state == nil {
+		return
+	}
+	_ = p.state.DeleteEphemeralState(webAuthnSessionStateKind, sessionKey(userID, ceremony, contextID))
 }
 
 func (p *WebAuthnProvider) cleanupLoop() {
 	ticker := time.NewTicker(p.cleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		p.mu.Lock()
-		for k, s := range p.sessions {
-			if time.Since(s.CreatedAt) > p.challengeTTL {
-				delete(p.sessions, k)
-			}
+		if p.state != nil {
+			p.state.CleanExpiredEphemeralState(time.Now().UTC())
 		}
-		p.mu.Unlock()
 	}
 }

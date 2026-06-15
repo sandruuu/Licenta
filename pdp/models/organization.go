@@ -2,8 +2,8 @@ package models
 
 import "time"
 
-// Tenant represents an isolated organization.
-type Tenant struct {
+// Organization represents an isolated organization.
+type Organization struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
 	Domain      string   `json:"domain"`
@@ -25,13 +25,13 @@ type OrganizationMembership struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// IdentityProviderConfig defines an external OIDC provider trusted by a tenant.
+// IdentityProviderConfig defines an external OIDC provider trusted by an organization.
 type IdentityProviderConfig struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenant_id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Enabled  bool   `json:"enabled"`
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	Enabled        bool   `json:"enabled"`
 
 	Domains []string `json:"domains,omitempty"`
 

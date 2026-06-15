@@ -100,7 +100,7 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 		if !sameEventField(fields, "device_id", claims.DeviceID) || !sameEventField(fields, "user_id", claims.UserID) {
 			return nil, false
 		}
-		if !tenantMatches(fields["tenant_id"], claims.TenantID) {
+		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
 		return agentEventPayload(agentEventAccessRevoked, claims, fields, "Access to protected resources was revoked."), true
@@ -108,13 +108,13 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 		if !sameEventField(fields, "device_id", claims.DeviceID) {
 			return nil, false
 		}
-		if !tenantMatches(fields["tenant_id"], claims.TenantID) {
+		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
 		fields["session_id"] = claims.SessionID
 		return agentEventPayload(agentEventAccessRevoked, claims, fields, "This device enrollment was revoked."), true
 	case events.TopicResourcesUpdated, events.TopicPolicyUpdated, events.TopicGatewayRevoked:
-		if !tenantMatches(fields["tenant_id"], claims.TenantID) {
+		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
 		return agentEventPayload(agentEventCatalogInvalidated, claims, fields, "Protected resource access changed."), true
@@ -127,14 +127,14 @@ func agentEventPayload(eventType string, claims *auth.CustomClaims, fields map[s
 	reason := strings.TrimSpace(fields["reason"])
 	message := agentEventMessage(eventType, reason, defaultMessage)
 	payload := map[string]interface{}{
-		"type":       eventType,
-		"event_type": eventType,
-		"message":    message,
-		"reason":     reason,
-		"session_id": firstNonEmptyAgentEvent(fields["session_id"], claims.SessionID),
-		"device_id":  claims.DeviceID,
-		"user_id":    claims.UserID,
-		"tenant_id":  claims.TenantID,
+		"type":            eventType,
+		"event_type":      eventType,
+		"message":         message,
+		"reason":          reason,
+		"session_id":      firstNonEmptyAgentEvent(fields["session_id"], claims.SessionID),
+		"device_id":       claims.DeviceID,
+		"user_id":         claims.UserID,
+		"organization_id": claims.OrganizationID,
 	}
 	for _, key := range []string{"resource_id", "gateway_id", "policy_id", "action"} {
 		if value := strings.TrimSpace(fields[key]); value != "" {
@@ -194,12 +194,12 @@ func sameEventField(fields map[string]string, key, expected string) bool {
 	return value != "" && strings.EqualFold(value, strings.TrimSpace(expected))
 }
 
-func tenantMatches(eventTenantID, claimsTenantID string) bool {
-	eventTenantID = strings.TrimSpace(eventTenantID)
-	if eventTenantID == "" {
+func organizationMatches(eventOrganizationID, claimsOrganizationID string) bool {
+	eventOrganizationID = strings.TrimSpace(eventOrganizationID)
+	if eventOrganizationID == "" {
 		return true
 	}
-	return strings.EqualFold(eventTenantID, strings.TrimSpace(claimsTenantID))
+	return strings.EqualFold(eventOrganizationID, strings.TrimSpace(claimsOrganizationID))
 }
 
 func firstNonEmptyAgentEvent(values ...string) string {

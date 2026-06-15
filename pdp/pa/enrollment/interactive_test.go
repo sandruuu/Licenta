@@ -77,7 +77,7 @@ func TestVerifyEnrollmentProofRejectsNonP256ECDSA(t *testing.T) {
 
 func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	var expiredSessions []InteractiveSession
 	service.SetInteractiveSessionExpiredHandler(func(session InteractiveSession, _ time.Time) {
 		expiredSessions = append(expiredSessions, session)
@@ -105,9 +105,7 @@ func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T)
 	}
 
 	now := time.Now().UTC()
-	service.mu.Lock()
-	service.interactiveSessions[expired.SessionID].ExpiresAt = now.Add(-time.Second)
-	service.mu.Unlock()
+	expireInteractiveSessionForTest(t, service, expired.SessionID, now.Add(-time.Second))
 
 	if removed := service.CleanExpiredInteractiveSessions(now); removed != 1 {
 		t.Fatalf("CleanExpiredInteractiveSessions removed %d sessions, want 1", removed)
@@ -128,7 +126,7 @@ func TestCleanExpiredInteractiveSessionsRemovesExpiredTransactions(t *testing.T)
 
 func TestInteractiveSessionStatusDeletesExpiredTransaction(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 
 	session, err := service.StartInteractiveSession(InteractiveStartRequest{
 		CSRHash:     "csr-hash",
@@ -139,9 +137,7 @@ func TestInteractiveSessionStatusDeletesExpiredTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartInteractiveSession returned error: %v", err)
 	}
-	service.mu.Lock()
-	service.interactiveSessions[session.SessionID].ExpiresAt = time.Now().UTC().Add(-time.Second)
-	service.mu.Unlock()
+	expireInteractiveSessionForTest(t, service, session.SessionID, time.Now().UTC().Add(-time.Second))
 
 	status, err := service.InteractiveSessionStatus(session.SessionID, "device-nonce", session.PollSecret)
 	if err != nil {
@@ -157,7 +153,7 @@ func TestInteractiveSessionStatusDeletesExpiredTransaction(t *testing.T) {
 
 func TestExpireInteractiveSessionIfExpiredDeletesAndNotifies(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	var expiredSessions []InteractiveSession
 	service.SetInteractiveSessionExpiredHandler(func(session InteractiveSession, _ time.Time) {
 		expiredSessions = append(expiredSessions, session)
@@ -175,9 +171,7 @@ func TestExpireInteractiveSessionIfExpiredDeletesAndNotifies(t *testing.T) {
 		t.Fatalf("StartInteractiveSession returned error: %v", err)
 	}
 	now := time.Now().UTC()
-	service.mu.Lock()
-	service.interactiveSessions[session.SessionID].ExpiresAt = now.Add(-time.Second)
-	service.mu.Unlock()
+	expireInteractiveSessionForTest(t, service, session.SessionID, now.Add(-time.Second))
 
 	if !service.ExpireInteractiveSessionIfExpired(session.SessionID, now) {
 		t.Fatalf("ExpireInteractiveSessionIfExpired returned false")
@@ -195,7 +189,7 @@ func TestExpireInteractiveSessionIfExpiredDeletesAndNotifies(t *testing.T) {
 
 func TestCompleteInteractiveSessionDeletesInteractiveTransaction(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetInteractiveDeviceCertificateIssuer(authority.signCSRWithDeviceID)
 
@@ -219,9 +213,9 @@ func TestCompleteInteractiveSessionDeletesInteractiveTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartInteractiveSession returned error: %v", err)
 	}
-	tenant := &models.Tenant{ID: "tenant-1", Enabled: true}
+	organization := &models.Organization{ID: "organization-1", Enabled: true}
 	idp := &models.IdentityProviderConfig{ID: "idp-1", Issuer: "https://idp.test", ClientID: "client-1"}
-	if _, err := service.BeginInteractiveIDPLogin(start.SessionID, tenant, idp, "pkce", "nonce", "state"); err != nil {
+	if _, err := service.BeginInteractiveIDPLogin(start.SessionID, organization, idp, "pkce", "nonce", "state"); err != nil {
 		t.Fatalf("BeginInteractiveIDPLogin returned error: %v", err)
 	}
 	if _, err := service.CompleteInteractiveIDPLogin(start.SessionID, "subject-1", "alice@example.com", idp.Issuer, "user-1", "alice"); err != nil {
@@ -262,10 +256,22 @@ func TestCompleteInteractiveSessionDeletesInteractiveTransaction(t *testing.T) {
 		t.Fatalf("unexpected completion result: %#v", result)
 	}
 	if service.HasInteractiveSession(start.SessionID) {
-		t.Fatalf("completed interactive enrollment session remained in memory")
+		t.Fatalf("completed interactive enrollment session remained in runtime state")
 	}
 	if enrollment, found := dataStore.GetDeviceEnrollment(start.SessionID); !found || enrollment.DeviceID != result.DeviceID {
 		t.Fatalf("completed enrollment was not persisted: found=%v enrollment=%#v", found, enrollment)
+	}
+}
+
+func expireInteractiveSessionForTest(t *testing.T, service *Service, sessionID string, expiresAt time.Time) {
+	t.Helper()
+	session, ok := service.GetInteractiveSession(sessionID)
+	if !ok {
+		t.Fatalf("interactive session %s not found", sessionID)
+	}
+	session.ExpiresAt = expiresAt
+	if err := service.saveInteractiveSession(session); err != nil {
+		t.Fatalf("save expired interactive session: %v", err)
 	}
 }
 

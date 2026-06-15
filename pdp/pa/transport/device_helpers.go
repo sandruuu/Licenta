@@ -17,8 +17,6 @@ func statusCodeForDeviceDataError(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, devices.ErrDeviceIDMismatch):
 		return http.StatusForbidden
-	case errors.Is(err, devices.ErrNoPriorHealthReport):
-		return http.StatusPreconditionRequired
 	case errors.Is(err, devices.ErrNoPriorDeviceData):
 		return http.StatusPreconditionFailed
 	case errors.Is(err, devices.ErrServiceUnavailable):
@@ -48,10 +46,10 @@ func (s *Server) deviceCatalogSnapshot(claims *auth.CustomClaims) catalog.Snapsh
 		return catalog.EmptySnapshot()
 	}
 	user, ok := s.pa.Store.GetUser(claims.UserID)
-	if !ok || user == nil || strings.TrimSpace(user.TenantID) == "" {
+	if !ok || user == nil || strings.TrimSpace(user.OrganizationID) == "" {
 		return catalog.EmptySnapshot()
 	}
-	if tenant, found := s.pa.Store.GetTenant(user.TenantID); !found || tenant == nil || !tenant.Enabled {
+	if organization, found := s.pa.Store.GetOrganization(user.OrganizationID); !found || organization == nil || !organization.Enabled {
 		return catalog.EmptySnapshot()
 	}
 	if strings.TrimSpace(user.Role) == "" {
@@ -61,5 +59,5 @@ func (s *Server) deviceCatalogSnapshot(claims *auth.CustomClaims) catalog.Snapsh
 	if directory.Found && !directory.Active {
 		return catalog.EmptySnapshot()
 	}
-	return s.pa.Catalog.BuildForTenantUser(user.TenantID, user, directory.GroupIDs, directory.GroupNames)
+	return s.pa.Catalog.BuildForOrganizationUser(user.OrganizationID, user, directory.GroupIDs, directory.GroupNames)
 }

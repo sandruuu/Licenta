@@ -13,7 +13,7 @@ type Session struct {
 	GatewayID              string    `json:"gateway_id,omitempty"`
 	Protocol               string    `json:"protocol"`
 	RiskScore              int       `json:"risk_score"`
-	TenantID               string    `json:"tenant_id,omitempty"`
+	OrganizationID         string    `json:"organization_id,omitempty"`
 	PolicyID               string    `json:"policy_id,omitempty"`
 	CreatedAt              time.Time `json:"created_at"`
 	ExpiresAt              time.Time `json:"expires_at"`

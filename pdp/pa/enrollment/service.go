@@ -113,6 +113,13 @@ type EventPublisher interface {
 	PublishCAEPEvent(eventType string, fields map[string]string)
 }
 
+type RuntimeStateStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	DeleteEphemeralState(kind, key string) error
+	ListEphemeralState(kind string) (map[string][]byte, error)
+}
+
 type Config struct {
 	CertificateValidityDays int
 	BrowserSessionTTL       time.Duration
@@ -121,6 +128,7 @@ type Config struct {
 type Service struct {
 	mu                               sync.RWMutex
 	store                            *store.Store
+	runtime                          RuntimeStateStore
 	signer                           CertificateSigner
 	interactiveIssuer                InteractiveDeviceCertificateIssuer
 	revoker                          CertificateRevoker
@@ -129,11 +137,10 @@ type Service struct {
 	publisher                        EventPublisher
 	certificateValidityDays          int
 	browserSessionTTL                time.Duration
-	interactiveSessions              map[string]*InteractiveSession
 	interactiveSessionExpiredHandler InteractiveSessionExpiredHandler
 }
 
-func NewService(store *store.Store, cfgs ...Config) *Service {
+func NewService(store *store.Store, runtimeState RuntimeStateStore, cfgs ...Config) *Service {
 	cfg := Config{
 		CertificateValidityDays: defaultCertificateValidityDays,
 		BrowserSessionTTL:       defaultBrowserSessionTTL,
@@ -148,9 +155,9 @@ func NewService(store *store.Store, cfgs ...Config) *Service {
 	}
 	return &Service{
 		store:                   store,
+		runtime:                 runtimeState,
 		certificateValidityDays: cfg.CertificateValidityDays,
 		browserSessionTTL:       cfg.BrowserSessionTTL,
-		interactiveSessions:     make(map[string]*InteractiveSession),
 	}
 }
 

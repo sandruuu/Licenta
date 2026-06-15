@@ -46,14 +46,14 @@ func TestFilterPolicyRulesByOrganizationKeepsUnassignedPolicies(t *testing.T) {
 		{
 			ID: "policy-allowed",
 			Assignments: []*models.PolicyAssignment{
-				{ID: "assignment-allowed", TenantID: "org-1"},
-				{ID: "assignment-denied", TenantID: "org-2"},
+				{ID: "assignment-allowed", OrganizationID: "org-1"},
+				{ID: "assignment-denied", OrganizationID: "org-2"},
 			},
 		},
 		{
 			ID: "policy-denied",
 			Assignments: []*models.PolicyAssignment{
-				{ID: "assignment-other-org", TenantID: "org-2"},
+				{ID: "assignment-other-org", OrganizationID: "org-2"},
 			},
 		},
 	}

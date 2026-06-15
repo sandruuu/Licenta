@@ -4,12 +4,13 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/store"
 )
 
 func TestCheckAccessLocationBuildsUserBaselineAfterEnoughHistory(t *testing.T) {
 	s := newGeoTestStore(t)
-	geo := NewGeoLocator(s)
+	geo := NewGeoLocator(s, newGeoTestRuntime())
 	now := time.Now().UTC()
 	userID := "user-1"
 
@@ -45,7 +46,7 @@ func TestCheckAccessLocationBuildsUserBaselineAfterEnoughHistory(t *testing.T) {
 
 func TestCheckAccessLocationKeepsBaselineLearningUntilThreshold(t *testing.T) {
 	s := newGeoTestStore(t)
-	geo := NewGeoLocator(s)
+	geo := NewGeoLocator(s, newGeoTestRuntime())
 	now := time.Now().UTC()
 	userID := "user-1"
 
@@ -74,7 +75,7 @@ func TestCheckAccessLocationKeepsBaselineLearningUntilThreshold(t *testing.T) {
 
 func TestCheckAccessLocationDetectsUnrealisticTravel(t *testing.T) {
 	s := newGeoTestStore(t)
-	geo := NewGeoLocator(s)
+	geo := NewGeoLocator(s, newGeoTestRuntime())
 	userID := "user-1"
 	if err := s.SaveLoginLocationAt(userID, "198.51.100.10", 40.7128, -74.0060, "New York", "United States", time.Now().UTC().Add(-time.Hour)); err != nil {
 		t.Fatalf("save location: %v", err)
@@ -95,17 +96,33 @@ func TestCheckAccessLocationDetectsUnrealisticTravel(t *testing.T) {
 }
 
 func cacheGeo(geo *GeoLocator, ip string, loc GeoLocation) {
-	geo.mu.Lock()
-	defer geo.mu.Unlock()
-	geo.cache[ip] = geoCache{loc: loc, expiresAt: time.Now().Add(time.Hour)}
+	geo.cacheLocation(ip, loc)
 }
 
 func newGeoTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s := store.New(t.TempDir())
-	if err := s.InitDB(); err != nil {
-		t.Fatalf("InitDB() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return testdb.NewStore(t)
+}
+
+type geoTestRuntime struct {
+	values map[string][]byte
+}
+
+func newGeoTestRuntime() *geoTestRuntime {
+	return &geoTestRuntime{values: map[string][]byte{}}
+}
+
+func (r *geoTestRuntime) SaveEphemeralState(kind, key string, value []byte, _ time.Time) error {
+	r.values[kind+":"+key] = append([]byte(nil), value...)
+	return nil
+}
+
+func (r *geoTestRuntime) GetEphemeralState(kind, key string) ([]byte, bool) {
+	value, ok := r.values[kind+":"+key]
+	return append([]byte(nil), value...), ok
+}
+
+func (r *geoTestRuntime) DeleteEphemeralState(kind, key string) error {
+	delete(r.values, kind+":"+key)
+	return nil
 }

@@ -220,7 +220,7 @@ func (s *Server) handleAdminPasskeyLoginFinish(w http.ResponseWriter, r *http.Re
 	if err := s.pa.Store.UpdateWebAuthnCredentialJSON(hex.EncodeToString(updatedCred.ID), credentialJSON); err != nil {
 		log.Printf("[AUTH] Admin passkey credential update failed: user=%s credential=%x err=%v", user.ID, updatedCred.ID, err)
 	}
-	s.pa.Store.ResetLoginAttempts(email)
+	_ = s.pa.Runtime.ResetLoginAttempts(email)
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("admin_passkey_login", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey sign-in completed", true)
 	}

@@ -27,7 +27,6 @@ type policyRulePayload struct {
 type policyAssignmentPayload struct {
 	ID             string `json:"id"`
 	PolicyID       string `json:"policy_id"`
-	TenantID       string `json:"tenant_id"`
 	OrganizationID string `json:"organization_id"`
 	Level          string `json:"level"`
 	GroupID        string `json:"group_id"`
@@ -160,7 +159,7 @@ func (s *Server) handleAdminPolicyAssignments(w http.ResponseWriter, r *http.Req
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, assignment.TenantID) {
+		if !s.requireOrganizationAccess(w, r, assignment.OrganizationID) {
 			return
 		}
 		placement, _ := normalizePolicyAssignmentOrderPlacement(payload.OrderPlacement)
@@ -194,7 +193,7 @@ func (s *Server) handleAdminPolicyAssignmentByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "policy assignment not found"})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, assignment.TenantID) {
+		if !s.requireOrganizationAccess(w, r, assignment.OrganizationID) {
 			return
 		}
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: assignment})
@@ -209,7 +208,7 @@ func (s *Server) handleAdminPolicyAssignmentByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "default global policy assignment cannot be modified"})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		payload, ok := decodePolicyAssignmentPayload(w, r)
@@ -221,7 +220,7 @@ func (s *Server) handleAdminPolicyAssignmentByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, assignment.TenantID) {
+		if !s.requireOrganizationAccess(w, r, assignment.OrganizationID) {
 			return
 		}
 		assignment.ID = assignmentID
@@ -239,7 +238,7 @@ func (s *Server) handleAdminPolicyAssignmentByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "default global policy assignment cannot be removed"})
 			return
 		}
-		if existing != nil && !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if existing != nil && !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		if !s.pa.Store.DeletePolicyAssignment(assignmentID) {
@@ -267,7 +266,7 @@ func (s *Server) publishPolicyEvent(action string, rule *models.PolicyRule, assi
 		if strings.TrimSpace(fields["policy_id"]) == "" {
 			fields["policy_id"] = assignment.PolicyID
 		}
-		fields["tenant_id"] = assignment.TenantID
+		fields["organization_id"] = assignment.OrganizationID
 		fields["resource_id"] = assignment.ResourceID
 		fields["level"] = assignment.Level
 		fields["group_id"] = assignment.GroupID
@@ -491,10 +490,7 @@ func (s *Server) policyAssignmentFromPayload(payload policyAssignmentPayload, ex
 		return nil, "policy assignment order placement must be top, bottom, or replace"
 	}
 	policyID := strings.TrimSpace(payload.PolicyID)
-	tenantID := strings.TrimSpace(payload.TenantID)
-	if tenantID == "" {
-		tenantID = strings.TrimSpace(payload.OrganizationID)
-	}
+	organizationID := strings.TrimSpace(payload.OrganizationID)
 	level := normalizePolicyLayer(payload.Level)
 	resourceID := strings.TrimSpace(payload.ResourceID)
 	groupID := strings.TrimSpace(payload.GroupID)
@@ -505,8 +501,8 @@ func (s *Server) policyAssignmentFromPayload(payload policyAssignmentPayload, ex
 		if policyID == "" {
 			policyID = existing.PolicyID
 		}
-		if tenantID == "" {
-			tenantID = existing.TenantID
+		if organizationID == "" {
+			organizationID = existing.OrganizationID
 		}
 		if level == "" {
 			level = existing.Level
@@ -522,7 +518,7 @@ func (s *Server) policyAssignmentFromPayload(payload policyAssignmentPayload, ex
 	if pdpstore.IsDefaultGlobalPolicyID(policyID) && (existing == nil || !pdpstore.IsDefaultGlobalAssignmentID(existing.ID)) {
 		return nil, "default global policy is assigned automatically per organization"
 	}
-	if _, found := s.pa.Store.GetTenant(tenantID); !found {
+	if _, found := s.pa.Store.GetOrganization(organizationID); !found {
 		return nil, "organization not found"
 	}
 	if errMsg := validatePolicyAssignmentTarget(level, resourceID, groupID, groupName); errMsg != "" {
@@ -530,17 +526,17 @@ func (s *Server) policyAssignmentFromPayload(payload policyAssignmentPayload, ex
 	}
 	now := time.Now()
 	assignment := &models.PolicyAssignment{
-		ID:         strings.TrimSpace(payload.ID),
-		PolicyID:   policyID,
-		TenantID:   tenantID,
-		Level:      level,
-		GroupID:    groupID,
-		GroupName:  groupName,
-		ResourceID: resourceID,
-		OrderIndex: orderIndex,
-		Enabled:    boolFromPayload(payload.Enabled, true),
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:             strings.TrimSpace(payload.ID),
+		PolicyID:       policyID,
+		OrganizationID: organizationID,
+		Level:          level,
+		GroupID:        groupID,
+		GroupName:      groupName,
+		ResourceID:     resourceID,
+		OrderIndex:     orderIndex,
+		Enabled:        boolFromPayload(payload.Enabled, true),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if existing != nil {
 		assignment.ID = existing.ID
@@ -561,13 +557,13 @@ func normalizePolicyAction(action string) (string, bool) {
 
 func normalizePolicyLayer(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "", "tenant", "global", "organization":
+	case "", "organization":
 		return "organization"
 	case "group":
 		return "group"
-	case "resource", "application":
+	case "resource":
 		return "resource"
-	case "resource_group", "application_group":
+	case "resource_group":
 		return "resource_group"
 	default:
 		return ""
@@ -624,7 +620,7 @@ func boolFromPayload(value *bool, defaultValue bool) bool {
 func filterPolicyAssignmentsByOrganization(assignments []*models.PolicyAssignment, allowed map[string]bool) []*models.PolicyAssignment {
 	filtered := make([]*models.PolicyAssignment, 0, len(assignments))
 	for _, assignment := range assignments {
-		if assignment != nil && organizationAllowed(allowed, assignment.TenantID) {
+		if assignment != nil && organizationAllowed(allowed, assignment.OrganizationID) {
 			filtered = append(filtered, assignment)
 		}
 	}

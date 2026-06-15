@@ -64,15 +64,15 @@ function enrollmentToDeviceRow(enrollment) {
     expires_at: enrollment.expires_at || '',
     username: enrollment.username || '',
     enrollment_status: enrollment.status || '',
-    tenant_id: enrollment.tenant_id || '',
+    organization_id: enrollment.organization_id || '',
     has_report: false,
   };
 }
 
 function rowLogicalKey(row) {
   const host = normalize(row.hostname).trim();
-  const tenant = normalize(row.tenant_id).trim();
-  if (host) return `${tenant}|hostname|${host}`;
+  const organization = normalize(row.organization_id).trim();
+  if (host) return `${organization}|hostname|${host}`;
   return `device|${row.device_id || row.enrollment_id || ''}`;
 }
 
@@ -105,7 +105,7 @@ function mergeDuplicateDeviceRow(a, b) {
     enrolled_at: newerTime(enrollment.enrolled_at, report.enrolled_at),
     expires_at: newerTime(enrollment.expires_at, report.expires_at),
     enrollment_status: enrollment.enrollment_status || report.enrollment_status || '',
-    tenant_id: report.tenant_id || enrollment.tenant_id || '',
+    organization_id: report.organization_id || enrollment.organization_id || '',
   };
 }
 
@@ -138,7 +138,7 @@ function mergeDeviceRows(deviceDataReports, enrollments) {
       enrolled_at: enrollment?.enrolled_at || '',
       expires_at: enrollment?.expires_at || '',
       enrollment_status: enrollment?.status || '',
-      tenant_id: report.tenant_id || enrollment?.tenant_id || '',
+      organization_id: report.organization_id || enrollment?.organization_id || '',
       has_report: true,
     });
   }
@@ -156,7 +156,7 @@ function mergeDeviceRows(deviceDataReports, enrollments) {
         enrolled_at: existing.enrolled_at || enrollment.enrolled_at || '',
         expires_at: existing.expires_at || enrollment.expires_at || '',
         enrollment_status: existing.enrollment_status || enrollment.status || '',
-        tenant_id: existing.tenant_id || enrollment.tenant_id || '',
+        organization_id: existing.organization_id || enrollment.organization_id || '',
       });
       continue;
     }

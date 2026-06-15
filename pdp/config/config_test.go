@@ -11,13 +11,9 @@ func TestLoadProjectConfig(t *testing.T) {
 func TestApplyEnvironmentOverridesPublicOrigin(t *testing.T) {
 	t.Setenv(PDPPublicHostEnv, "policy-admin.remote-access-demo.xyz")
 
-	requireMFA := false
 	cfg := &Config{
-		WebAuthnRPID:      "localhost",
+		WebAuthnRPID:      "",
 		WebAuthnRPOrigins: "https://localhost:8443",
-		AdminAuth: AdminAuthConfig{
-			RequireMFA: &requireMFA,
-		},
 		Public: PublicDashboardConfig{
 			FederatedCallbackURL: "https://localhost:8443/auth/federated/callback",
 		},
@@ -40,25 +36,24 @@ func TestApplyEnvironmentOverridesPublicOrigin(t *testing.T) {
 }
 
 func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
+	t.Setenv(PDPTLSDNSNamesEnv, "pdp.apps.fsisc.ro, pdp-mtls.apps.fsisc.ro")
 	t.Setenv(PDPPublicOriginEnv, "https://pa.remote-access-demo.xyz")
 	t.Setenv(PDPFederatedCallbackURLEnv, "https://callbacks.remote-access-demo.xyz/cb")
 	t.Setenv(PDPWebAuthnRPIDEnv, "remote-access-demo.xyz")
 	t.Setenv(PDPWebAuthnRPOriginsEnv, "https://pa.remote-access-demo.xyz,https://policy-admin.remote-access-demo.xyz")
 	t.Setenv(PDPCORSOriginsEnv, "https://ui.remote-access-demo.xyz, https://ops.remote-access-demo.xyz")
-	t.Setenv(PDPAdminRequireMFAEnv, "true")
 
-	requireMFA := false
 	cfg := &Config{
-		WebAuthnRPID: "localhost",
-		AdminAuth: AdminAuthConfig{
-			RequireMFA: &requireMFA,
-		},
+		WebAuthnRPID: "local.test",
 	}
 
 	cfg.ApplyEnvironmentOverrides()
 
 	if cfg.Public.FederatedCallbackURL != "https://callbacks.remote-access-demo.xyz/cb" {
 		t.Fatalf("FederatedCallbackURL = %q", cfg.Public.FederatedCallbackURL)
+	}
+	if len(cfg.TLSDNSNames) != 2 || cfg.TLSDNSNames[0] != "pdp.apps.fsisc.ro" || cfg.TLSDNSNames[1] != "pdp-mtls.apps.fsisc.ro" {
+		t.Fatalf("TLSDNSNames = %#v", cfg.TLSDNSNames)
 	}
 	if cfg.WebAuthnRPID != "remote-access-demo.xyz" {
 		t.Fatalf("WebAuthnRPID = %q", cfg.WebAuthnRPID)
@@ -69,8 +64,18 @@ func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
 	if len(cfg.CORSOrigins) != 2 || cfg.CORSOrigins[0] != "https://ui.remote-access-demo.xyz" || cfg.CORSOrigins[1] != "https://ops.remote-access-demo.xyz" {
 		t.Fatalf("CORSOrigins = %#v", cfg.CORSOrigins)
 	}
-	if cfg.AdminAuth.RequireMFA == nil || !*cfg.AdminAuth.RequireMFA {
-		t.Fatalf("RequireMFA = %v", cfg.AdminAuth.RequireMFA)
+}
+
+func TestCertificateDNSNamesIncludesPDPFQDNAndDeduplicates(t *testing.T) {
+	cfg := &Config{
+		PDPFQDN:     "pdp-mtls.apps.fsisc.ro",
+		TLSDNSNames: []string{"pdp.apps.fsisc.ro", "pdp-mtls.apps.fsisc.ro", "PDP.APPS.FSISC.RO"},
+	}
+
+	names := cfg.CertificateDNSNames()
+
+	if len(names) != 2 || names[0] != "pdp-mtls.apps.fsisc.ro" || names[1] != "pdp.apps.fsisc.ro" {
+		t.Fatalf("CertificateDNSNames = %#v", names)
 	}
 }
 

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -41,13 +42,17 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 		return nil, status.Error(codes.ResourceExhausted, "too many enrollment attempts")
 	}
 	hostname := strings.TrimSpace(structFieldString(request, "hostname"))
+	publicOrigin, err := service.server.publicOrigin()
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	result, err := service.server.pa.Enrollment.StartInteractiveSession(paenrollment.InteractiveStartRequest{
 		CSRHash:     strings.TrimSpace(structFieldString(request, "csr_sha256")),
 		SPKIHash:    strings.TrimSpace(structFieldString(request, "spki_sha256")),
 		DeviceNonce: strings.TrimSpace(structFieldString(request, "device_nonce")),
 		Hostname:    hostname,
 		SourceIP:    sourceIP,
-		AuthURL:     service.server.publicOrigin(),
+		AuthURL:     publicOrigin,
 	})
 	if err != nil {
 		return nil, enrollmentGRPCError(err)
@@ -109,6 +114,10 @@ func (service *agentEnrollmentGRPCService) CompleteSession(ctx context.Context, 
 	if payloadType := strings.TrimSpace(structFieldString(proof, "payload_type")); payloadType != "" && payloadType != paenrollment.InteractiveProofType {
 		return nil, status.Error(codes.InvalidArgument, "unsupported proof payload_type")
 	}
+	publicOrigin, err := service.server.publicOrigin()
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	result, err := service.server.pa.Enrollment.CompleteInteractiveSession(paenrollment.InteractiveCompleteRequest{
 		SessionID:      strings.TrimSpace(structFieldString(request, "enrollment_session_id")),
 		DeviceNonce:    strings.TrimSpace(structFieldString(request, "device_nonce")),
@@ -116,7 +125,7 @@ func (service *agentEnrollmentGRPCService) CompleteSession(ctx context.Context, 
 		CSRPEM:         strings.TrimSpace(structFieldString(request, "csr_pem")),
 		ProofPayload:   []byte(structFieldString(proof, "payload")),
 		ProofSignature: signature,
-		PDPOrigin:      service.server.publicOrigin(),
+		PDPOrigin:      publicOrigin,
 	})
 	if err != nil {
 		return nil, enrollmentGRPCError(err)
@@ -129,7 +138,7 @@ func (service *agentEnrollmentGRPCService) CompleteSession(ctx context.Context, 
 		"certificate_chain_pem":      result.CertificateChainPEM,
 		"certificate_thumbprint":     result.CertificateThumbprint,
 		"expires_at":                 result.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		"pdp_endpoint":               service.server.publicOrigin(),
+		"pdp_endpoint":               publicOrigin,
 		"gateway_endpoints":          []interface{}{},
 		"enrolled_by_idp_profile_id": result.EnrolledByIDPProfileID,
 	})
@@ -165,14 +174,14 @@ func structFieldStruct(value *structpb.Struct, key string) *structpb.Struct {
 	return field.GetStructValue()
 }
 
-func (s *Server) publicOrigin() string {
+func (s *Server) publicOrigin() (string, error) {
 	callback := strings.TrimSpace(s.appConfig().Public.FederatedCallbackURL)
 	if callback != "" {
 		if parsed, err := url.Parse(callback); err == nil && parsed.Scheme != "" && parsed.Host != "" {
-			return parsed.Scheme + "://" + parsed.Host
+			return parsed.Scheme + "://" + parsed.Host, nil
 		}
 	}
-	return "https://localhost:8443"
+	return "", fmt.Errorf("public.federated_callback_url must be configured with an absolute URL")
 }
 
 func agentEnrollmentGRPCStartSessionHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {

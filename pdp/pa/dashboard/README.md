@@ -76,8 +76,8 @@ Pagina de login foloseste fluxul in doi pasi:
    stare MFA pending.
 2. Daca serverul cere MFA, UI-ul trimite codul la `/api/auth/mfa/verify`.
 
-Tokenul administrativ este emis doar dupa satisfacerea politicii MFA pentru
-administrator, conform `admin_auth.require_mfa` din config.
+Tokenul administrativ este emis doar dupa verificarea MFA. Login-ul cu parola
+nu are mod fara MFA.
 
 ## Organizations si IdP
 
@@ -187,8 +187,6 @@ Checks implicite:
 - Disk Encryption
 - Firewall
 - Antivirus
-
-Check-ul legacy `Connectivity` este ignorat in UI.
 
 ## Audit si Sesiuni
 

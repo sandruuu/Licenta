@@ -64,8 +64,7 @@ func (s *Server) handleAdminResources(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		applyOrganizationAliasToResource(body, &res)
-		if !s.requireOrganizationAccess(w, r, res.TenantID) {
+		if !s.requireOrganizationAccess(w, r, res.OrganizationID) {
 			return
 		}
 		created, err := s.pa.Resources.CreateResource(res)
@@ -97,7 +96,7 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 			writeResourceAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, res.TenantID) {
+		if !s.requireOrganizationAccess(w, r, res.OrganizationID) {
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
@@ -108,7 +107,7 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 			writeResourceAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		// Decode into a map to detect which fields were actually sent (PATCH semantics)
@@ -117,8 +116,7 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		applyOrganizationAliasToFields(fields)
-		if raw, ok := fields["tenant_id"]; ok {
+		if raw, ok := fields["organization_id"]; ok {
 			var targetOrganizationID string
 			_ = json.Unmarshal(raw, &targetOrganizationID)
 			if strings.TrimSpace(targetOrganizationID) != "" && !s.requireOrganizationAccess(w, r, targetOrganizationID) {
@@ -139,7 +137,7 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 			writeResourceAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		if err := s.pa.Resources.DeleteResource(id); err != nil {
@@ -193,7 +191,7 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "device not found"})
 		return
 	}
-	if !s.requireOrganizationAccess(w, r, report.TenantID) {
+	if !s.requireOrganizationAccess(w, r, report.OrganizationID) {
 		return
 	}
 
@@ -288,28 +286,6 @@ func deviceDataIsHealthy(report *models.DeviceDataReport) bool {
 	return true
 }
 
-func applyOrganizationAliasToResource(body []byte, resource *models.Resource) {
-	if resource == nil || len(body) == 0 {
-		return
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return
-	}
-	if value, ok := raw["organization_id"]; ok && strings.TrimSpace(resource.TenantID) == "" {
-		_ = json.Unmarshal(value, &resource.TenantID)
-	}
-}
-
-func applyOrganizationAliasToFields(fields map[string]json.RawMessage) {
-	if fields == nil {
-		return
-	}
-	if value, ok := fields["organization_id"]; ok {
-		fields["tenant_id"] = value
-	}
-}
-
 // ─────────────────────────────────────────────
 // Dashboard SPA handler
 // ─────────────────────────────────────────────
@@ -320,10 +296,9 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Serve from pdp/pa/dashboard/dist/ during development or /app/dashboard/dist in containers.
 	distDir := findDashboardDir()
 	if distDir == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dashboard not built - run: cd pdp/pa/dashboard && npm run build"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dashboard assets are not available"})
 		return
 	}
 
@@ -363,29 +338,12 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, fullPath)
 }
 
-func (s *Server) redirectLegacyDashboardRoute(w http.ResponseWriter, r *http.Request) {
-	target := strings.TrimPrefix(r.URL.Path, "/dashboard")
-	if target == "" {
-		target = "/"
-	}
-	if !strings.HasPrefix(target, "/") {
-		target = "/" + target
-	}
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
-	}
-	http.Redirect(w, r, target, http.StatusMovedPermanently)
-}
-
 func dashboardFilePath(urlPath string) string {
-	if strings.HasPrefix(urlPath, "/dashboard/") {
-		return strings.TrimPrefix(urlPath, "/dashboard/")
-	}
 	return strings.TrimPrefix(urlPath, "/")
 }
 
 func isReservedServerPath(urlPath string) bool {
-	for _, prefix := range []string{"/api", "/auth", "/browser", "/scim", "/.well-known", "/health"} {
+	for _, prefix := range []string{"/api", "/auth", "/browser", "/scim", "/.well-known", "/health", "/live", "/ready"} {
 		if urlPath == prefix || strings.HasPrefix(urlPath, prefix+"/") {
 			return true
 		}
@@ -396,7 +354,7 @@ func isReservedServerPath(urlPath string) bool {
 func (s *Server) serveDashboardIndex(w http.ResponseWriter, r *http.Request) {
 	distDir := findDashboardDir()
 	if distDir == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dashboard not built - run: cd pdp/pa/dashboard && npm run build"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "dashboard assets are not available"})
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -407,14 +365,8 @@ func (s *Server) serveDashboardIndex(w http.ResponseWriter, r *http.Request) {
 
 func findDashboardDir() string {
 	candidates := []string{
-		"pdp/pa/dashboard/dist",
-		"pa/dashboard/dist",
-		"../pdp/pa/dashboard/dist",
-		"pdp/dashboard/dist",
-		"dashboard/dist",
-		"../pdp/dashboard/dist",
+		"/app/dashboard/dist",
 	}
-	// Also check relative to executable
 	if execPath, err := os.Executable(); err == nil {
 		candidates = append(candidates, filepath.Join(filepath.Dir(execPath), "dashboard", "dist"))
 	}

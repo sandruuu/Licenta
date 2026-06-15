@@ -79,7 +79,6 @@ const HIDDEN_AUDIT_EVENTS = new Set([
   'federated_login',
   'session_revoked',
   'continuous_access_revoked',
-  'device_health_report',
   'device_enrollment_authenticated',
   'agent_mfa_enrolled',
   'agent_mfa_enrollment_reauth',
@@ -243,7 +242,7 @@ export default function Audit() {
         entry.decision,
         outcomeLabel(entryOutcome(entry)),
         auditDetailsText(entry.details),
-        entry.tenant_id,
+        entry.organization_id,
       ].some((value) => normalize(value).includes(needle));
     });
   }, [visibleEntries, query, activeEventFilter, outcomeFilter]);

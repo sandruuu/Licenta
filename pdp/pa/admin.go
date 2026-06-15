@@ -15,6 +15,7 @@ import (
 	"pdp/pa/resources"
 	"pdp/pa/sessions"
 	"pdp/pe/evaluation"
+	"pdp/runtime/redisstate"
 	"pdp/store"
 	"strings"
 )
@@ -36,20 +37,21 @@ type PolicyAdministrator struct {
 	StepUps    *StepUpManager
 	Audit      *audit.AuditLogger
 	Store      *store.Store
+	Runtime    *redisstate.Client
 	Cfg        *config.Config
 }
 
 // NewPolicyAdministrator creates and initializes the Policy Administrator
-func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministrator {
+func NewPolicyAdministrator(cfg *config.Config, s *store.Store, runtimeState *redisstate.Client) *PolicyAdministrator {
 	cfg.ApplyDefaults()
 	auditLogger := audit.NewAuditLogger(s)
 	pa := &PolicyAdministrator{
-		Auth:    auth.New(cfg, s),
+		Auth:    auth.New(cfg, s, runtimeState),
 		Engine:  evaluation.NewEngine(cfg.Risk),
-		Geo:     policies.NewGeoLocator(s, cfg.Geo),
+		Geo:     policies.NewGeoLocator(s, runtimeState, cfg.Geo),
 		Catalog: catalog.NewService(s, cfg.Runtime.CatalogTTLSeconds),
 		Devices: devices.NewService(s, auditLogger),
-		Enrollment: enrollment.NewService(s, enrollment.Config{
+		Enrollment: enrollment.NewService(s, runtimeState, enrollment.Config{
 			CertificateValidityDays: cfg.Enrollment.CertificateValidityDays,
 			BrowserSessionTTL:       cfg.Enrollment.BrowserSessionTTL,
 		}),
@@ -59,9 +61,10 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 		}),
 		Resources: resources.NewService(s),
 		Sessions:  sessions.NewSessionManager(s, cfg.SessionExpiry, cfg.MaxSessions),
-		StepUps:   NewStepUpManager(),
+		StepUps:   NewStepUpManager(runtimeState),
 		Audit:     auditLogger,
 		Store:     s,
+		Runtime:   runtimeState,
 		Cfg:       cfg,
 	}
 
@@ -78,14 +81,6 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store) *PolicyAdministr
 	})
 
 	return pa
-}
-
-// ReportDeviceHealth processes a scored device health report from compatibility paths.
-func (pa *PolicyAdministrator) ReportDeviceHealth(report *models.DeviceHealthReport) {
-	if pa == nil || pa.Devices == nil {
-		return
-	}
-	pa.Devices.RecordHealth(report)
 }
 
 func (pa *PolicyAdministrator) ReportDeviceData(report *models.DeviceDataReport) {

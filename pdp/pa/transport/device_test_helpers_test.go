@@ -12,29 +12,42 @@ import (
 	"time"
 
 	"pdp/config"
+	"pdp/internal/testdb"
+	"pdp/internal/testredis"
+	"pdp/mfa"
 	"pdp/models"
 	"pdp/pa"
+	"pdp/pa/audit"
 	"pdp/pa/auth"
+	"pdp/pa/catalog"
+	"pdp/pa/devices"
+	"pdp/pa/enrollment"
+	"pdp/pa/gateway"
+	"pdp/pa/policies"
+	"pdp/pa/resources"
+	"pdp/pa/sessions"
+	"pdp/pe/evaluation"
+	"pdp/runtime/redisstate"
 	"pdp/store"
 )
 
 func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.Store, deviceID, role, certificateThumbprint string) string {
 	t.Helper()
 	dataStore.SaveUser(&models.User{
-		ID:        "user-1",
-		TenantID:  transportTestTenantID,
-		Username:  "alice@example.test",
-		Email:     "alice@example.test",
-		Role:      role,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:             "user-1",
+		OrganizationID: transportTestOrganizationID,
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		Role:           role,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	})
 	token, _, err := server.pa.Auth.JWT.GenerateAgentSessionToken(auth.AgentSessionTokenRequest{
 		SessionID:                   "sess-test",
 		UserID:                      "user-1",
 		Username:                    "alice@example.test",
 		Role:                        role,
-		TenantID:                    transportTestTenantID,
+		OrganizationID:              transportTestOrganizationID,
 		DeviceID:                    deviceID,
 		CertificateThumbprintSHA256: certificateThumbprint,
 		LocalUserSIDHash:            "sid-hash",
@@ -50,19 +63,16 @@ func newDeviceCatalogAccessToken(t *testing.T, server *Server, dataStore *store.
 
 func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	dataStore.SaveTenant(&models.Tenant{
-		ID:        transportTestTenantID,
-		Name:      "Test Tenant",
+	dataStore := testdb.NewStore(t)
+	runtimeState := testredis.NewClient(t)
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        transportTestOrganizationID,
+		Name:      "Test Organization",
 		Domain:    "example.test",
 		Enabled:   true,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	})
-	t.Cleanup(func() { _ = dataStore.Close() })
 	dataDir := t.TempDir()
 	cfg := &config.Config{
 		ListenAddr:          ":8443",
@@ -84,7 +94,8 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		MaxLoginAttempts:    5,
 		LockoutDuration:     15 * time.Minute,
 		DataDir:             dataDir,
-		DatabasePath:        dataDir + "/trustcloud.db",
+		DatabaseURL:         testdb.DatabaseURL(t),
+		RedisURL:            "redis://test-redis",
 		PDPKeyEncryptedPath: dataDir + "/pdp_key.enc",
 		CORSOrigins:         []string{},
 		Runtime: config.RuntimeConfig{
@@ -104,11 +115,8 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 			OIDCCleanupInterval:     time.Minute,
 		},
 		Public: config.PublicDashboardConfig{
-			DeviceHealthAgentURL:  "http://127.0.0.1:12080",
-			DeviceHealthTimeoutMS: 3000,
-			DeviceHealthRetryMS:   5000,
-			FederatedCallbackURL:  "https://localhost:8443/auth/federated/callback",
-			OIDCDefaultScopes:     "openid profile email",
+			FederatedCallbackURL: "https://localhost:8443/auth/federated/callback",
+			OIDCDefaultScopes:    "openid profile email",
 			OIDCDefaultClaimMapping: map[string]string{
 				"username": "preferred_username",
 				"email":    "email",
@@ -121,7 +129,7 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 			},
 		},
 	}
-	policyAdmin := pa.NewPolicyAdministrator(cfg, dataStore)
+	policyAdmin := newTestPolicyAdministrator(t, cfg, dataStore, runtimeState)
 	now := time.Now()
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:        "test_allow_admin_access",
@@ -135,25 +143,65 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		},
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assign_test_allow_admin_access",
-		PolicyID:  "test_allow_admin_access",
-		TenantID:  transportTestTenantID,
-		Level:     "organization",
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "assign_test_allow_admin_access",
+		PolicyID:       "test_allow_admin_access",
+		OrganizationID: transportTestOrganizationID,
+		Level:          "organization",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	server := &Server{
-		pa:              policyAdmin,
-		mtlsCAPool:      x509.NewCertPool(),
-		sessionGateways: make(map[string]string),
-		stepUpAuth:      newStepUpBrowserAuthStore(cfg.Runtime.BrowserAuthSessionTTL),
+		pa:            policyAdmin,
+		mtlsCAPool:    x509.NewCertPool(),
+		stepUpAuth:    newStepUpBrowserAuthStore(runtimeState, cfg.Runtime.BrowserAuthSessionTTL),
+		adminMFA:      newAdminMFAStore(runtimeState),
+		agentSessions: newAgentSessionStore(runtimeState),
 	}
 	server.wireSessionDeleteSink()
 	return server, dataStore
 }
 
-const transportTestTenantID = "tenant-1"
+func newTestPolicyAdministrator(t *testing.T, cfg *config.Config, dataStore *store.Store, runtimeState *redisstate.Client) *pa.PolicyAdministrator {
+	t.Helper()
+	jwtKey, err := auth.GenerateJWTSigningKey()
+	if err != nil {
+		t.Fatalf("GenerateJWTSigningKey() error = %v", err)
+	}
+	jwtMgr, err := auth.NewJWTManager(jwtKey, cfg.JWTExpiry, cfg.Runtime.OIDCEnrollmentTokenTTL)
+	if err != nil {
+		t.Fatalf("NewJWTManager() error = %v", err)
+	}
+	auditLogger := audit.NewAuditLogger(dataStore)
+	authService := &auth.Service{
+		Users:      auth.NewUserManager(dataStore),
+		JWT:        jwtMgr,
+		OIDC:       auth.NewOIDCManager(runtimeState, dataStore, cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
+		WebAuthn:   mfa.NewWebAuthnProvider(cfg, runtimeState),
+		Federation: auth.NewFederationProvider(runtimeState, cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
+		Store:      dataStore,
+		Runtime:    runtimeState,
+		Cfg:        cfg,
+	}
+	return &pa.PolicyAdministrator{
+		Auth:       authService,
+		Engine:     evaluation.NewEngine(cfg.Risk),
+		Geo:        policies.NewGeoLocator(dataStore, runtimeState, cfg.Geo),
+		Catalog:    catalog.NewService(dataStore, cfg.Runtime.CatalogTTLSeconds),
+		Devices:    devices.NewService(dataStore, auditLogger),
+		Enrollment: enrollment.NewService(dataStore, runtimeState, enrollment.Config{CertificateValidityDays: cfg.Enrollment.CertificateValidityDays, BrowserSessionTTL: cfg.Enrollment.BrowserSessionTTL}),
+		Gateways:   gateway.NewService(dataStore, cfg.PKIRoleGateway, gateway.Config{CertificateValidityDays: cfg.Gateway.CertificateValidityDays, EnrollmentTokenTTL: cfg.Gateway.EnrollmentTokenTTL}),
+		Resources:  resources.NewService(dataStore),
+		Sessions:   sessions.NewSessionManager(dataStore, cfg.SessionExpiry, cfg.MaxSessions),
+		StepUps:    pa.NewStepUpManager(runtimeState),
+		Audit:      auditLogger,
+		Store:      dataStore,
+		Runtime:    runtimeState,
+		Cfg:        cfg,
+	}
+}
+
+const transportTestOrganizationID = "organization-1"
 
 func newDeviceAPICertificate(t *testing.T, commonName string, notAfter time.Time) ([]byte, *x509.Certificate) {
 	t.Helper()

@@ -33,16 +33,16 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		ExpiresAt:       time.Now().Add(time.Hour),
 	})
 	dataStore.SaveResource(&models.Resource{
-		ID:          "res-1",
-		TenantID:    transportTestTenantID,
-		GatewayID:   "gw-1",
-		Name:        "Admin Portal",
-		Type:        "web",
-		ExternalURL: "https://admin.example.test/app",
-		Port:        443,
-		Enabled:     true,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:             "res-1",
+		OrganizationID: transportTestOrganizationID,
+		GatewayID:      "gw-1",
+		Name:           "Admin Portal",
+		Type:           "web",
+		ExternalURL:    "https://admin.example.test/app",
+		Port:           443,
+		Enabled:        true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	})
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:      "policy-device-data-1",
@@ -60,14 +60,14 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		UpdatedAt: time.Now(),
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:         "assignment-device-data-1",
-		PolicyID:   "policy-device-data-1",
-		TenantID:   transportTestTenantID,
-		Level:      "resource",
-		ResourceID: "res-1",
-		Enabled:    true,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		ID:             "assignment-device-data-1",
+		PolicyID:       "policy-device-data-1",
+		OrganizationID: transportTestOrganizationID,
+		Level:          "resource",
+		ResourceID:     "res-1",
+		Enabled:        true,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	})
 
 	service := &deviceCatalogGRPCService{server: server}

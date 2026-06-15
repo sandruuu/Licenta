@@ -64,18 +64,18 @@ func (sm *SessionManager) CreateSession(decision *models.AccessDecision, req mod
 
 	now := time.Now()
 	session := &models.Session{
-		ID:           sessionID,
-		UserID:       req.UserID,
-		Username:     req.Username,
-		DeviceID:     req.DeviceID,
-		SourceIP:     req.SourceIP,
-		Resource:     req.Resource,
-		GatewayID:    req.GatewayID,
-		Protocol:     req.Protocol,
-		RiskScore:    decision.RiskScore,
-		TenantID:     req.TenantID,
-		CreatedAt:    now,
-		LastActivity: now,
+		ID:             sessionID,
+		UserID:         req.UserID,
+		Username:       req.Username,
+		DeviceID:       req.DeviceID,
+		SourceIP:       req.SourceIP,
+		Resource:       req.Resource,
+		GatewayID:      req.GatewayID,
+		Protocol:       req.Protocol,
+		RiskScore:      decision.RiskScore,
+		OrganizationID: req.OrganizationID,
+		CreatedAt:      now,
+		LastActivity:   now,
 	}
 	sm.applyDecisionSessionState(session, decision, now, true)
 
@@ -246,7 +246,7 @@ func sameResourceSessionSubject(session *models.Session, req models.AccessReques
 		strings.TrimSpace(session.Resource) == strings.TrimSpace(req.Resource) &&
 		strings.TrimSpace(session.GatewayID) == strings.TrimSpace(req.GatewayID) &&
 		strings.EqualFold(strings.TrimSpace(session.Protocol), strings.TrimSpace(req.Protocol)) &&
-		strings.TrimSpace(session.TenantID) == strings.TrimSpace(req.TenantID)
+		strings.TrimSpace(session.OrganizationID) == strings.TrimSpace(req.OrganizationID)
 }
 
 func (sm *SessionManager) saveDeviceUserBinding(req models.AccessRequest, now time.Time) {
@@ -324,15 +324,15 @@ func (sm *SessionManager) RevokeSessionsMatching(reason string, match func(*mode
 }
 
 // RevokeSessionsForDeviceUser terminates all active resource sessions owned by
-// a user on a specific enrolled device. Tenant is optional but used when present
+// a user on a specific enrolled device. Organization is optional but used when present
 // to avoid crossing organization boundaries during Agent logout.
-func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, tenantID, reason string) int {
+func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, organizationID, reason string) int {
 	if sm == nil || sm.store == nil {
 		return 0
 	}
 	userID = strings.TrimSpace(userID)
 	deviceID = strings.TrimSpace(deviceID)
-	tenantID = strings.TrimSpace(tenantID)
+	organizationID = strings.TrimSpace(organizationID)
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		reason = "agent_logout"
@@ -349,7 +349,7 @@ func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, tenantID
 		if strings.TrimSpace(session.UserID) != userID || strings.TrimSpace(session.DeviceID) != deviceID {
 			continue
 		}
-		if tenantID != "" && strings.TrimSpace(session.TenantID) != tenantID {
+		if organizationID != "" && strings.TrimSpace(session.OrganizationID) != organizationID {
 			continue
 		}
 		if !sm.store.RevokeSession(session.ID) {
@@ -363,10 +363,10 @@ func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, tenantID
 }
 
 // RevokeSessionsForDevice terminates all active resource sessions issued to a
-// device. Tenant is optional and narrows the revocation to one organization.
-func (sm *SessionManager) RevokeSessionsForDevice(deviceID, tenantID, reason string) int {
+// device. Organization is optional and narrows the revocation to one organization.
+func (sm *SessionManager) RevokeSessionsForDevice(deviceID, organizationID, reason string) int {
 	deviceID = strings.TrimSpace(deviceID)
-	tenantID = strings.TrimSpace(tenantID)
+	organizationID = strings.TrimSpace(organizationID)
 	if deviceID == "" {
 		return 0
 	}
@@ -374,15 +374,15 @@ func (sm *SessionManager) RevokeSessionsForDevice(deviceID, tenantID, reason str
 		if strings.TrimSpace(session.DeviceID) != deviceID {
 			return false
 		}
-		return tenantID == "" || strings.TrimSpace(session.TenantID) == tenantID
+		return organizationID == "" || strings.TrimSpace(session.OrganizationID) == organizationID
 	})
 }
 
 // RevokeSessionsForResource terminates all active sessions for a protected
-// resource. Tenant is optional and narrows the revocation to one organization.
-func (sm *SessionManager) RevokeSessionsForResource(resourceID, tenantID, reason string) int {
+// resource. Organization is optional and narrows the revocation to one organization.
+func (sm *SessionManager) RevokeSessionsForResource(resourceID, organizationID, reason string) int {
 	resourceID = strings.TrimSpace(resourceID)
-	tenantID = strings.TrimSpace(tenantID)
+	organizationID = strings.TrimSpace(organizationID)
 	if resourceID == "" {
 		return 0
 	}
@@ -390,15 +390,15 @@ func (sm *SessionManager) RevokeSessionsForResource(resourceID, tenantID, reason
 		if strings.TrimSpace(session.Resource) != resourceID {
 			return false
 		}
-		return tenantID == "" || strings.TrimSpace(session.TenantID) == tenantID
+		return organizationID == "" || strings.TrimSpace(session.OrganizationID) == organizationID
 	})
 }
 
 // RevokeSessionsForGateway terminates all active sessions provisioned through a
-// gateway. Tenant is optional and narrows the revocation to one organization.
-func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, tenantID, reason string) int {
+// gateway. Organization is optional and narrows the revocation to one organization.
+func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, organizationID, reason string) int {
 	gatewayID = strings.TrimSpace(gatewayID)
-	tenantID = strings.TrimSpace(tenantID)
+	organizationID = strings.TrimSpace(organizationID)
 	if gatewayID == "" {
 		return 0
 	}
@@ -406,20 +406,20 @@ func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, tenantID, reason s
 		if strings.TrimSpace(session.GatewayID) != gatewayID {
 			return false
 		}
-		return tenantID == "" || strings.TrimSpace(session.TenantID) == tenantID
+		return organizationID == "" || strings.TrimSpace(session.OrganizationID) == organizationID
 	})
 }
 
-// RevokeSessionsForTenant terminates all active sessions in a tenant. It is a
+// RevokeSessionsForOrganization terminates all active sessions in an organization. It is a
 // conservative fallback for policy changes whose blast radius cannot be narrowed
 // to a resource, device, user, or gateway.
-func (sm *SessionManager) RevokeSessionsForTenant(tenantID, reason string) int {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
+func (sm *SessionManager) RevokeSessionsForOrganization(organizationID, reason string) int {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
 		return 0
 	}
 	return sm.RevokeSessionsMatching(reason, func(session *models.Session) bool {
-		return strings.TrimSpace(session.TenantID) == tenantID
+		return strings.TrimSpace(session.OrganizationID) == organizationID
 	})
 }
 

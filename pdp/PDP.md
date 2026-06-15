@@ -24,13 +24,22 @@ PDP-ul este serviciul central de decizie si administrare pentru TrustCloud. El:
 
 In cod, PDP-ul este impartit in aceste zone principale:
 
-- `cmd/pdp/main.go`: bootstrap runtime, PKI, store, server.
-- `config`: configuratie, defaulturi si override-uri din variabile de mediu.
+- `cmd/pdp/main.go`: intrarea procesului; orchestreaza bootstrap-ul fara logica lunga in acelasi fisier.
+- `cmd/pdp/config.go`: incarcarea `config.json`, validarile obligatorii de productie si crearea `data_dir`.
+- `cmd/pdp/identity.go`: cheia privata PDP, certificatul TLS, Vault PKI/Transit si lock-ul Redis pentru identitatea PDP.
+- `cmd/pdp/runtime.go`: initializarea PostgreSQL, Redis, Policy Administrator si transport HTTP/gRPC.
+- `cmd/pdp/shutdown.go`: asteptarea semnalelor si oprirea controlata.
+- `config`: structuri de configuratie, defaulturi si override-uri din variabile de mediu.
 - `models`: structurile de date comune.
-- `store`: persistenta SQLite si migrari.
+- `store`: persistenta PostgreSQL.
 - `pa`: Policy Administrator si serviciile lui.
-- `pe`: Policy Engine si calcul de risc.
+- `runtime/redisstate`: state runtime distribuit in Redis, lock-uri, rate limit, login lockout, evenimente si gateway control.
+- `pe/evaluation`: Policy Engine, impartit pe evaluare, actiuni, matching, step-up, risc, health/proces si IP/timp.
+- `pe/risk`: calculul scorului numeric de risc.
 - `pa/transport`: HTTP, gRPC, middleware si dashboard.
+- `pa/transport/agent_stepup_browser_*`: flow-ul browser de step-up, separat in handlers, metode UI si endpoint-uri WebAuthn.
+- `pa/transport/scim_*`: routerul SCIM, operatiile pe resurse si utilitarele comune SCIM.
+- `pa/enrollment/interactive*`: enrollment interactiv TrustAgent, separat in flow, storage/lock si finalizare certificat.
 - `pa/dashboard`: aplicatia React/Vite servita de PDP.
 
 ## 2. Bootstrap si runtime
@@ -39,49 +48,51 @@ Fisierul de intrare este `pdp/cmd/pdp/main.go`.
 
 La pornire se executa, in ordine:
 
-1. Se incarca `config.json` cu `config.LoadConfig`.
-2. Se aplica defaulturile prin `ApplyDefaults`.
-3. Se aplica override-urile din variabile de mediu prin `ApplyEnvironmentOverrides`.
+1. `main.go` apeleaza `loadConfig("config.json")`.
+2. `loadConfig` foloseste `config.LoadFromFile`, care citeste JSON-ul, aplica defaulturile prin `ApplyDefaults` si aplica override-urile din variabile de mediu prin `ApplyEnvironmentOverrides`.
+3. `validateProductionConfig` opreste procesul daca lipsesc campuri obligatorii sau duratele/limitele critice sunt zero.
 4. Se creeaza directorul de date configurat, cu permisiuni `0700`.
-5. Se restaureaza sau creeaza cheia privata PDP prin Vault Transit:
+5. Se deschide Redis prin `redisstate.Open`; PDP nu porneste fara Redis.
+6. Sub lock distribuit Redis `pdp-identity`, se restaureaza sau creeaza cheia privata PDP prin Vault Transit:
    - cheia este salvata criptat in `cfg.PDPKeyEncryptedPath`;
    - operatia foloseste `pki.RestoreOrCreateKey`;
    - cheia este folosita pentru certificatul serverului PDP.
-6. PDP-ul se auto-inroleaza in Vault PKI:
+7. Daca certificatul existent lipseste sau trebuie reinnoit, PDP-ul se auto-inroleaza in Vault PKI:
    - rol PKI: `cfg.PKIRolePDP`;
-   - FQDN: `cfg.PDPFQDN`;
+   - Common Name: `cfg.PDPFQDN`;
+   - DNS SAN-uri: `cfg.CertificateDNSNames()`, adica `pdp_fqdn` plus `tls_dns_names`;
    - CA: `cfg.PKICAFile`;
    - server name Vault: `cfg.PKIServerName`.
-7. Certificatul PDP si CA-ul sunt salvate prin `pki.SaveEnrolledCert`.
-8. Certificatul TLS curent este tinut intr-un `atomic.Pointer[tls.Certificate]`.
-9. Se porneste loop-ul de reinnoire certificat cu `pki.SelfEnrollLoop`.
-10. La fiecare certificat nou, pointerul atomic este actualizat, deci serverul TLS poate servi certificatul nou fara restart.
-11. Se deschide store-ul SQLite prin `store.NewWithDatabasePath`.
-12. Se ruleaza `InitDB`, care creeaza/migreaza schema.
-13. Se porneste cleanup-ul periodic pentru tokenuri revocate, rate limits si pending enrollments.
+8. Certificatul PDP si CA-ul sunt salvate prin `pki.SaveEnrolledCert`.
+9. Certificatul TLS curent este tinut intr-un `atomic.Pointer[tls.Certificate]`.
+10. Se porneste `maintainPDPIdentity`, care reincarca certificatul de pe disc sau il reinnoieste sub acelasi lock Redis. Intervalul efectiv de verificare este limitat in cod la maximum `30s`, astfel incat o replica poate prelua rapid certificatul reinnoit de alta replica.
+11. Se deschide store-ul PostgreSQL prin `store.NewWithDatabaseURL`.
+12. Se ruleaza `InitDB`, care creeaza schema finala.
+13. `StartAutoSave` porneste curatarea periodica pentru date persistente; in prezent curata tokenurile revocate expirate.
 14. Se construieste `PolicyAdministrator`.
-15. Se creeaza optional un admin bootstrap daca `bootstrap_admin.enabled` este true.
-16. Se porneste cleanup-ul de sesiuni.
-17. Se porneste cleanup-ul de enrollment.
-18. Se construieste serverul transport HTTP/gRPC.
-19. Se porneste serverul TLS prin `StartTLS`.
+15. Se porneste cleanup-ul de sesiuni.
+16. Se porneste cleanup-ul de enrollment interactiv.
+17. Se construieste serverul transport HTTP/gRPC.
+18. Se porneste serverul TLS prin `StartTLS`.
 
 Serverul foloseste TLS 1.3 minim. Certificatul prezentat clientilor este obtinut din callback-ul dinamic `GetCertificate`, ceea ce permite rotirea certificatului in runtime.
 
 ## 3. Configuratie
 
-Config-ul este citit din `config.json`, apoi completat cu defaulturi si variabile de mediu.
+Config-ul este citit din `config.json`, completat cu defaulturi operationale si variabile de mediu, apoi validat pentru runtime de productie. PDP nu porneste daca lipsesc PostgreSQL, Redis, Vault PKI/Transit, WebAuthn public origin sau TTL-urile obligatorii.
 
 ### 3.1 Valori generale
 
 Campuri importante:
 
-- `pdp_fqdn`: FQDN-ul pentru certificatul PDP si pentru public origin cand nu exista alta valoare.
+- `pdp_fqdn`: numele principal pentru certificatul PDP si Common Name-ul folosit la self-enrollment.
+- `tls_dns_names`: lista de DNS SAN-uri suplimentare care trebuie incluse in certificatul TLS al PDP; in Kubernetes include atat hostul UI, cat si hostul mTLS.
 - `pdp_public_host`: host public optional.
 - `pdp_public_origin`: origine publica explicita, de forma `https://host[:port]`.
 - `pdp_federated_callback_url`: callback OIDC federat.
-- `data_dir`: directorul de date, implicit `./data`.
-- `db_path`: cale explicita catre SQLite; daca lipseste, se foloseste `data_dir/trustcloud.db`.
+- `data_dir`: directorul de date partajat intre replici, montat in productie la `/app/data`.
+- `database_url`: URL-ul PostgreSQL obligatoriu; poate fi suprascris prin `PDP_DATABASE_URL`.
+- `redis_url`: URL-ul Redis obligatoriu pentru state runtime distribuit; poate fi suprascris prin `PDP_REDIS_URL`.
 - `mtls_ca`: CA-ul folosit pentru verificarea certificatelor client.
 - `listen_addr`: adresa HTTP/TLS.
 - `runtime`: timeouts, rate limit-uri si TTL-uri operationale.
@@ -90,18 +101,17 @@ Artefactele locale configurate sau generate pentru chei si certificate apar de o
 
 Campuri JSON exacte pe grupuri:
 
-- Server si persistenta: `listen_addr`, `pdp_fqdn`, `tls_cert`, `mtls_ca`, `data_dir`, `database_path`, `pdp_key_encrypted_path`.
+- Server, persistenta si runtime distribuit: `listen_addr`, `pdp_fqdn`, `tls_dns_names`, `tls_cert`, `mtls_ca`, `data_dir`, `database_url`, `redis_url`, `pdp_key_encrypted_path`.
 - Vault/PKI: `pki_url`, `pki_token`, `pki_path`, `pki_role_pdp`, `pki_role_device`, `pki_role_gateway`, `pki_transit_key`, `pki_ca_file`, `pki_server_name`, `pki_timeout`.
 - JWT si MFA: `jwt_expiry`, `jwt_transit_key`, `jwt_key_encrypted_path`, `totp_issuer`, `mfa_transit_key`, `mfa_secret_key_encrypted_path`.
 - WebAuthn si CORS: `webauthn_rp_id`, `webauthn_rp_name`, `webauthn_rp_origins`, `cors_origins`.
 - Sesiuni si security: `session_expiry`, `max_sessions`, `max_login_attempts`, `lockout_duration`.
-- Bootstrap admin: `bootstrap_admin.enabled`, `bootstrap_admin.username`, `bootstrap_admin.password`, `bootstrap_admin.email`, `bootstrap_admin.role`.
-- Admin auth: `admin_auth.require_mfa`; in config-ul curent este true.
-- Dashboard public: `public.device_health_agent_url`, `public.device_health_timeout_ms`, `public.device_health_retry_ms`, `public.federated_callback_url`, `public.oidc_default_scopes`, `public.oidc_default_claim_mapping`, `public.resource_default_ports`.
+- Autentificare admin: login-ul cu parola cere intotdeauna MFA; nu exista toggle de configurare pentru dezactivare.
+- Dashboard public: `public.federated_callback_url`, `public.oidc_default_scopes`, `public.oidc_default_claim_mapping`, `public.resource_default_ports`.
 - Geo lookup: `geo.provider_url`, `geo.http_timeout`, `geo.cache_ttl`, `geo.cache_max_entries`, `geo.same_area_distance_km`, `geo.suspicious_travel_speed_kmh`, `geo.impossible_travel_speed_kmh`.
 - Risk scoring: `risk.device_data_critical_after`, `risk.device_data_stale_after`, `risk.device_data_critical_points`, `risk.device_data_stale_points`, `risk.no_device_health_points`, `risk.health_excellent_min`, `risk.health_good_min`, `risk.health_fair_min`, `risk.health_good_points`, `risk.health_fair_points`, `risk.health_poor_points`, `risk.critical_check_points`, `risk.failed_attempts_high`, `risk.failed_attempts_medium`, `risk.failed_attempts_low`, `risk.failed_attempts_high_points`, `risk.failed_attempts_medium_points`, `risk.failed_attempts_low_points`, `risk.business_hours_start`, `risk.business_hours_end`, `risk.business_days`, `risk.outside_business_points`, `risk.night_hours_start`, `risk.night_hours_end`, `risk.night_hours_points`, `risk.new_device_points`, `risk.new_location_points`, `risk.user_baseline_anomaly_points`, `risk.protocol_points`, `risk.unknown_protocol_points`, `risk.impossible_travel_points`, `risk.suspicious_geo_velocity_kmh`, `risk.suspicious_geo_velocity_points`, `risk.max_anomaly_points`, `risk.max_score`.
 
-Valorile publice efective din `pdp/config.json` sunt: `device_health_agent_url=http://127.0.0.1:12080`, `device_health_timeout_ms=3000`, `device_health_retry_ms=5000`, `federated_callback_url=https://localhost:8443/auth/federated/callback`, `oidc_default_scopes="openid profile email"`, claim mapping `username=preferred_username`, `email=email`, `groups=groups`, iar `resource_default_ports` este `web=443`, `ssh=22`, `rdp=3389`.
+Fisierul `pdp/config.json` nu mai contine URL-uri locale sau secrete demo. Valorile dependente de mediu, cum ar fi originul public, callback-ul OIDC federat, URL-ul PostgreSQL, URL-ul Redis si tokenul Vault, trebuie livrate prin Secret/ConfigMap sau variabile de mediu. Valorile publice neutre ramase sunt `oidc_default_scopes="openid profile email"`, claim mapping `username=preferred_username`, `email=email`, `groups=groups`, iar `resource_default_ports` este `web=443`, `ssh=22`, `rdp=3389`.
 
 Valorile geo efective sunt: provider `https://ipapi.co/{ip}/json/`, timeout `3s`, cache TTL `1h`, maxim `10000` intrari in cache, aceeasi arie la `50km`, viteza suspecta la `500km/h` si imposibila la `900km/h`.
 
@@ -111,7 +121,7 @@ Cand `pdp_public_origin` este setat, config-ul deriva si completeaza:
 
 - callback federat: `<origin>/auth/federated/callback`, daca nu este setat;
 - originile WebAuthn;
-- RP ID WebAuthn, daca era gol sau localhost;
+- RP ID WebAuthn, daca era gol;
 - lista CORS, prin adaugarea originului public.
 
 ### 3.2 Override-uri din variabile de mediu
@@ -119,13 +129,13 @@ Cand `pdp_public_origin` este setat, config-ul deriva si completeaza:
 PDP-ul citeste explicit urmatoarele variabile de mediu:
 
 - `PDP_FQDN`
+- `PDP_TLS_DNS_NAMES`
 - `PDP_PUBLIC_HOST`
 - `PDP_PUBLIC_ORIGIN`
 - `PDP_FEDERATED_CALLBACK_URL`
 - `PDP_WEBAUTHN_RP_ID`
 - `PDP_WEBAUTHN_RP_ORIGINS`
 - `PDP_CORS_ORIGINS`
-- `PDP_ADMIN_REQUIRE_MFA`
 - `PDP_PKI_URL`
 - `PDP_PKI_TOKEN`
 - `PDP_PKI_PATH`
@@ -135,8 +145,11 @@ PDP-ul citeste explicit urmatoarele variabile de mediu:
 - `PDP_TRANSIT_KEY`
 - `PDP_PKI_CA_FILE`
 - `PDP_PKI_SERVER_NAME`
+- `PDP_DATABASE_URL`
+- `PDP_REDIS_URL`
 
 Listele din `PDP_WEBAUTHN_RP_ORIGINS` si `PDP_CORS_ORIGINS` sunt splituite dupa virgula si curatate de spatii.
+`PDP_TLS_DNS_NAMES` foloseste acelasi format CSV si suprascrie lista `tls_dns_names` din fisier.
 
 `PDP_TRANSIT_KEY` este aplicat simultan la cele trei chei Transit folosite de PDP: cheia pentru PKI, cheia pentru JWT si cheia pentru MFA. Daca `mfa_transit_key` lipseste din fisier si nu este suprascris prin env, defaultul intern il copiaza din cheia JWT, iar daca nici aceasta nu exista il copiaza din cheia PKI.
 
@@ -166,11 +179,9 @@ Defaulturile aplicate in cod includ:
 - validitate certificat enrollment device: `1` zi;
 - TTL browser enrollment session: `5m`.
 
-Pentru MFA admin, defaultul este sigur: `AdminMFARequired()` intoarce true daca valoarea nu este setata explicit la false.
+Pentru MFA admin, comportamentul este fix: dupa validarea parolei, tokenul administrativ final este emis doar dupa verificarea MFA sau dupa inrolarea MFA initiala.
 
-Important: `ApplyDefaults` nu seteaza fallback pentru `jwt_expiry`, `session_expiry`, `max_login_attempts` sau `lockout_duration`. In proiectul curent aceste valori sunt setate explicit in `pdp/config.json`; daca un fisier de configurare le omite, runtime-ul ar folosi valoarea zero a tipului Go, ceea ce pentru tokenuri inseamna expiry imediat.
-
-Tot fara fallback explicit in `ApplyDefaults` sunt si cateva knob-uri runtime operationale: `store_auto_save_interval`, `session_cleanup_interval`, `certificate_renew_before`, timeout-urile HTTP `read`/`write`/`idle`, `auth_rate_limit_window`, `auth_rate_limit_max`, `oidc_authorize_session_ttl`, `oidc_auth_code_ttl`, `oidc_refresh_token_ttl` si `oidc_cleanup_interval`. Pentru acest proiect ele sunt definite in `pdp/config.json`. Daca ar lipsi intr-un config alternativ, ar ramane la zero si ar activa comportamentul specific locului de folosire: expirari imediate pentru tokenuri/sesiuni, rate limit practic nefunctional pentru auth sau tickere cu interval zero acolo unde codul creeaza `time.NewTicker`.
+Important: dupa incarcare, bootstrap-ul PDP valideaza campurile obligatorii de productie. Daca lipsesc URL-urile externe, secretele Vault/Transit, originile WebAuthn sau duratele critice, procesul se opreste imediat. Nu exista pornire cu valori locale implicite pentru runtime.
 
 ### 3.4 Valori efective din config.json
 
@@ -226,13 +237,13 @@ Duratele efective in configuratia curenta:
 - Token OIDC ID token emis de PDP: 1h. Este tot JWT PDP; daca exista nonce, tokenul este regenerat cu nonce si acelasi `jwt_expiry`.
 - Token agent session: 1h. Este JWT cu audience `trustagent-api`, purpose `trustagent.session`, subject `device:{device_id}`, `mfa_done=true`, scope-uri agent si binding la certificatul mTLS prin `cnf.x5t#S256`.
 - Token EST/device enrollment: 5m. Este JWT dedicat cu audience `trustcloud-enrollment`, purpose `device_enrollment`, device_id obligatoriu, JTI obligatoriu si `expires_in = 300`. Este consumat single-use prin `ConsumeTokenOnce`.
-- OIDC authorize session: 5m. Este sesiunea in-memory dintre `/auth/authorize` si autentificarea browserului.
+- OIDC authorize session: 5m. Este sesiunea Redis dintre `/auth/authorize` si autentificarea browserului.
 - OIDC authorization code: 60s. Codul este single-use; daca este refolosit, este sters si refuzat.
-- OIDC refresh token: 24h. Este in-memory, single-use si rotit la fiecare refresh; tokenul vechi este marcat `Used=true`, iar tokenul nou primeste o noua expirare de 24h.
-- Admin MFA challenge: 5m. Este in-memory, are ID cu prefix `mfa`, este sters la succes, la expirare sau dupa numarul maxim de incercari.
-- WebAuthn challenge session: 5m. Este in-memory, cheia interna este `userID:ceremony:contextID`, iar cleanup-ul ruleaza la 2m.
+- OIDC refresh token: 24h. Este in Redis, single-use si rotit la fiecare refresh; tokenul vechi este marcat `Used=true`, iar tokenul nou primeste o noua expirare de 24h.
+- Admin MFA challenge: 5m. Este in Redis, are ID cu prefix `mfa`, este sters la succes, la expirare sau dupa numarul maxim de incercari.
+- WebAuthn challenge session: 5m. Este in Redis, cheia interna este `userID:ceremony:contextID`, iar TTL-ul este gestionat de Redis.
 - Browser agent session request: 5m. Este transaction-ul `srq` creat de `AgentSessionService/StartSession`; claim secret-ul este valid doar pana la expirarea transaction-ului si request-ul este consumat la `ClaimSession`.
-- Browser enrollment session legacy: 5m. Este `PendingEnrollSession` cu status pending/authenticated/denied.
+- Browser enrollment session: 5m. Este `PendingEnrollSession` cu status pending/authenticated/denied.
 - Interactive TrustAgent enrollment session: 5m. Include `enrollment_session_id`, `device_challenge`, `poll_secret`, poll interval de 3s si expirare transmisa in raspunsul gRPC.
 - Step-up challenge necompletat: 5m. Dupa expirare statusul devine `expired` si secretul TOTP pending este sters.
 - Step-up completat: implicit 10m. Dupa completare, `ExpiresAt = CompletedAt + MaxAgeSeconds`; daca politica nu seteaza `max_age_seconds`, defaultul este `600` secunde.
@@ -243,85 +254,98 @@ Duratele efective in configuratia curenta:
 - Certificat device/agent: 24h.
 - Catalog TTL: 300s, adica 5m.
 - CSRF cookie: 1h.
-- SCIM bearer token: nu are TTL in PDP. Ramane valid pana cand secretul din configuratia IdP este schimbat, IdP-ul este dezactivat sau tenant-ul este dezactivat.
+- SCIM bearer token: nu are TTL in PDP. Ramane valid pana cand secretul din configuratia IdP este schimbat, IdP-ul este dezactivat sau organizatia este dezactivata.
 - Vault `pki_token`: nu are TTL gestionat de PDP. Durata lui este controlata de Vault; PDP doar il foloseste pentru PKI/Transit.
 
 Tokenurile revocate sunt pastrate in `revoked_tokens` pana la expirarea lor naturala. Cleanup-ul periodic sterge intrarile expirate. Pentru tokenurile single-use, acelasi mecanism este folosit ca replay guard pe JTI.
 
-## 4. Persistenta SQLite
+## 4. Persistenta PostgreSQL
 
 Store-ul este implementat in `pdp/store`.
 
-### 4.1 Initializare SQLite
+### 4.1 Initializare PostgreSQL
 
 La deschiderea bazei:
 
-- se foloseste driver SQLite;
-- se activeaza `PRAGMA journal_mode=WAL`;
-- se seteaza `PRAGMA synchronous=NORMAL`;
-- se seteaza `PRAGMA cache_size=5000`;
-- se seteaza `PRAGMA busy_timeout=5000`;
-- se limiteaza conexiunile la `SetMaxOpenConns(1)`, pentru a evita conflicte de scriere;
+- `database_url` este obligatoriu;
+- se foloseste driverul PostgreSQL `pgx`;
+- se configureaza pool-ul de conexiuni;
+- se verifica disponibilitatea bazei prin `Ping`;
 - se ruleaza `InitDB`;
 - se asigura politicile globale default pentru fiecare organizatie.
 
-`StartAutoSave` nu este un autosave clasic al datelor, deoarece SQLite persista operatiile imediat. In implementare, el ruleaza cleanup periodic pentru:
+`StartAutoSave` ruleaza cleanup periodic pentru:
 
-- enrollment-uri pending expirate;
 - tokenuri revocate expirate;
-- ferestre de rate limit vechi.
+
+Sesiunile expirate sunt curatate de `pa/sessions.SessionManager`, iar enrollment-ul interactiv este curatat de `pa/enrollment.Service`. State-ul runtime cu TTL este gestionat de Redis, nu de PostgreSQL.
+Registry-ul clientilor OIDC este persistent in PostgreSQL, nu intr-un `map` local pe replica.
 
 ### 4.2 Tabele principale
 
-Schema este creata si migrata in `store/schema.go`.
+Schema finala este creata in `store/schema.go`.
 
 Tabele:
 
-- `users`: utilizatori locali si federati; campuri pentru username, email, password hash, rol, MFA, TOTP secret, WebAuthn, tenant, sursa auth, external subject, stare disabled.
-- `tenants`: organizatii; campuri pentru nume, domeniu principal, domenii multiple, `default_idp_id`, stare enabled.
+- `users`: utilizatori locali si federati; campuri pentru username, email, password hash, rol, MFA, TOTP secret, WebAuthn, organizatie, sursa auth, external subject, stare disabled.
+- `organizations`: organizatii; campuri pentru nume, domeniu principal, domenii multiple, `default_idp_id`, stare enabled.
 - `organization_memberships`: legatura admin-utilizator-organizatie, cu rol si timestamp-uri.
-- `policy_rules`: politici; include nume, descriere, enabled, priority legacy, action, conditions JSON, tenant, session controls, auth/user/network/location/risk policies, step-up requirements.
-- `policy_assignments`: assignment-uri de politici; include policy ID, tenant, nivel, target resource, target group, order index si flag default.
-- `sessions`: sesiuni active de acces; include user/device/resource/gateway/tenant, protocol, expirare, session controls, risk, matched rule/policy si revocation flag.
-- `resources`: resurse protejate; include tip, host, port, external URL, tenant, gateway, enabled, tags, metadata.
+- `policy_rules`: politici; include nume, descriere, enabled, action, conditions JSON, session controls, auth/user/network/location/risk policies si step-up requirements.
+- `policy_assignments`: assignment-uri de politici; include policy ID, organizatie, nivel, target resource, target group, order index si flag default.
+- `sessions`: sesiuni active de acces; include user/device/resource/gateway/organizatie, protocol, expirare, session controls, risk, matched rule/policy si revocation flag.
+- `resources`: resurse protejate; include tip, host, port, external URL, organizatie, gateway, enabled, tags, metadata.
 - `audit_log`: evenimente auditabile; include hash chain prin `prev_hash` si `entry_hash`.
-- `device_health`: compatibilitate pentru rapoarte agregate de health.
 - `device_data`: raport raw normalizat de device posture.
-- `login_attempts`: incercari esuate, lockout si contorizare.
 - `revoked_tokens`: JTI-uri revocate sau consumate o singura data.
-- `device_enrollments`: dispozitive inrolate sau pending; include certificat, thumbprint, tenant, status si expiry.
+- `device_enrollments`: dispozitive inrolate sau pending; include certificat, thumbprint, organizatie, status si expiry.
 - `revoked_certs`: seriale de certificate revocate.
-- `device_users`: binding intre device, user, tenant si rol.
+- `device_users`: binding intre device, user, organizatie si rol.
 - `gateways`: gateway-uri, tokenuri de enrollment hash-uite, status, cert fingerprint, FQDN, resurse asignate.
+- `oidc_clients`: clienti OAuth/OIDC inregistrati pentru fluxurile brokered de autentificare.
 - `login_locations`: istoric de locatie pentru detectia new location si impossible travel.
 - `webauthn_credentials`: credentiale passkey admin.
-- `rate_limits`: contoare persistente pentru endpoint-uri sensibile.
 - `identity_provider_configs`: configuratii OIDC/SCIM per organizatie.
 - `directory_users`: utilizatori sincronizati din IdP/SCIM.
 - `directory_groups`: grupuri sincronizate.
 - `directory_group_members`: membership-uri grup-utilizator.
-- `schema_meta`: markere pentru migrari si cleanup-uri care trebuie rulate o singura data.
+### 4.3 Schema finala
 
-### 4.3 Migrari si normalizari
+Codul nu pastreaza ramuri alternative de baza de date sau migrari versionate. `InitDB` creeaza direct forma finala a tabelelor si indexurilor PostgreSQL, inclusiv indexul unic care impune un singur IdP per organizatie.
 
-La `InitDB`, codul aplica migrari defensive. Printre ele:
+### 4.4 Runtime state Redis
 
-- adauga coloane lipsa pentru versiuni mai vechi;
-- adauga `prev_hash` si `entry_hash` pentru audit;
-- adauga coloanele multi-tenant;
-- adauga campuri pentru session controls;
-- adauga HRD si default IdP pe tenant;
-- adauga `tenant_ids` pentru gateway-uri;
-- adauga token SCIM pe IdP;
-- normalizeaza rolurile vechi de admin local la `platform_admin`;
-- elimina vechile coloane de prioritate nefolosite;
-- migreaza `device_posture` spre `device_data`;
-- elimina audit events suprimate si recalculeaza lantul hash;
-- impune un singur IdP per tenant prin index unic;
-- reconciliaza IdP-ul default per tenant;
-- curata date legacy de politici;
-- marcheaza resetarea Duo legacy;
-- canonizeaza actiunile de policy si dezactiveaza actiunile invalide.
+Redis este obligatoriu pentru componentele care trebuie partajate intre replici PDP, dar nu trebuie persistate relational:
+
+- OIDC authorize sessions, authorization codes, refresh tokens si federation state;
+- WebAuthn challenge sessions si admin MFA challenges;
+- browser enrollment sessions, agent session transactions si step-up browser auth;
+- step-up challenges si binding-uri sesiune-gateway;
+- rate limiting si login lockout;
+- Redis Pub/Sub pentru evenimente interne;
+- prezenta gateway control si cozi de comenzi per gateway.
+
+PDP porneste doar daca `redis_url`/`PDP_REDIS_URL` este configurat si Redis raspunde la `PING`. Nu exista fallback local in memorie.
+
+### 4.5 Kubernetes si replici PDP
+
+Overlay-ul Kubernetes pentru PDP este in `deploy/kubernetes/pdp`.
+Overlay-ul Kubernetes pentru PostgreSQL este in `deploy/kubernetes/postgres` si expune baza intern prin `postgres.database.svc.cluster.local:5432`.
+
+PDP poate rula cu mai multe replici daca sunt respectate urmatoarele conditii:
+
+- datele persistente sunt in PostgreSQL, prin `PDP_DATABASE_URL`;
+- state-ul runtime cu TTL este in Redis, prin `PDP_REDIS_URL`;
+- fisierele locale criptate ramase pentru chei si certificate sunt pe un PVC comun `ReadWriteMany`, montat la `/app/data`;
+- toate replicile folosesc aceleasi valori Vault PKI/Transit si acelasi certificat CA Vault;
+- rolul Vault PKI pentru PDP permite toate DNS SAN-urile configurate in `PDP_TLS_DNS_NAMES`;
+- traficul mTLS ajunge pana la PDP, fie prin LoadBalancer L4, fie prin TLS passthrough;
+- certificatul PDP emis de Vault acopera toate numele publice necesare, prin `PDP_TLS_DNS_NAMES`.
+
+Manifesturile pornesc cu doua replici, HPA minim doua replici si maxim cinci, Service intern `ClusterIP`, Service public `LoadBalancer` pentru mTLS, Ingress normal pentru UI/OIDC cu cert-manager/Let's Encrypt, probe `/live` si `/ready`, plus exemple pentru Secret si fallback passthrough. Nu se introduce versionare aplicativa noua de tip `v1`/`v2`; rutele si structurile raman unice.
+
+Codul runtime foloseste Redis pentru lock-uri distribuite, rate limit, sesiuni OIDC/WebAuthn/MFA/step-up, sesiuni interactive de enrollment agent, cozi de control gateway si cache-ul de discovery OIDC federat. Clientii OIDC sunt cititi din PostgreSQL de fiecare replica. Cheile JWT si MFA nu au fallback local in runtime-ul PDP: Vault Transit, Redis si caile de chei criptate sunt obligatorii. Certificatul PDP este reincarcat periodic de pe disc, astfel incat o replica poate prelua certificatul reinnoit de alta replica.
+
+La SIGTERM, transportul PDP marcheaza readiness-ul ca `draining`, asteapta `readiness_drain_delay`, apoi executa graceful shutdown pe serverul HTTP/gRPC cu `http_shutdown_timeout`.
 
 ## 5. Modele de date
 
@@ -333,14 +357,13 @@ La `InitDB`, codul aplica migrari defensive. Printre ele:
 - `device_id`: dispozitivul agentului;
 - `source_ip`: IP-ul observat;
 - `resource`: resursa ceruta;
-- `tenant_id`: organizatia;
+- `organization_id`: organizatia;
 - `gateway_id`: gateway-ul asociat;
 - `port`;
 - `protocol`;
 - `auth_token`;
 - `app`;
 - `process`: identitatea procesului client;
-- `device_health`: raport agregat;
 - `anomaly_alerts`;
 - `anomaly_score`.
 
@@ -380,7 +403,7 @@ Politicile pot bloca sau permite dupa nume, path, basename si hash SHA256. Hash-
 - `enabled`;
 - `action`;
 - `conditions`;
-- campuri de tenant;
+- campuri de organizatie;
 - `session_controls`;
 - politici pe sectiuni: new user, authentication, user location, network, risk based auth;
 - cerinte step-up.
@@ -402,7 +425,7 @@ Politicile pot bloca sau permite dupa nume, path, basename si hash SHA256. Hash-
 
 ### 5.5 Organizatii
 
-In cod, termenii `tenant` si `organization` sunt folositi pentru aceeasi entitate functionala. Modelul `Tenant` include:
+In cod, entitatea este numita `organization`. Modelul `Organization` include:
 
 - `id`;
 - `name`;
@@ -412,7 +435,7 @@ In cod, termenii `tenant` si `organization` sunt folositi pentru aceeasi entitat
 - `enabled`;
 - timestamp-uri.
 
-API-ul admin expune organizatiile sub `/api/admin/organizations`, dar multe structuri interne pastreaza numele `Tenant`.
+API-ul admin expune organizatiile sub `/api/admin/organizations`, dar multe structuri interne pastreaza numele `Organization`.
 
 ### 5.6 Resurse
 
@@ -425,13 +448,13 @@ API-ul admin expune organizatiile sub `/api/admin/organizations`, dar multe stru
 - `host`;
 - `port`;
 - `external_url`;
-- `tenant_id`;
+- `organization_id`;
 - `gateway_id`;
 - `enabled`;
 - `tags`;
 - `metadata`.
 
-Campurile legacy `client_id`, `client_secret` si `allowed_roles` sunt curatate de serviciul de resurse.
+Resursele protejate nu sunt clienti OIDC si nu pastreaza credentiale OIDC.
 
 ### 5.7 Gateway-uri
 
@@ -440,23 +463,22 @@ Campurile legacy `client_id`, `client_secret` si `allowed_roles` sunt curatate d
 - `id`;
 - `name`;
 - `fqdn`;
-- `tenant_id`;
-- `tenant_ids`;
+- `organization_id`;
+- `organization_ids`;
 - `status`: `pending`, `enrolling`, `enrolled`, `revoked`;
 - hash-ul tokenului de enrollment si expiry;
 - certificat, serial, fingerprint si expiry;
 - endpoint/listen address;
-- resurse asignate;
-- campuri legacy de federatie, care sunt respinse pentru gateway-urile builtin curente.
+- resurse asignate.
 
 ### 5.8 Device data si health
 
-Exista doua forme:
+Exista doua forme in runtime:
 
 - `DeviceDataReport`: raport raw normalizat, folosit preferat de runtime;
-- `DeviceHealthReport`: raport agregat compatibil.
+- `DeviceHealthReport`: sumar calculat din `DeviceDataReport` pentru Policy Engine.
 
-Pentru acces, daca exista `device_data`, acesta este convertit in health prin `DeviceHealthFromData`. Daca nu exista, se foloseste `device_health`.
+Pentru acces, `device_data` este convertit in health prin `DeviceHealthFromData`. Nu mai exista tabel sau fallback persistent `device_health`.
 
 ### 5.9 Sesiuni
 
@@ -466,7 +488,7 @@ Pentru acces, daca exista `device_data`, acesta este convertit in health prin `D
 - device;
 - resource;
 - gateway;
-- tenant;
+- organizatie;
 - protocol;
 - source IP;
 - created/last activity/expiry;
@@ -498,7 +520,7 @@ PA-ul este stratul care aduna contextul real din store inainte sa cheme PE:
 - incarca userul;
 - incarca resursa;
 - incarca gateway-ul;
-- verifica tenant mismatch;
+- verifica nepotrivirea de organizatie;
 - incarca failed attempts;
 - detecteaza new device din `device_users`;
 - incarca rolul si starea MFA;
@@ -568,11 +590,7 @@ Niveluri normalizate:
 - `resource`;
 - `resource_group`.
 
-Aliasuri:
-
-- `tenant` si `global` devin `organization`;
-- `application_group` devine `resource_group`;
-- `gateway` si `legacy_gateway` nu sunt suportate.
+Valorile acceptate sunt canonice; nu exista aliasuri de compatibilitate pentru nivelurile de assignment.
 
 Ordinea in store este:
 
@@ -584,11 +602,11 @@ Ordinea in store este:
 6. `created_at`;
 7. `id`.
 
-Aceasta inseamna ca politicile mai specifice apar inaintea celor organization-level.
+Aceasta inseamna ca politicile mai specifice apar inaintea celor de nivel organizatie.
 
 Pentru acces, `ListPolicyRulesForAccessGroups` filtreaza dupa:
 
-- tenant;
+- organizatie;
 - resource;
 - group IDs;
 - group names;
@@ -599,8 +617,8 @@ Pentru acces, `ListPolicyRulesForAccessGroups` filtreaza dupa:
 
 Pentru fiecare organizatie, store-ul asigura o politica default:
 
-- ID politica: `policy-global-default-{tenant_id}`;
-- ID assignment: `assignment-global-default-{tenant_id}`;
+- ID politica: `policy-global-default-{organization_id}`;
+- ID assignment: `assignment-global-default-{organization_id}`;
 - nume: `Global Policy`;
 - descriere: `Default baseline policy automatically applied to this organization.`;
 - actiune: `step_up_required`;
@@ -765,19 +783,14 @@ Comportament:
 - userul trebuie sa fie activ;
 - userul trebuie sa aiba rol `platform_admin`;
 - aplica rate limit pe IP;
-- tine cont de lockout prin `login_attempts`;
+- tine cont de lockout prin Redis runtime state;
 - reseteaza failed attempts la autentificare primara reusita.
 
-Daca MFA admin este dezactivat explicit, login-ul poate intoarce token final dupa parola. In default, MFA este cerut.
+Login-ul cu parola nu intoarce niciodata token final dupa parola. Raspunsul este fie `mfa_required`, fie `mfa_setup_required`, iar tokenul administrativ final este emis doar dupa verificarea MFA.
 
-### 9.2 Bootstrap si register admin
+### 9.2 Provisioning admin
 
-Exista doua mecanisme:
-
-- bootstrap admin din config, la pornire;
-- `POST /api/auth/register`, disponibil doar daca nu exista niciun local `platform_admin`.
-
-Bootstrap admin nu se creeaza daca parola lipseste sau este `admin`.
+PDP nu creeaza administratori la pornire si nu expune endpoint public pentru creare administrator. Conturile locale de administrator sunt provisionate direct in PostgreSQL de operator, cu `password_hash` bcrypt si rol `platform_admin`.
 
 ### 9.3 TOTP
 
@@ -827,7 +840,7 @@ Pentru step-up WebAuthn de resursa, PDP expune si endpoint-uri separate:
 - `POST /api/step-up/webauthn/register/begin`;
 - `POST /api/step-up/webauthn/register/finish`.
 
-Acestea folosesc challenge-urile WebAuthn in-memory cu TTL 5m si contextul step-up challenge-ului.
+Acestea folosesc challenge-urile WebAuthn din Redis cu TTL 5m si contextul step-up challenge-ului.
 
 ### 9.5 JWT admin
 
@@ -864,7 +877,7 @@ PDP expune:
 - accepta doar `response_type=code`;
 - valideaza clientul si redirect URI;
 - cere PKCE S256 pentru clienti publici/native;
-- pentru clientul native Connect-App cere `device_id`;
+- pentru clientii endpoint-bound cere `device_id`;
 - accepta `login_hint` pentru rezolvare IdP dupa domeniul emailului;
 - accepta `organization_id` pentru alegerea explicita a organizatiei;
 - accepta `idp_id` pentru alegerea explicita a IdP-ului;
@@ -878,11 +891,10 @@ Nu exista fallback local in fluxul OIDC curent: daca nu se poate rezolva un IdP,
 
 Ordinea de rezolvare IdP este:
 
-1. `idp_id` explicit, cu verificari de organizatie/gateway;
-2. `login_hint` dupa domeniu, prin domenii IdP sau domenii tenant;
+1. `idp_id` explicit, cu verificare de organizatie;
+2. `login_hint` dupa domeniu, prin domenii IdP sau domenii de organizatie;
 3. `organization_id` explicit;
-4. client legacy gateway ca indiciu de organizatie;
-5. fallback la singura organizatie activata cu IdP, doar daca exista exact una.
+4. fallback la singura organizatie activata cu IdP, doar daca exista exact una.
 
 Pentru o organizatie, IdP-ul default este `default_idp_id` daca este enabled; altfel primul IdP enabled.
 
@@ -943,7 +955,7 @@ Endpoint-uri admin:
 
 La creare:
 
-- se creeaza tenant-ul;
+- se creeaza organizatia;
 - se asigura politica globala default;
 - adminul curent primeste membership in organizatie.
 
@@ -960,7 +972,7 @@ Endpoint-uri:
 - `DELETE /api/admin/organizations/idps/{id}`;
 - `POST /api/admin/organizations/idps/discover`.
 
-Implementarea curenta permite un singur IdP per organizatie. Exista un index unic pe tenant in baza de date.
+Implementarea curenta permite un singur IdP per organizatie. Exista un index unic pe organizatie in baza de date.
 
 La raspuns:
 
@@ -980,17 +992,17 @@ La creare:
 
 SCIM este expus sub:
 
-- `/scim/v2/{tenant_id}/ServiceProviderConfig`;
-- `/scim/v2/{tenant_id}/Users`;
-- `/scim/v2/{tenant_id}/Users/{id}`;
-- `/scim/v2/{tenant_id}/Groups`;
-- `/scim/v2/{tenant_id}/Groups/{id}`.
+- `/scim/v2/{organization_id}/ServiceProviderConfig`;
+- `/scim/v2/{organization_id}/Users`;
+- `/scim/v2/{organization_id}/Users/{id}`;
+- `/scim/v2/{organization_id}/Groups`;
+- `/scim/v2/{organization_id}/Groups/{id}`.
 
 Autentificarea SCIM:
 
 - cere Bearer token;
 - tokenul este comparat constant-time cu `SCIMToken` din IdP;
-- tenant-ul trebuie sa existe si sa fie enabled;
+- organizatia trebuie sa existe si sa fie enabled;
 - IdP-ul trebuie sa fie enabled.
 
 Operatii:
@@ -1036,7 +1048,7 @@ Validari la creare/update:
 
 - `name` este obligatoriu;
 - `type` este obligatoriu si trebuie sa fie unul dintre tipurile suportate;
-- `tenant_id`/`organization_id` este obligatoriu;
+- `organization_id` este obligatoriu;
 - `gateway_id` este obligatoriu;
 - organizatia trebuie sa existe si sa fie enabled;
 - gateway-ul trebuie sa existe;
@@ -1051,14 +1063,14 @@ Schimbarile care revoca sesiuni:
 - se schimba host;
 - se schimba port;
 - se schimba external URL;
-- se schimba tenant;
+- se schimba organizatia;
 - se schimba gateway.
 
 La creare/update/delete, serviciul publica `resources.updated`. Eventul include:
 
 - `resource_id`;
 - `app_id`;
-- `tenant_id`;
+- `organization_id`;
 - `gateway_id`;
 - `action`;
 - `reason`;
@@ -1075,8 +1087,6 @@ La creare:
 - `name` este obligatoriu;
 - organizatia trebuie sa existe;
 - resursele asignate trebuie sa apartina aceleiasi organizatii;
-- `auth_mode` suportat este `builtin`;
-- configuratia legacy de federatie este respinsa;
 - se genereaza ID gateway;
 - se genereaza token de enrollment plaintext;
 - in store se salveaza doar SHA256(token);
@@ -1090,8 +1100,6 @@ Update:
 
 - nu permite mutarea unui gateway enrolled intre organizatii;
 - valideaza resursele asignate;
-- respinge federatia legacy;
-- poate curata campurile legacy daca auth mode ramane builtin.
 
 Delete:
 
@@ -1113,7 +1121,6 @@ Actiuni admin peste `/api/admin/gateways/{id}`:
 - `DELETE`: sterge gateway-ul si revoca certificatul daca exista.
 - `POST /regenerate-token`: genereaza token nou de enrollment cu expirare 1h si seteaza status `pending`.
 - `POST /revoke`: revoca gateway-ul.
-- `POST /test-federation`: primeste `issuer`, ruleaza OIDC discovery prin providerul de federation si intoarce `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint` si `jwks_uri`; la eroare intoarce HTTP 502.
 
 ### 13.2 Identitatea certificatului gateway
 
@@ -1127,7 +1134,7 @@ Autentificarea gateway verifica:
 - URI SAN gateway valid;
 - gateway existent in store;
 - status `enrolled`;
-- organizatia din cert egala cu `TenantID` din store;
+- organizatia din cert egala cu `OrganizationID` din store;
 - fingerprint certificat egal constant-time cu fingerprint-ul salvat.
 
 ### 13.3 Enrollment gateway
@@ -1247,7 +1254,7 @@ Pagina browser de enrollment poate redirectiona inapoi la aceeasi ruta cu `?canc
 
 Browserul alege/descopera IdP. PDP:
 
-- seteaza tenant si IdP;
+- seteaza organizatia si IdP-ul;
 - retine state, nonce si PKCE;
 - trece statusul in `WAITING_FOR_USER_LOGIN`;
 - dupa callback valid, salveaza subiectul autentificat, email, issuer, user ID si username;
@@ -1347,7 +1354,7 @@ La succes:
 - emite JWT agent;
 - leaga tokenul de thumbprint-ul certificatului prin `cnf.x5t#S256`;
 - include scope-uri;
-- include tenant, user, device, Windows session fields;
+- include organizatie, user, device si Windows session fields;
 - intoarce user info.
 
 ### 15.4 Agent session token
@@ -1378,7 +1385,7 @@ PDP publica doar resurse:
 
 - enabled;
 - cu ID valid;
-- cu tenant;
+- cu organizatie;
 - cu FQDN valid;
 - accesibile prin politici aplicabile userului/grupurilor.
 
@@ -1420,9 +1427,9 @@ gRPC:
 
 - cere token cu scope `device-data:write`;
 - cere mTLS device;
-- respinge payload-urile legacy cu `overall_score`;
+- respinge campul `overall_score` in rapoartele raw;
 - cere `device_id` egal cu identitatea certificatului;
-- seteaza tenant din enrollment;
+- seteaza organizatia din enrollment;
 - seteaza source IP din peer;
 - seteaza `reported_at` la now UTC;
 - daca `collected_at` lipseste, il seteaza egal cu `reported_at`;
@@ -1461,7 +1468,7 @@ PDP:
 4. Verifica userul activ.
 5. Rezolva resursa.
 6. Verifica resursa enabled.
-7. Verifica tenant/gateway.
+7. Verifica potrivirea dintre organizatie si gateway.
 8. Verifica gateway enrolled.
 9. Verifica protocol si port fata de resursa.
 10. Incarca device data sau health.
@@ -1545,7 +1552,7 @@ Aceste date sunt transformate in `AuthContext` si pot satisface PE la urmatoarea
 - resource;
 - gateway;
 - protocol;
-- tenant.
+- organizatie.
 
 Daca exista si este valida:
 
@@ -1575,7 +1582,7 @@ Revocarile pot fi:
 - toate sesiunile unui device;
 - toate sesiunile unei resurse;
 - toate sesiunile unui gateway;
-- toate sesiunile unui tenant.
+- toate sesiunile unei organizatii.
 
 Cleanup-ul periodic sterge sesiunile expirate sau revocate si publica `session.deleted`.
 
@@ -1611,7 +1618,7 @@ Serviciul `pa/enforcement` asculta evenimente:
 
 Pe health changed:
 
-- daca sesiunea are `RevokeOnPostureChange`, revoca sesiunile pentru device/tenant;
+- daca sesiunea are `RevokeOnPostureChange`, revoca sesiunile pentru device/organizatie;
 - altfel reevalueaza sesiunea si revoca daca PE nu mai intoarce allow.
 
 Pe policy updated:
@@ -1641,7 +1648,7 @@ Agentul trebuie sa aiba token cu scope `events:read` si mTLS device. Serviciul a
 - `access.revoked`;
 - `catalog.invalidated`.
 
-Evenimentele sunt filtrate dupa contextul tokenului: device, session, tenant, resource si gateway, astfel incat agentul primeste doar evenimente relevante.
+Evenimentele sunt filtrate dupa contextul tokenului: device, session, organizatie, resource si gateway, astfel incat agentul primeste doar evenimente relevante.
 
 ## 18. PKI, certificate si CA
 
@@ -1664,7 +1671,9 @@ Detalii de raspuns public:
 - `/api/cert-fingerprint` citeste certificatul din `cfg.TLSCert` si intoarce JSON `{ "sha256": "..." }`.
 - `/.well-known/jwks.json` intoarce JWKS-ul ES256 si seteaza `Cache-Control: public, max-age=3600`.
 - `/.well-known/openid-configuration` seteaza acelasi cache de 1h si construieste issuer/endpoints din request, respectand `X-Forwarded-Proto` si `X-Forwarded-Host`.
-- `/health` verifica DB, CA extern incarcat si JWKS/auth. Daca DB sau auth esueaza, statusul devine `degraded` si HTTP 503; altfel HTTP 200.
+- `/live` verifica doar ca procesul HTTP/TLS raspunde si este folosit ca liveness probe in Kubernetes.
+- `/ready` intoarce 503 cand podul este in drain; altfel verifica DB, Redis, CA extern incarcat si JWKS/auth si este folosit ca readiness probe in Kubernetes.
+- `/health` verifica DB, Redis, CA extern incarcat si JWKS/auth. Daca DB, Redis, CA sau auth esueaza, statusul devine `degraded` si HTTP 503; altfel HTTP 200.
 
 Pentru HTTP, serverul poate folosi `mtls_ca` local. Daca `PKIURL` este configurat, serverul initializeaza client Vault si poate obtine CA PEM extern pentru endpoint-urile de trust.
 
@@ -1689,7 +1698,6 @@ CSP-ul este ajustat pentru:
 
 CORS:
 
-- permite localhost/127.0.0.1;
 - permite originile configurate exact;
 - metode: GET, POST, PUT, PATCH, DELETE, OPTIONS;
 - headere: Content-Type, Authorization, X-CSRF-Token.
@@ -1724,7 +1732,7 @@ Fiecare eveniment auditabil include:
 - resource;
 - details;
 - source IP;
-- tenant;
+- organizatie;
 - prev hash;
 - entry hash.
 
@@ -1749,6 +1757,8 @@ Evenimente suprimate si sterse din lant:
 
 ### 21.1 Public
 
+- `GET /live`
+- `GET /ready`
 - `GET /health`
 - `GET /api/ca/cert`
 - `GET /api/cert-fingerprint`
@@ -1760,7 +1770,6 @@ Evenimente suprimate si sterse din lant:
 
 - `POST /api/auth/login`
 - `POST /api/auth/mfa/verify`
-- `POST /api/auth/register`
 - `POST /api/auth/revoke-token`
 - `POST /api/auth/passkey/login/begin`
 - `POST /api/auth/passkey/login/finish`
@@ -1826,7 +1835,6 @@ Evenimente suprimate si sterse din lant:
 - `/api/admin/gateways/{id}`
 - `/api/admin/gateways/{id}/regenerate-token`
 - `/api/admin/gateways/{id}/revoke`
-- `/api/admin/gateways/{id}/test-federation`
 
 Metode exacte pentru API-urile admin:
 
@@ -1836,12 +1844,12 @@ Metode exacte pentru API-urile admin:
 - `POST /api/admin/organizations`: creeaza organizatie, genereaza ID cu prefix `org` daca lipseste, asigura Global Policy si creeaza membership pentru adminul curent.
 - `GET /api/admin/organizations/{id}`: citeste organizatia daca adminul are acces.
 - `PUT /api/admin/organizations/{id}`: inlocuieste datele organizatiei, pastreaza `CreatedAt` si `DefaultIdPID` existent daca payload-ul nu il trimite.
-- `DELETE /api/admin/organizations/{id}`: sterge tenant-ul si membership-urile asociate.
+- `DELETE /api/admin/organizations/{id}`: sterge organizatia si membership-urile asociate.
 - `GET /api/admin/organizations/idps?organization_id=...`: listeaza IdP-urile organizatiei, cu secretele mascate.
 - `POST /api/admin/organizations/idps`: creeaza IdP; cere organization_id, name, issuer si client_id; refuza al doilea IdP pentru aceeasi organizatie.
 - `GET /api/admin/organizations/idps/{id}`: citeste un IdP dupa ID, cu verificare de acces pe organizatie.
 - `PUT /api/admin/organizations/idps/{id}`: actualizeaza partial IdP-ul; `client_secret` si `scim_token` sunt schimbate doar daca payload-ul trimite valori non-empty.
-- `DELETE /api/admin/organizations/idps/{id}`: sterge IdP-ul si reconciliaza default IdP pe tenant.
+- `DELETE /api/admin/organizations/idps/{id}`: sterge IdP-ul si reconciliaza default IdP pe organizatie.
 - `POST /api/admin/organizations/idps/discover`: primeste `issuer`, ruleaza OIDC discovery si intoarce endpoints sau HTTP 502 la esec.
 - `GET /api/admin/sessions`: listeaza sesiunile active filtrate pe organizatiile permise.
 - `DELETE /api/admin/sessions/{id}`: revoca sesiunea si auditeaza `session_revoked`.
@@ -1852,9 +1860,9 @@ Metode exacte pentru API-urile admin:
 - `POST /api/admin/enrollments/{id}/approve`: semneaza certificatul, intoarce cert+CA si auditeaza `enrollment_approved`.
 - `POST /api/admin/enrollments/{id}/revoke`: revoca enrollment-ul si auditeaza `enrollment_revoked`.
 - `GET /api/admin/resources`: listeaza resurse filtrate pe organizatii.
-- `POST /api/admin/resources`: creeaza resursa; accepta alias `organization_id` pentru `tenant_id`.
+- `POST /api/admin/resources`: creeaza resursa; cere `organization_id`.
 - `GET /api/admin/resources/{id}`: citeste resursa.
-- `PUT /api/admin/resources/{id}`: update cu semantica PATCH pe campurile prezente; accepta alias `organization_id`.
+- `PUT /api/admin/resources/{id}`: update cu semantica PATCH pe campurile prezente.
 - `DELETE /api/admin/resources/{id}`: sterge resursa si publica event de revocare.
 - `GET /api/admin/policies`: listeaza politici; daca se filtreaza pe organizatie, include politicile asignate organizatiei.
 - `POST /api/admin/policies`: creeaza politica dupa validarea conditiilor; `action` este derivata din `conditions.authentication.policy`.
@@ -1877,15 +1885,14 @@ Metode exacte pentru API-urile admin:
 - `DELETE /api/admin/gateways/{id}`: sterge gateway.
 - `POST /api/admin/gateways/{id}/regenerate-token`: genereaza token nou.
 - `POST /api/admin/gateways/{id}/revoke`: revoca gateway.
-- `POST /api/admin/gateways/{id}/test-federation`: testeaza discovery OIDC pentru un issuer.
 
 ### 21.8 SCIM
 
-- `/scim/v2/{tenant_id}/ServiceProviderConfig`
-- `/scim/v2/{tenant_id}/Users`
-- `/scim/v2/{tenant_id}/Users/{id}`
-- `/scim/v2/{tenant_id}/Groups`
-- `/scim/v2/{tenant_id}/Groups/{id}`
+- `/scim/v2/{organization_id}/ServiceProviderConfig`
+- `/scim/v2/{organization_id}/Users`
+- `/scim/v2/{organization_id}/Users/{id}`
+- `/scim/v2/{organization_id}/Groups`
+- `/scim/v2/{organization_id}/Groups/{id}`
 
 ### 21.9 Dashboard SPA
 
@@ -1983,10 +1990,10 @@ Dashboard-ul foloseste tokenul admin si API-urile `/api/admin`. Tema UI este per
 Implementarea este conservatoare:
 
 - lipsa politicilor aplicabile produce deny;
-- tenant mismatch produce deny cu risc 100;
+- nepotrivirea de organizatie produce deny cu risc 100;
 - directory user dezactivat produce deny cu risc 100;
 - resursa disabled produce deny;
-- gateway lipsa, neenrolled sau din alt tenant produce deny;
+- gateway lipsa, neenrolled sau din alta organizatie produce deny;
 - protocol/port mismatch produce deny;
 - token revocat produce deny;
 - certificat device/gateway cu fingerprint diferit produce deny;
@@ -1996,18 +2003,17 @@ Implementarea este conservatoare:
 - enrollment proof invalid produce respingere;
 - gateway control fara ACK corect produce provisioning failure.
 
-## 25. Observatii importante pentru mentenanta
+## 25. Observatii importante pentru operare
 
 - PDP si PA sunt in acelasi binar; nu exista un serviciu PA separat in runtime-ul curent.
-- `tenant_id` si `organization_id` trebuie tratate ca sinonime functionale, dar API-ul admin prefera `organization_id`.
 - Catalogul nu publica automat toate resursele unei organizatii; are nevoie de assignment-uri care fac resursa vizibila.
 - Politica globala default securizeaza accesul, dar catalogul poate avea nevoie de target resources pentru publicare.
-- Device data raw este preferat fata de device health agregat.
-- Gateway federation legacy este pastrata in modele, dar fluxul nou accepta doar `builtin`.
+- Device data raw este singura forma persistenta de postura endpoint; sumarul health este calculat la evaluare.
+- Gateway-urile nu pastreaza configuratie OIDC/federation; IdP-urile sunt configurate la nivel de organizatie.
 - Client auth TLS este optional la handshake si obligatoriu prin middleware/interceptori pe endpoint-urile sensibile.
-- Evenimentele interne sunt in-memory; ele coordoneaza runtime-ul curent, nu sunt un bus persistent extern.
-- Step-up challenges sunt in-memory; restartul PDP pierde challenge-urile active.
-- Sesiunile, tokenurile revocate, auditul, policy-urile si entitatile principale sunt persistente in SQLite.
+- Evenimentele interne folosesc Redis Pub/Sub; ele coordoneaza runtime-ul intre replicile PDP, dar nu sunt audit persistent.
+- Step-up challenges, OIDC state, WebAuthn challenge-uri, admin MFA challenge-uri, rate-limit-ul, lockout-ul si coada de comenzi gateway sunt state runtime cu TTL in Redis.
+- Sesiunile, tokenurile revocate, auditul, policy-urile si entitatile principale sunt persistente in PostgreSQL.
 
 ## 26. Checklist de verificare cand se schimba PDP
 

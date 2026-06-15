@@ -12,7 +12,7 @@ type User struct {
 	MFAMethods      []string `json:"mfa_methods"`
 	Role            string   `json:"role"`
 	Disabled        bool     `json:"disabled"`
-	TenantID        string   `json:"tenant_id,omitempty"`
+	OrganizationID  string   `json:"organization_id,omitempty"`
 	LastTOTPCounter int64    `json:"last_totp_counter,omitempty"`
 
 	ExternalSubject string `json:"external_subject,omitempty"`

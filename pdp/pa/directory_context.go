@@ -38,7 +38,7 @@ func (pa *PolicyAdministrator) DirectoryContextForUser(user *models.User) Direct
 		return result
 	}
 
-	for _, group := range pa.Store.ListDirectoryGroupsForUser(dirUser.TenantID, dirUser.IdPID, dirUser.ID) {
+	for _, group := range pa.Store.ListDirectoryGroupsForUser(dirUser.OrganizationID, dirUser.IdPID, dirUser.ID) {
 		if group == nil {
 			continue
 		}
@@ -77,8 +77,8 @@ func (pa *PolicyAdministrator) resolveDirectoryUser(user *models.User) (*models.
 	if user == nil || pa == nil || pa.Store == nil {
 		return nil, false
 	}
-	tenantID := strings.TrimSpace(user.TenantID)
-	if tenantID == "" {
+	organizationID := strings.TrimSpace(user.OrganizationID)
+	if organizationID == "" {
 		return nil, false
 	}
 
@@ -96,7 +96,7 @@ func (pa *PolicyAdministrator) directoryIdPCandidates(user *models.User) []*mode
 	}
 
 	authSource := strings.TrimSpace(user.AuthSource)
-	all := pa.Store.ListIdentityProviderConfigsForTenant(user.TenantID)
+	all := pa.Store.ListIdentityProviderConfigsForOrganization(user.OrganizationID)
 	seen := map[string]bool{}
 	candidates := make([]*models.IdentityProviderConfig, 0, len(all))
 	add := func(cfg *models.IdentityProviderConfig) {
@@ -125,23 +125,23 @@ func (pa *PolicyAdministrator) findDirectoryUserInIdP(user *models.User, idp *mo
 		return nil, false
 	}
 
-	tenantID := strings.TrimSpace(idp.TenantID)
+	organizationID := strings.TrimSpace(idp.OrganizationID)
 	idpID := strings.TrimSpace(idp.ID)
 	for _, value := range []string{user.ExternalSubject} {
 		if value == "" {
 			continue
 		}
-		if dirUser, ok := pa.Store.GetDirectoryUser(tenantID, idpID, value); ok {
+		if dirUser, ok := pa.Store.GetDirectoryUser(organizationID, idpID, value); ok {
 			return dirUser, true
 		}
-		if dirUser, ok := pa.Store.FindDirectoryUserByExternalID(tenantID, idpID, value); ok {
+		if dirUser, ok := pa.Store.FindDirectoryUserByExternalID(organizationID, idpID, value); ok {
 			return dirUser, true
 		}
 	}
-	if dirUser, ok := pa.Store.FindDirectoryUserByUserName(tenantID, idpID, user.Username); ok {
+	if dirUser, ok := pa.Store.FindDirectoryUserByUserName(organizationID, idpID, user.Username); ok {
 		return dirUser, true
 	}
-	if dirUser, ok := pa.Store.FindDirectoryUserByEmail(tenantID, idpID, user.Email); ok {
+	if dirUser, ok := pa.Store.FindDirectoryUserByEmail(organizationID, idpID, user.Email); ok {
 		return dirUser, true
 	}
 	return nil, false

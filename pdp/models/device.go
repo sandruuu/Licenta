@@ -2,26 +2,26 @@ package models
 
 import "time"
 
-// DeviceHealthReport is sent by the device-health app via the gateway.
+// DeviceHealthReport is the computed posture summary derived from device data.
 type DeviceHealthReport struct {
-	DeviceID     string        `json:"device_id"`
-	Hostname     string        `json:"hostname"`
-	OS           string        `json:"os"`
-	Checks       []HealthCheck `json:"checks"`
-	OverallScore int           `json:"overall_score"`
-	ReportedAt   time.Time     `json:"reported_at"`
-	TenantID     string        `json:"tenant_id,omitempty"`
+	DeviceID       string        `json:"device_id"`
+	Hostname       string        `json:"hostname"`
+	OS             string        `json:"os"`
+	Checks         []HealthCheck `json:"checks"`
+	OverallScore   int           `json:"overall_score"`
+	ReportedAt     time.Time     `json:"reported_at"`
+	OrganizationID string        `json:"organization_id,omitempty"`
 }
 
 // DeviceDataReport is the normalized raw device data payload used by policies.
 type DeviceDataReport struct {
-	DeviceID    string        `json:"device_id"`
-	Hostname    string        `json:"hostname"`
-	OS          string        `json:"os"`
-	Checks      []HealthCheck `json:"checks"`
-	CollectedAt time.Time     `json:"collected_at"`
-	ReportedAt  time.Time     `json:"reported_at"`
-	TenantID    string        `json:"tenant_id,omitempty"`
+	DeviceID       string        `json:"device_id"`
+	Hostname       string        `json:"hostname"`
+	OS             string        `json:"os"`
+	Checks         []HealthCheck `json:"checks"`
+	CollectedAt    time.Time     `json:"collected_at"`
+	ReportedAt     time.Time     `json:"reported_at"`
+	OrganizationID string        `json:"organization_id,omitempty"`
 }
 
 // HealthCheck is a single device health check result.

@@ -7,27 +7,27 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pdp/config"
 	"pdp/pki"
+	"pdp/runtime/redisstate"
 )
 
-const protectedSecretPrefix = "enc:v1:"
+const protectedSecretPrefix = "enc:"
 
 // SecretProtector encrypts MFA-related values before they are written to the
-// local database. Values without the enc:v1 prefix are treated as legacy
-// plaintext so existing deployments can migrate lazily on the next update.
+// database.
 type SecretProtector struct {
 	aead       cipher.AEAD
 	persistent bool
 }
 
-func NewSecretProtector(cfg *config.Config) (*SecretProtector, error) {
-	key, persistent, err := loadOrCreateSecretKey(cfg)
+func NewSecretProtector(cfg *config.Config, runtimeState *redisstate.Client) (*SecretProtector, error) {
+	key, persistent, err := loadOrCreateSecretKey(cfg, runtimeState)
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +61,14 @@ func (p *SecretProtector) Protect(value string) (string, error) {
 
 func (p *SecretProtector) Unprotect(value string) (string, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || p == nil || p.aead == nil || !strings.HasPrefix(value, protectedSecretPrefix) {
+	if value == "" {
 		return value, nil
+	}
+	if p == nil || p.aead == nil {
+		return "", fmt.Errorf("MFA secret protector is not initialized")
+	}
+	if !strings.HasPrefix(value, protectedSecretPrefix) {
+		return "", fmt.Errorf("MFA secret is not protected")
 	}
 	encoded := strings.TrimPrefix(value, protectedSecretPrefix)
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
@@ -85,46 +91,21 @@ func (p *SecretProtector) Persistent() bool {
 	return p != nil && p.persistent
 }
 
-func loadOrCreateSecretKey(cfg *config.Config) ([]byte, bool, error) {
-	dataDir := ""
-	if cfg != nil {
-		dataDir = strings.TrimSpace(cfg.DataDir)
+func loadOrCreateSecretKey(cfg *config.Config, runtimeState *redisstate.Client) ([]byte, bool, error) {
+	if !vaultTransitAvailable(cfg) {
+		return nil, false, fmt.Errorf("Vault Transit configuration is required for MFA secret protection")
 	}
-	if vaultTransitAvailable(cfg) {
-		key, err := loadOrCreateVaultWrappedSecretKey(cfg)
-		return key, true, err
+	if runtimeState == nil {
+		return nil, false, fmt.Errorf("Redis runtime state is required for MFA secret key lock")
 	}
-	if dataDir == "" {
-		key := make([]byte, 32)
-		if _, err := rand.Read(key); err != nil {
-			return nil, false, fmt.Errorf("generate in-memory MFA secret key: %w", err)
-		}
-		return key, false, nil
-	}
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, false, fmt.Errorf("create data directory for MFA secret key: %w", err)
-	}
-	path := filepath.Join(dataDir, "mfa_secret.key")
-	if data, err := os.ReadFile(path); err == nil {
-		key, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(string(data)))
-		if err != nil {
-			return nil, false, fmt.Errorf("decode MFA secret key file: %w", err)
-		}
-		if len(key) != 32 {
-			return nil, false, fmt.Errorf("MFA secret key must be 32 bytes")
-		}
-		return key, true, nil
-	} else if !os.IsNotExist(err) {
-		return nil, false, fmt.Errorf("read MFA secret key file: %w", err)
-	}
-
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, false, fmt.Errorf("generate MFA secret key: %w", err)
-	}
-	encoded := base64.RawURLEncoding.EncodeToString(key)
-	if err := os.WriteFile(path, []byte(encoded), 0o600); err != nil {
-		return nil, false, fmt.Errorf("write MFA secret key file: %w", err)
+	var key []byte
+	err := runtimeState.WithLock(context.Background(), "mfa-secret-key", 2*time.Minute, 2*time.Minute, func() error {
+		var err error
+		key, err = loadOrCreateVaultWrappedSecretKey(cfg)
+		return err
+	})
+	if err != nil {
+		return nil, false, err
 	}
 	return key, true, nil
 }
@@ -161,20 +142,6 @@ func loadOrCreateVaultWrappedSecretKey(cfg *config.Config) ([]byte, error) {
 		return nil, fmt.Errorf("read encrypted MFA data key: %w", err)
 	}
 
-	legacyPath := filepath.Join(strings.TrimSpace(cfg.DataDir), "mfa_secret.key")
-	if legacyKey, err := readLocalMFASecretKey(legacyPath); err == nil {
-		if err := writeVaultWrappedMFASecretKey(ctx, vaultCfg, path, legacyKey); err != nil {
-			return nil, err
-		}
-		if err := os.Remove(legacyPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("[AUTH] Could not remove legacy plaintext MFA key %s after Vault wrapping: %v", legacyPath, err)
-		}
-		log.Printf("[AUTH] Migrated MFA secret key from plaintext local file to Vault Transit wrapped file")
-		return legacyKey, nil
-	} else if !os.IsNotExist(err) && strings.TrimSpace(cfg.DataDir) != "" {
-		return nil, err
-	}
-
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("generate MFA data key: %w", err)
@@ -193,21 +160,10 @@ func writeVaultWrappedMFASecretKey(ctx context.Context, vaultCfg pki.VaultConfig
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create MFA encrypted key directory: %w", err)
 	}
-	if err := os.WriteFile(path, ciphertext, 0o600); err != nil {
+	if err := pki.WriteFileAtomic(path, ciphertext, 0o600); err != nil {
 		return fmt.Errorf("write encrypted MFA data key: %w", err)
 	}
 	return nil
-}
-
-func readLocalMFASecretKey(path string) ([]byte, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, os.ErrNotExist
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	return parseMFASecretKeyBytes([]byte(strings.TrimSpace(string(data))))
 }
 
 func parseMFASecretKeyBytes(data []byte) ([]byte, error) {

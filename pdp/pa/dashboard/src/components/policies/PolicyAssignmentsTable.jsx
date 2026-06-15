@@ -22,7 +22,7 @@ export default function PolicyAssignmentsTable({ assignments, maps, onEdit, onDe
               <p className="text-sm font-bold text-text-primary">{policy?.name || assignment.policy_id}</p>
               <p className="mt-1 text-xs text-text-secondary">{policy ? actionMeta(policy.action).label : 'Unknown action'}</p>
             </div>
-            <div className="text-sm font-semibold text-text-secondary">{maps.organizations.get(assignment.tenant_id)?.name || assignment.tenant_id}</div>
+            <div className="text-sm font-semibold text-text-secondary">{maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id}</div>
             <div>
               <p className="text-sm font-semibold text-text-primary">{assignmentTargetLabel(assignment, maps)}</p>
               <p className="mt-1 truncate text-xs font-semibold text-text-muted">{assignmentContextLabel(assignment, maps)}</p>

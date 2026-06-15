@@ -48,7 +48,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "enrollment not found"})
 		return
 	}
-	if !s.requireOrganizationAccess(w, r, enrollment.TenantID) {
+	if !s.requireOrganizationAccess(w, r, enrollment.OrganizationID) {
 		return
 	}
 
@@ -106,7 +106,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 func filterEnrollmentsByOrganization(enrollments []*models.DeviceEnrollment, allowed map[string]bool) []*models.DeviceEnrollment {
 	filtered := make([]*models.DeviceEnrollment, 0, len(enrollments))
 	for _, enrollment := range enrollments {
-		if enrollment != nil && organizationAllowed(allowed, enrollment.TenantID) {
+		if enrollment != nil && organizationAllowed(allowed, enrollment.OrganizationID) {
 			filtered = append(filtered, enrollment)
 		}
 	}

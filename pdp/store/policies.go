@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -36,9 +34,17 @@ func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
 }
 
 func (s *Store) SavePolicyRule(rule *models.PolicyRule) {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO policy_rules
+	_, err := s.db.Exec(`INSERT INTO policy_rules
 		(id, name, description, enabled, conditions_json, action, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			enabled = EXCLUDED.enabled,
+			conditions_json = EXCLUDED.conditions_json,
+			action = EXCLUDED.action,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`,
 		rule.ID, rule.Name, rule.Description, b2i(rule.Enabled),
 		toJSON(rule.Conditions), rule.Action, fmtTime(rule.CreatedAt), fmtTime(rule.UpdatedAt))
 	if err != nil {
@@ -59,8 +65,8 @@ func (s *Store) ListPolicyRules() []*models.PolicyRule {
 	return rules
 }
 
-func (s *Store) ListPolicyRulesForAccessGroups(tenantID, resourceID string, groupIDs, groupNames []string) []*models.PolicyRule {
-	assignments := s.ListPolicyAssignmentsForAccessGroups(tenantID, resourceID, groupIDs, groupNames)
+func (s *Store) ListPolicyRulesForAccessGroups(organizationID, resourceID string, groupIDs, groupNames []string) []*models.PolicyRule {
+	assignments := s.ListPolicyAssignmentsForAccessGroups(organizationID, resourceID, groupIDs, groupNames)
 	rules := make([]*models.PolicyRule, 0, len(assignments))
 	for _, assignment := range assignments {
 		rule, ok := s.GetPolicyRule(assignment.PolicyID)
@@ -97,16 +103,15 @@ func (s *Store) DeletePolicyRule(id string) {
 }
 
 func (s *Store) GetPolicyAssignment(id string) (*models.PolicyAssignment, bool) {
-	row := s.db.QueryRow(`SELECT id, policy_id, level, tenant_id, resource_id,
+	row := s.db.QueryRow(`SELECT id, policy_id, level, organization_id, resource_id,
 		group_id, group_name, order_index, enabled, created_at, updated_at FROM policy_assignments
 		WHERE id = ?
-		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
-		  AND COALESCE(gateway_id, '') = ''`, id)
+		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')`, id)
 
 	assignment := &models.PolicyAssignment{}
 	var enabled int
 	var createdAt, updatedAt string
-	if err := row.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.TenantID,
+	if err := row.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.OrganizationID,
 		&assignment.ResourceID, &assignment.GroupID, &assignment.GroupName,
 		&assignment.OrderIndex, &enabled, &createdAt, &updatedAt); err != nil {
 		return nil, false
@@ -123,11 +128,22 @@ func (s *Store) SavePolicyAssignment(assignment *models.PolicyAssignment) {
 		return
 	}
 	normalizePolicyAssignment(assignment)
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO policy_assignments
-		(id, policy_id, level, tenant_id, resource_id, group_id, group_name,
+	_, err := s.db.Exec(`INSERT INTO policy_assignments
+		(id, policy_id, level, organization_id, resource_id, group_id, group_name,
 		 order_index, enabled, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		assignment.ID, assignment.PolicyID, assignment.Level, assignment.TenantID,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			policy_id = EXCLUDED.policy_id,
+			level = EXCLUDED.level,
+			organization_id = EXCLUDED.organization_id,
+			resource_id = EXCLUDED.resource_id,
+			group_id = EXCLUDED.group_id,
+			group_name = EXCLUDED.group_name,
+			order_index = EXCLUDED.order_index,
+			enabled = EXCLUDED.enabled,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`,
+		assignment.ID, assignment.PolicyID, assignment.Level, assignment.OrganizationID,
 		assignment.ResourceID, assignment.GroupID, assignment.GroupName,
 		assignment.OrderIndex,
 		b2i(assignment.Enabled), fmtTime(assignment.CreatedAt), fmtTime(assignment.UpdatedAt))
@@ -172,11 +188,10 @@ func (s *Store) SavePolicyAssignmentWithPlacement(assignment *models.PolicyAssig
 }
 
 func (s *Store) ListPolicyAssignments() []*models.PolicyAssignment {
-	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+	rows, err := s.db.Query(`SELECT id, policy_id, level, organization_id, resource_id,
 		group_id, group_name, order_index, enabled, created_at, updated_at FROM policy_assignments
 		WHERE COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
-		  AND COALESCE(gateway_id, '') = ''
-		ORDER BY tenant_id ASC,
+		ORDER BY organization_id ASC,
 		  CASE COALESCE(NULLIF(level, ''), 'organization')
 			WHEN 'resource_group' THEN 1
 			WHEN 'resource' THEN 2
@@ -194,11 +209,10 @@ func (s *Store) ListPolicyAssignments() []*models.PolicyAssignment {
 }
 
 func (s *Store) ListPolicyAssignmentsForPolicy(policyID string) []*models.PolicyAssignment {
-	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+	rows, err := s.db.Query(`SELECT id, policy_id, level, organization_id, resource_id,
 		group_id, group_name, order_index, enabled, created_at, updated_at FROM policy_assignments
 		WHERE policy_id = ?
 		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
-		  AND COALESCE(gateway_id, '') = ''
 		ORDER BY
 		  CASE COALESCE(NULLIF(level, ''), 'organization')
 			WHEN 'resource_group' THEN 1
@@ -216,17 +230,16 @@ func (s *Store) ListPolicyAssignmentsForPolicy(policyID string) []*models.Policy
 	return scanPolicyAssignments(rows)
 }
 
-func (s *Store) ListPolicyAssignmentsForAccessGroups(tenantID, resourceID string, groupIDs, groupNames []string) []*models.PolicyAssignment {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
+func (s *Store) ListPolicyAssignmentsForAccessGroups(organizationID, resourceID string, groupIDs, groupNames []string) []*models.PolicyAssignment {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
 		return nil
 	}
-	rows, err := s.db.Query(`SELECT id, policy_id, level, tenant_id, resource_id,
+	rows, err := s.db.Query(`SELECT id, policy_id, level, organization_id, resource_id,
 		group_id, group_name, order_index, enabled, created_at, updated_at FROM policy_assignments
 		WHERE enabled = 1
-		  AND tenant_id = ?
+		  AND organization_id = ?
 		  AND COALESCE(NULLIF(level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
-		  AND COALESCE(gateway_id, '') = ''
 		ORDER BY
 		  CASE COALESCE(NULLIF(level, ''), 'organization')
 			WHEN 'resource_group' THEN 1
@@ -235,7 +248,7 @@ func (s *Store) ListPolicyAssignmentsForAccessGroups(tenantID, resourceID string
 			WHEN 'organization' THEN 4
 			ELSE 5
 		  END,
-		  order_index ASC, created_at ASC, id ASC`, tenantID)
+		  order_index ASC, created_at ASC, id ASC`, organizationID)
 	if err != nil {
 		log.Printf("[STORE] Failed to list policy assignments for access: %v", err)
 		return nil
@@ -271,7 +284,7 @@ func scanPolicyAssignments(rows *sql.Rows) []*models.PolicyAssignment {
 		assignment := &models.PolicyAssignment{}
 		var enabled int
 		var createdAt, updatedAt string
-		if err := rows.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.TenantID,
+		if err := rows.Scan(&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.OrganizationID,
 			&assignment.ResourceID, &assignment.GroupID, &assignment.GroupName,
 			&assignment.OrderIndex, &enabled, &createdAt, &updatedAt); err != nil {
 			continue
@@ -310,7 +323,7 @@ func normalizePolicyAssignment(assignment *models.PolicyAssignment) {
 	if assignment == nil {
 		return
 	}
-	assignment.TenantID = strings.TrimSpace(assignment.TenantID)
+	assignment.OrganizationID = strings.TrimSpace(assignment.OrganizationID)
 	assignment.ResourceID = strings.TrimSpace(assignment.ResourceID)
 	assignment.GroupID = strings.TrimSpace(assignment.GroupID)
 	assignment.GroupName = strings.TrimSpace(assignment.GroupName)
@@ -380,7 +393,7 @@ func policyAssignmentSameOrderScope(left, right *models.PolicyAssignment) bool {
 	}
 	leftLevel := normalizedAssignmentLevel(left)
 	rightLevel := normalizedAssignmentLevel(right)
-	if leftLevel != rightLevel || !strings.EqualFold(strings.TrimSpace(left.TenantID), strings.TrimSpace(right.TenantID)) {
+	if leftLevel != rightLevel || !strings.EqualFold(strings.TrimSpace(left.OrganizationID), strings.TrimSpace(right.OrganizationID)) {
 		return false
 	}
 	switch leftLevel {
@@ -433,15 +446,9 @@ func normalizedAssignmentLevel(assignment *models.PolicyAssignment) string {
 		}
 	}
 	switch level {
-	case "tenant", "global":
-		level = "organization"
-	case "application_group":
-		level = "resource_group"
-	}
-	switch level {
 	case "organization", "group", "resource", "resource_group":
 		return level
-	case "gateway", "legacy_gateway":
+	case "gateway":
 		return "unsupported"
 	}
 	if hasResource {

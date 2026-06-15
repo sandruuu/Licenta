@@ -29,22 +29,22 @@ func (pa *PolicyAdministrator) EvaluateAccessWithAuth(req models.AccessRequest, 
 	if pa.Store != nil {
 		if foundUser, ok := pa.Store.GetUser(req.UserID); ok && foundUser != nil {
 			user = foundUser
-			if req.TenantID == "" {
-				req.TenantID = user.TenantID
-			} else if user.TenantID != "" && !strings.EqualFold(req.TenantID, user.TenantID) {
-				return denyTenantMismatch("user does not belong to requested tenant")
+			if req.OrganizationID == "" {
+				req.OrganizationID = user.OrganizationID
+			} else if user.OrganizationID != "" && !strings.EqualFold(req.OrganizationID, user.OrganizationID) {
+				return denyOrganizationMismatch("user does not belong to requested organization")
 			}
 		}
 		if resource, ok := pa.Store.GetResource(req.Resource); ok && resource != nil {
-			if req.TenantID == "" {
-				req.TenantID = resource.TenantID
-			} else if resource.TenantID != "" && !strings.EqualFold(req.TenantID, resource.TenantID) {
-				return denyTenantMismatch("resource does not belong to requested tenant")
+			if req.OrganizationID == "" {
+				req.OrganizationID = resource.OrganizationID
+			} else if resource.OrganizationID != "" && !strings.EqualFold(req.OrganizationID, resource.OrganizationID) {
+				return denyOrganizationMismatch("resource does not belong to requested organization")
 			}
 			if req.GatewayID == "" {
 				req.GatewayID = resource.GatewayID
 			} else if resource.GatewayID != "" && !strings.EqualFold(req.GatewayID, resource.GatewayID) {
-				return denyTenantMismatch("resource is not assigned to requested gateway")
+				return denyOrganizationMismatch("resource is not assigned to requested gateway")
 			}
 		}
 	}
@@ -56,7 +56,9 @@ func (pa *PolicyAdministrator) EvaluateAccessWithAuth(req models.AccessRequest, 
 	}
 
 	if pa.Store != nil {
-		ctx.FailedAttempts = pa.Store.GetFailedAttempts(req.Username)
+		if pa.Runtime != nil {
+			ctx.FailedAttempts = pa.Runtime.GetFailedAttempts(req.Username)
+		}
 		ctx.IsNewDevice = pa.isNewUserDevice(req.UserID, req.DeviceID, ctx.Now)
 		if user != nil {
 			ctx.UserRole = user.Role
@@ -65,8 +67,8 @@ func (pa *PolicyAdministrator) EvaluateAccessWithAuth(req models.AccessRequest, 
 				return decision
 			}
 		}
-		if strings.TrimSpace(req.TenantID) != "" || strings.TrimSpace(req.Resource) != "" {
-			ctx.Rules = pa.Store.ListPolicyRulesForAccessGroups(req.TenantID, req.Resource, ctx.DirectoryGroupIDs, ctx.DirectoryGroupNames)
+		if strings.TrimSpace(req.OrganizationID) != "" || strings.TrimSpace(req.Resource) != "" {
+			ctx.Rules = pa.Store.ListPolicyRulesForAccessGroups(req.OrganizationID, req.Resource, ctx.DirectoryGroupIDs, ctx.DirectoryGroupNames)
 		} else {
 			ctx.Rules = pa.Store.ListPolicyRules()
 		}
@@ -103,7 +105,7 @@ func (pa *PolicyAdministrator) isNewUserDevice(userID, deviceID string, now time
 	return now.Sub(binding.BoundAt) <= newDeviceWindow
 }
 
-func denyTenantMismatch(reason string) *models.AccessDecision {
+func denyOrganizationMismatch(reason string) *models.AccessDecision {
 	return &models.AccessDecision{
 		Decision:  models.DecisionDeny,
 		Reason:    reason,

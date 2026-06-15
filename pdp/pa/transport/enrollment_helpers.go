@@ -3,44 +3,22 @@ package transport
 import (
 	"log"
 	"strings"
-	"time"
 
 	paenrollment "pdp/pa/enrollment"
 )
 
 // checkEnrollRateLimit enforces configured per-IP rate limiting on enrollment entry points.
 func (s *Server) checkEnrollRateLimit(ip string) bool {
-	s.enrollLimiterMu.Lock()
-	now := time.Now()
 	appCfg := s.appConfig()
-	entry, ok := s.enrollLimiter[ip]
-	if !ok || now.After(entry.resetAt) {
-		s.enrollLimiter[ip] = &enrollRateEntry{count: 1, resetAt: now.Add(appCfg.Runtime.EnrollRateLimitWindow)}
-		s.enrollLimiterMu.Unlock()
-		if s.pa != nil && s.pa.Store != nil {
-			go func() {
-				if allowed, err := s.pa.Store.CheckEnrollRateLimit(ip, appCfg.Runtime.EnrollRateLimitWindow, appCfg.Runtime.EnrollRateLimitMax); err == nil && !allowed {
-					log.Printf("[ENROLL] Persistent rate limiter denied IP %s (in-memory passed)", ip)
-				}
-			}()
-		}
-		return true
+	if s.pa == nil || s.pa.Runtime == nil {
+		return false
 	}
-	entry.count++
-	if entry.count <= appCfg.Runtime.EnrollRateLimitMax {
-		s.enrollLimiterMu.Unlock()
-		return true
+	allowed, err := s.pa.Runtime.Allow("enroll", ip, appCfg.Runtime.EnrollRateLimitWindow, appCfg.Runtime.EnrollRateLimitMax)
+	if err != nil {
+		log.Printf("[ENROLL] Redis rate limit check failed for IP %s: %v", ip, err)
+		return false
 	}
-	s.enrollLimiterMu.Unlock()
-	if s.pa != nil && s.pa.Store != nil {
-		allowed, err := s.pa.Store.CheckEnrollRateLimit(ip, appCfg.Runtime.EnrollRateLimitWindow, appCfg.Runtime.EnrollRateLimitMax)
-		if err != nil {
-			log.Printf("[ENROLL] Persistent rate limit check failed for IP %s: %v", ip, err)
-			return false
-		}
-		return allowed
-	}
-	return false
+	return allowed
 }
 
 func enrollmentClientMessage(err error) string {

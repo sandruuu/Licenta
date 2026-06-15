@@ -236,7 +236,7 @@ func encryptAndSaveKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath st
 	if err := os.MkdirAll(filepath.Dir(encryptedKeyPath), 0o700); err != nil {
 		return fmt.Errorf("create encrypted key directory: %w", err)
 	}
-	if err := os.WriteFile(encryptedKeyPath, ciphertext, 0o600); err != nil {
+	if err := WriteFileAtomic(encryptedKeyPath, ciphertext, 0o600); err != nil {
 		return fmt.Errorf("write encrypted PDP key: %w", err)
 	}
 	return nil

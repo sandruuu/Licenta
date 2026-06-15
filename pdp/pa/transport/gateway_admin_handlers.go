@@ -70,8 +70,7 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		applyOrganizationAliasToGatewayCreate(body, &req)
-		if !s.requireOrganizationAccess(w, r, req.TenantID) {
+		if !s.requireOrganizationAccess(w, r, req.OrganizationID) {
 			return
 		}
 		result, err := s.pa.Gateways.CreateGateway(req)
@@ -80,13 +79,12 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		log.Printf("[ADMIN] Gateway created: id=%s name=%s auth_mode=%s token_expires=%s", result.Gateway.ID, result.Gateway.Name, result.Gateway.AuthMode, result.Gateway.TokenExpiresAt)
+		log.Printf("[ADMIN] Gateway created: id=%s name=%s token_expires=%s", result.Gateway.ID, result.Gateway.Name, result.Gateway.TokenExpiresAt)
 
 		writeJSON(w, http.StatusCreated, map[string]interface{}{
 			"id":               result.Gateway.ID,
-			"organization_id":  result.Gateway.TenantID,
+			"organization_id":  result.Gateway.OrganizationID,
 			"name":             result.Gateway.Name,
-			"auth_mode":        result.Gateway.AuthMode,
 			"enrollment_token": result.EnrollmentToken,
 			"token_expires_at": result.Gateway.TokenExpiresAt,
 			"status":           result.Gateway.Status,
@@ -121,7 +119,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			s.writeGatewayAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, gw.TenantID) {
+		if !s.requireOrganizationAccess(w, r, gw.OrganizationID) {
 			return
 		}
 		writeJSON(w, http.StatusOK, gw)
@@ -132,7 +130,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			s.writeGatewayAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
@@ -145,8 +143,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		applyOrganizationAliasToGatewayUpdate(body, &req)
-		if strings.TrimSpace(req.TenantID) != "" && !s.requireOrganizationAccess(w, r, req.TenantID) {
+		if strings.TrimSpace(req.OrganizationID) != "" && !s.requireOrganizationAccess(w, r, req.OrganizationID) {
 			return
 		}
 		if _, err := s.pa.Gateways.UpdateGateway(id, req); err != nil {
@@ -162,7 +159,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 			s.writeGatewayAdminError(w, err)
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		gw, err := s.pa.Gateways.DeleteGateway(id)
@@ -184,7 +181,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 				s.writeGatewayAdminError(w, err)
 				return
 			}
-			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 				return
 			}
 			result, err := s.pa.Gateways.RegenerateEnrollmentToken(id)
@@ -197,7 +194,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 
 			writeJSON(w, http.StatusOK, map[string]interface{}{
 				"id":               result.Gateway.ID,
-				"organization_id":  result.Gateway.TenantID,
+				"organization_id":  result.Gateway.OrganizationID,
 				"enrollment_token": result.EnrollmentToken,
 				"token_expires_at": result.TokenExpiresAt,
 				"message":          "New enrollment token generated (1-hour expiry).",
@@ -208,7 +205,7 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 				s.writeGatewayAdminError(w, err)
 				return
 			}
-			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+			if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 				return
 			}
 			gw, err := s.pa.Gateways.RevokeGateway(id)
@@ -219,45 +216,6 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 
 			log.Printf("[ADMIN] Gateway revoked: id=%s name=%s", gw.ID, gw.Name)
 			writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
-		} else if action == "test-federation" {
-			// Probe the configured (or supplied) external IdP's discovery doc
-			// to validate the issuer is reachable and exposes the required
-			// OIDC endpoints. Used by the dashboard "Test connection" button
-			// before saving a tenant identity provider configuration.
-			existing, found := s.pa.Store.GetGateway(id)
-			if !found {
-				writeJSON(w, http.StatusNotFound, map[string]string{"error": "gateway not found"})
-				return
-			}
-			if !s.requireOrganizationAccess(w, r, existing.TenantID) {
-				return
-			}
-			var req struct {
-				Issuer string `json:"issuer,omitempty"`
-			}
-			_ = json.NewDecoder(io.LimitReader(r.Body, 1<<14)).Decode(&req)
-			issuer := strings.TrimSpace(req.Issuer)
-			if issuer == "" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer is required"})
-				return
-			}
-			disc, err := s.pa.Auth.Federation.Discover(issuer)
-			if err != nil {
-				writeJSON(w, http.StatusBadGateway, map[string]interface{}{
-					"ok":     false,
-					"issuer": issuer,
-					"error":  err.Error(),
-				})
-				return
-			}
-			writeJSON(w, http.StatusOK, map[string]interface{}{
-				"ok":                     true,
-				"issuer":                 issuer,
-				"authorization_endpoint": disc.AuthorizationEndpoint,
-				"token_endpoint":         disc.TokenEndpoint,
-				"userinfo_endpoint":      disc.UserinfoEndpoint,
-				"jwks_uri":               disc.JWKSURI,
-			})
 		} else {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown action: " + action})
 		}
@@ -270,35 +228,9 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 func filterGatewayItemsByOrganization(items []pagateway.GatewayListItem, allowed map[string]bool) []pagateway.GatewayListItem {
 	filtered := make([]pagateway.GatewayListItem, 0, len(items))
 	for _, item := range items {
-		if organizationAllowed(allowed, item.TenantID) {
+		if organizationAllowed(allowed, item.OrganizationID) {
 			filtered = append(filtered, item)
 		}
 	}
 	return filtered
-}
-
-func applyOrganizationAliasToGatewayCreate(body []byte, req *pagateway.CreateGatewayRequest) {
-	if req == nil || len(body) == 0 || strings.TrimSpace(req.TenantID) != "" {
-		return
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return
-	}
-	if value, ok := raw["organization_id"]; ok {
-		_ = json.Unmarshal(value, &req.TenantID)
-	}
-}
-
-func applyOrganizationAliasToGatewayUpdate(body []byte, req *pagateway.UpdateGatewayRequest) {
-	if req == nil || len(body) == 0 || strings.TrimSpace(req.TenantID) != "" {
-		return
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return
-	}
-	if value, ok := raw["organization_id"]; ok {
-		_ = json.Unmarshal(value, &req.TenantID)
-	}
 }

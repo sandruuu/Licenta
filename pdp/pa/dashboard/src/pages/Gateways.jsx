@@ -97,7 +97,7 @@ export default function Gateways() {
       id: gateway.id,
       name: gateway.name || '',
       fqdn: gateway.fqdn || '',
-      tenant_id: gateway.tenant_id || '',
+      organization_id: gateway.organization_id || '',
     });
     setModal('edit');
   };
@@ -109,7 +109,7 @@ export default function Gateways() {
       await updateGateway(form.id, {
         name: form.name?.trim(),
         fqdn: form.fqdn?.trim(),
-        organization_id: form.tenant_id,
+        organization_id: form.organization_id,
       });
       setModal(null);
       await load();
@@ -189,7 +189,7 @@ export default function Gateways() {
       ),
     },
     {
-      key: 'tenant_id',
+      key: 'organization_id',
       label: 'Organization',
       render: (value) => organizationByID.get(value)?.name || value || '-',
     },
@@ -229,14 +229,14 @@ export default function Gateways() {
       const isActiveStatus = status === 'active' || status === 'enrolled';
       if (statusFilter === 'active' && !isActiveStatus) return false;
       if (statusFilter !== 'all' && statusFilter !== 'active' && status !== statusFilter) return false;
-      if (organizationFilter !== 'all' && gateway.tenant_id !== organizationFilter) return false;
+      if (organizationFilter !== 'all' && gateway.organization_id !== organizationFilter) return false;
       if (!needle) return true;
-      const organization = organizationByID.get(gateway.tenant_id);
+      const organization = organizationByID.get(gateway.organization_id);
       return [
         gateway.name,
         gateway.fqdn,
         gateway.id,
-        gateway.tenant_id,
+        gateway.organization_id,
         organization?.name,
         organization?.domain,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
@@ -343,7 +343,7 @@ export default function Gateways() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !form.name?.trim() || !form.tenant_id}>
+            <Button onClick={handleSave} disabled={saving || !form.name?.trim() || !form.organization_id}>
               {saving ? 'Saving...' : 'Save Changes'}
             </Button>
           </>
@@ -351,7 +351,7 @@ export default function Gateways() {
       >
         <div className="grid gap-4">
           <FormField label="Organization" className="mb-0">
-            <FormSelect value={form.tenant_id || ''} onChange={(event) => setForm({ ...form, tenant_id: event.target.value })}>
+            <FormSelect value={form.organization_id || ''} onChange={(event) => setForm({ ...form, organization_id: event.target.value })}>
               <option value="">Select organization</option>
               {organizations.map((organization) => (
                 <option key={organization.id} value={organization.id}>{organization.name}</option>
@@ -362,7 +362,7 @@ export default function Gateways() {
             <FormInput value={form.name || ''} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           </FormField>
           <FormField label="FQDN" className="mb-0">
-            <FormInput value={form.fqdn || ''} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="gateway.example.com" />
+            <FormInput value={form.fqdn || ''} onChange={(event) => setForm({ ...form, fqdn: event.target.value })} placeholder="gateway.company.com" />
           </FormField>
         </div>
       </Modal>

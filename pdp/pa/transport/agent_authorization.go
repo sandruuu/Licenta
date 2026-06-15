@@ -47,6 +47,10 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 	if enrollment != nil {
 		deviceID = enrollment.DeviceID
 	}
+	publicOrigin, err := s.publicOrigin()
+	if err != nil {
+		return agentAuthorizeResponse{}, http.StatusServiceUnavailable, newAccessErrorForTransport(err.Error())
+	}
 	result, err := s.pa.AuthorizeAgentResource(ctx, pa.AgentAuthorizationRequest{
 		DeviceID:             deviceID,
 		DeviceCertThumbprint: strings.TrimSpace(certificateThumbprint),
@@ -56,7 +60,7 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 		Port:                 req.Port,
 		Process:              req.Process,
 		SourceIP:             sourceIP,
-		PublicOrigin:         s.publicOrigin(),
+		PublicOrigin:         publicOrigin,
 	}, s.gatewayControl)
 	if err != nil {
 		return agentAuthorizeResponse{}, httpStatusForAccessError(err), err

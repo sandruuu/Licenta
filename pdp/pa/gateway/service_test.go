@@ -10,14 +10,14 @@ import (
 
 func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
-	seedGatewayTenant(dataStore)
-	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: gatewayTestTenantID, Name: "SSH", Type: "ssh", Enabled: true})
+	seedGatewayOrganization(dataStore)
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", Enabled: true})
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
 
 	result, err := service.CreateGateway(CreateGatewayRequest{
-		TenantID:          gatewayTestTenantID,
+		OrganizationID:    gatewayTestOrganizationID,
 		Name:              "Edge Gateway",
 		FQDN:              "edge.example.test",
 		AssignedResources: []string{"res-1"},
@@ -28,9 +28,6 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if result.Gateway.ID == "" || len(result.EnrollmentToken) != gatewayEnrollmentTokenBytes*2 {
 		t.Fatalf("gateway credentials were not generated: id=%q token=%q", result.Gateway.ID, result.EnrollmentToken)
 	}
-	if result.Gateway.AuthMode != "builtin" || result.Gateway.FederationConfig != nil {
-		t.Fatalf("gateway should use tenant-level IdP configuration only: auth=%q federation=%+v", result.Gateway.AuthMode, result.Gateway.FederationConfig)
-	}
 
 	items, err := service.ListGatewaySummaries()
 	if err != nil {
@@ -39,9 +36,6 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("list length = %d, want 1", len(items))
 	}
-	if items[0].AuthMode != "builtin" || items[0].FederationConfig != nil {
-		t.Fatalf("list should not expose gateway federation config: auth=%q federation=%+v", items[0].AuthMode, items[0].FederationConfig)
-	}
 	// EnrollmentToken is intentionally zeroed in gatewayListItem for defense-in-depth.
 	// The plaintext token is only returned at creation time (CreateGatewayResult).
 	if items[0].EnrollmentToken != "" {
@@ -49,21 +43,19 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	}
 
 	result.Gateway.CertPEM = "cert-pem"
-	result.Gateway.OIDCClientSecret = "oidc-secret"
-	result.Gateway.FederationConfig = &models.FederationConfig{Issuer: "https://legacy-idp.example.test", ClientID: "legacy", ClientSecret: "secret"}
 	dataStore.SaveGateway(result.Gateway)
 	detail, err := service.GetGatewayForAdmin(result.Gateway.ID)
 	if err != nil {
 		t.Fatalf("GetGatewayForAdmin returned error: %v", err)
 	}
-	if detail.CertPEM != "" || detail.OIDCClientSecret != "" || detail.FederationConfig != nil || detail.AuthMode != "builtin" {
-		t.Fatalf("admin detail was not sanitized: cert=%q oidc=%q federation=%+v", detail.CertPEM, detail.OIDCClientSecret, detail.FederationConfig)
+	if detail.CertPEM != "" {
+		t.Fatalf("admin detail was not sanitized: cert=%q", detail.CertPEM)
 	}
 }
 
 func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
-	seedGatewayTenant(dataStore)
+	seedGatewayOrganization(dataStore)
 	service := NewService(dataStore, "gateway-role")
 
 	_, err := service.CreateGateway(CreateGatewayRequest{})
@@ -71,73 +63,30 @@ func TestServiceCreateGatewayValidatesAdminRequest(t *testing.T) {
 		t.Fatalf("empty request error = %v, want ErrInvalidRequest", err)
 	}
 
-	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", TenantID: gatewayTestTenantID, AuthMode: "unknown"})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("invalid auth mode error = %v, want ErrInvalidRequest", err)
-	}
-
-	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge", TenantID: gatewayTestTenantID, AuthMode: "federated"})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("federated auth mode error = %v, want ErrInvalidRequest", err)
-	}
-
-	_, err = service.CreateGateway(CreateGatewayRequest{
-		Name:     "Edge",
-		TenantID: gatewayTestTenantID,
-		FederationConfig: &models.FederationConfig{
-			Issuer:   "https://idp.example.test",
-			ClientID: "client-1",
-		},
-	})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("gateway federation config error = %v, want ErrInvalidRequest", err)
-	}
-
 	_, err = service.CreateGateway(CreateGatewayRequest{Name: "Edge"})
 	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("missing tenant error = %v, want ErrInvalidRequest", err)
+		t.Fatalf("missing organization error = %v, want ErrInvalidRequest", err)
 	}
 }
 
-func TestServiceUpdateGatewayRejectsFederationConfigAndCanClearLegacyFederation(t *testing.T) {
+func TestServiceUpdateGatewayPatchesFields(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
-	seedGatewayTenant(dataStore)
+	seedGatewayOrganization(dataStore)
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: gatewayTestTenantID, Name: "SSH", Type: "ssh", Enabled: true})
-	dataStore.SaveResource(&models.Resource{ID: "res-2", TenantID: gatewayTestTenantID, Name: "RDP", Type: "rdp", Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-2", OrganizationID: gatewayTestOrganizationID, Name: "RDP", Type: "rdp", Enabled: true})
 	dataStore.SaveGateway(&models.Gateway{
-		ID:        "gw-1",
-		TenantID:  gatewayTestTenantID,
-		TenantIDs: []string{gatewayTestTenantID},
-		Name:      "Old Gateway",
-		FQDN:      "old.example.test",
-		Status:    "pending",
-		AuthMode:  "federated",
-		FederationConfig: &models.FederationConfig{
-			Issuer:       "https://old-idp.example.test",
-			ClientID:     "old-client",
-			ClientSecret: "secret-1",
-		},
-		CreatedAt: fixedNow.Add(-time.Hour),
-		UpdatedAt: fixedNow.Add(-time.Hour),
+		ID:              "gw-1",
+		OrganizationID:  gatewayTestOrganizationID,
+		OrganizationIDs: []string{gatewayTestOrganizationID},
+		Name:            "Old Gateway",
+		FQDN:            "old.example.test",
+		Status:          "pending",
+		CreatedAt:       fixedNow.Add(-time.Hour),
+		UpdatedAt:       fixedNow.Add(-time.Hour),
 	})
-
-	_, err := service.UpdateGateway("gw-1", UpdateGatewayRequest{
-		FederationConfig: &models.FederationConfig{
-			Issuer:   "https://new-idp.example.test",
-			ClientID: "new-client",
-		},
-	})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("gateway federation config update error = %v, want ErrInvalidRequest", err)
-	}
-
-	_, err = service.UpdateGateway("gw-1", UpdateGatewayRequest{AuthMode: "federated"})
-	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("gateway federated auth update error = %v, want ErrInvalidRequest", err)
-	}
 
 	updated, err := service.UpdateGateway("gw-1", UpdateGatewayRequest{
 		Name:              "New Gateway",
@@ -150,24 +99,13 @@ func TestServiceUpdateGatewayRejectsFederationConfigAndCanClearLegacyFederation(
 	if updated.Name != "New Gateway" || updated.FQDN != "new.example.test" || len(updated.AssignedResources) != 2 {
 		t.Fatalf("gateway fields not updated: %+v", updated)
 	}
-	if updated.FederationConfig == nil || updated.FederationConfig.ClientSecret != "secret-1" {
-		t.Fatalf("legacy federation config should be preserved on unrelated updates: %+v", updated.FederationConfig)
-	}
 
 	detail, err := service.GetGatewayForAdmin("gw-1")
 	if err != nil {
 		t.Fatalf("GetGatewayForAdmin returned error: %v", err)
 	}
-	if detail.AuthMode != "builtin" || detail.FederationConfig != nil {
-		t.Fatalf("admin view should hide legacy federation config: auth=%q federation=%+v", detail.AuthMode, detail.FederationConfig)
-	}
-
-	updated, err = service.UpdateGateway("gw-1", UpdateGatewayRequest{AuthMode: "builtin"})
-	if err != nil {
-		t.Fatalf("UpdateGateway builtin returned error: %v", err)
-	}
-	if updated.AuthMode != "builtin" || updated.FederationConfig != nil {
-		t.Fatalf("builtin update did not clear federation config: auth=%q federation=%+v", updated.AuthMode, updated.FederationConfig)
+	if detail.CertPEM != "" {
+		t.Fatalf("admin view should hide certificate PEM")
 	}
 }
 

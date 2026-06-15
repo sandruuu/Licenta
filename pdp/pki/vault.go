@@ -104,6 +104,7 @@ func (v *VaultClient) SignCSRVerbatim(csrPEM []byte, role, ttl string) ([]byte, 
 type SignCSROptions struct {
 	CommonName string
 	DNSNames   []string
+	IPSANs     []string
 	URISANs    []string
 }
 
@@ -135,6 +136,9 @@ func (v *VaultClient) signCSR(csrPEM []byte, role, ttl, operation string, option
 	}
 	if value := strings.Join(trimNonEmpty(options.DNSNames), ","); value != "" {
 		reqBody["alt_names"] = value
+	}
+	if value := strings.Join(trimNonEmpty(options.IPSANs), ","); value != "" {
+		reqBody["ip_sans"] = value
 	}
 	if value := strings.Join(trimNonEmpty(options.URISANs), ","); value != "" {
 		reqBody["uri_sans"] = value

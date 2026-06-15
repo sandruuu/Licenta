@@ -4,18 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
 	"pdp/store"
 )
 
 func newSessionTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	s := store.New(t.TempDir())
-	if err := s.InitDB(); err != nil {
-		t.Fatalf("InitDB() error = %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
+	return testdb.NewStore(t)
 }
 
 func TestSessionManagerPublishesDeleteEventOnExplicitRevoke(t *testing.T) {
@@ -55,53 +51,53 @@ func TestSessionManagerRevokesDeviceUserSessionsOnAgentLogout(t *testing.T) {
 	s := newSessionTestStore(t)
 	now := time.Now()
 	matchingOne := &models.Session{
-		ID:        "sess-match-1",
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-ssh",
-		Protocol:  "ssh",
-		TenantID:  "tenant-1",
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             "sess-match-1",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-ssh",
+		Protocol:       "ssh",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	}
 	matchingTwo := &models.Session{
-		ID:        "sess-match-2",
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-web",
-		Protocol:  "https",
-		TenantID:  "tenant-1",
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             "sess-match-2",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-web",
+		Protocol:       "https",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	}
 	otherDevice := &models.Session{
-		ID:        "sess-other-device",
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-2",
-		Resource:  "res-rdp",
-		Protocol:  "rdp",
-		TenantID:  "tenant-1",
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             "sess-other-device",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-2",
+		Resource:       "res-rdp",
+		Protocol:       "rdp",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	}
-	otherTenant := &models.Session{
-		ID:        "sess-other-tenant",
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-db",
-		Protocol:  "tcp",
-		TenantID:  "tenant-2",
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+	otherOrganization := &models.Session{
+		ID:             "sess-other-organization",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-db",
+		Protocol:       "tcp",
+		OrganizationID: "organization-2",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	}
 	s.SaveSession(matchingOne)
 	s.SaveSession(matchingTwo)
 	s.SaveSession(otherDevice)
-	s.SaveSession(otherTenant)
+	s.SaveSession(otherOrganization)
 
 	sm := NewSessionManager(s, time.Hour, 10)
 	var deleted []string
@@ -111,7 +107,7 @@ func TestSessionManagerRevokesDeviceUserSessionsOnAgentLogout(t *testing.T) {
 		reasons = append(reasons, reason)
 	})
 
-	if got := sm.RevokeSessionsForDeviceUser("user-1", "device-1", "tenant-1", "agent_logout"); got != 2 {
+	if got := sm.RevokeSessionsForDeviceUser("user-1", "device-1", "organization-1", "agent_logout"); got != 2 {
 		t.Fatalf("RevokeSessionsForDeviceUser() = %d, want 2", got)
 	}
 	for _, id := range []string{matchingOne.ID, matchingTwo.ID} {
@@ -120,7 +116,7 @@ func TestSessionManagerRevokesDeviceUserSessionsOnAgentLogout(t *testing.T) {
 			t.Fatalf("session %s revoked = %v, found=%v", id, ok && session.Revoked, ok)
 		}
 	}
-	for _, id := range []string{otherDevice.ID, otherTenant.ID} {
+	for _, id := range []string{otherDevice.ID, otherOrganization.ID} {
 		session, ok := s.GetSession(id)
 		if !ok || session.Revoked {
 			t.Fatalf("session %s should remain active, session=%#v found=%v", id, session, ok)
@@ -141,40 +137,40 @@ func TestSessionManagerRevokesSessionsByEnterpriseScopes(t *testing.T) {
 	now := time.Now()
 	sessions := []*models.Session{
 		{
-			ID:        "sess-device",
-			UserID:    "user-1",
-			Username:  "laura",
-			DeviceID:  "device-1",
-			Resource:  "res-ssh",
-			GatewayID: "gw-1",
-			Protocol:  "ssh",
-			TenantID:  "tenant-1",
-			CreatedAt: now.Add(-time.Minute),
-			ExpiresAt: now.Add(time.Hour),
+			ID:             "sess-device",
+			UserID:         "user-1",
+			Username:       "laura",
+			DeviceID:       "device-1",
+			Resource:       "res-ssh",
+			GatewayID:      "gw-1",
+			Protocol:       "ssh",
+			OrganizationID: "organization-1",
+			CreatedAt:      now.Add(-time.Minute),
+			ExpiresAt:      now.Add(time.Hour),
 		},
 		{
-			ID:        "sess-resource",
-			UserID:    "user-2",
-			Username:  "alex",
-			DeviceID:  "device-2",
-			Resource:  "res-web",
-			GatewayID: "gw-1",
-			Protocol:  "https",
-			TenantID:  "tenant-1",
-			CreatedAt: now.Add(-time.Minute),
-			ExpiresAt: now.Add(time.Hour),
+			ID:             "sess-resource",
+			UserID:         "user-2",
+			Username:       "alex",
+			DeviceID:       "device-2",
+			Resource:       "res-web",
+			GatewayID:      "gw-1",
+			Protocol:       "https",
+			OrganizationID: "organization-1",
+			CreatedAt:      now.Add(-time.Minute),
+			ExpiresAt:      now.Add(time.Hour),
 		},
 		{
-			ID:        "sess-gateway-other-tenant",
-			UserID:    "user-3",
-			Username:  "mara",
-			DeviceID:  "device-3",
-			Resource:  "res-db",
-			GatewayID: "gw-1",
-			Protocol:  "tcp",
-			TenantID:  "tenant-2",
-			CreatedAt: now.Add(-time.Minute),
-			ExpiresAt: now.Add(time.Hour),
+			ID:             "sess-gateway-other-organization",
+			UserID:         "user-3",
+			Username:       "mara",
+			DeviceID:       "device-3",
+			Resource:       "res-db",
+			GatewayID:      "gw-1",
+			Protocol:       "tcp",
+			OrganizationID: "organization-2",
+			CreatedAt:      now.Add(-time.Minute),
+			ExpiresAt:      now.Add(time.Hour),
 		},
 	}
 	for _, session := range sessions {
@@ -189,13 +185,13 @@ func TestSessionManagerRevokesSessionsByEnterpriseScopes(t *testing.T) {
 		reasons = append(reasons, reason)
 	})
 
-	if got := sm.RevokeSessionsForDevice("device-1", "tenant-1", "device_revoked"); got != 1 {
+	if got := sm.RevokeSessionsForDevice("device-1", "organization-1", "device_revoked"); got != 1 {
 		t.Fatalf("RevokeSessionsForDevice() = %d, want 1", got)
 	}
-	if got := sm.RevokeSessionsForResource("res-web", "tenant-1", "resource_disabled"); got != 1 {
+	if got := sm.RevokeSessionsForResource("res-web", "organization-1", "resource_disabled"); got != 1 {
 		t.Fatalf("RevokeSessionsForResource() = %d, want 1", got)
 	}
-	if got := sm.RevokeSessionsForGateway("gw-1", "tenant-2", "gateway_revoked"); got != 1 {
+	if got := sm.RevokeSessionsForGateway("gw-1", "organization-2", "gateway_revoked"); got != 1 {
 		t.Fatalf("RevokeSessionsForGateway() = %d, want 1", got)
 	}
 
@@ -264,13 +260,13 @@ func TestSessionManagerReusesAndRenewsResourceSession(t *testing.T) {
 	s := newSessionTestStore(t)
 	sm := NewSessionManager(s, 10*time.Minute, 5)
 	req := models.AccessRequest{
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-ssh",
-		GatewayID: "gw-1",
-		Protocol:  "ssh",
-		TenantID:  "tenant-1",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-ssh",
+		GatewayID:      "gw-1",
+		Protocol:       "ssh",
+		OrganizationID: "organization-1",
 	}
 	first, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{RiskScore: 10}, req, time.Minute)
 	if err != nil {
@@ -304,13 +300,13 @@ func TestSessionManagerAppliesPolicySessionControls(t *testing.T) {
 	s := newSessionTestStore(t)
 	sm := NewSessionManager(s, time.Hour, 5)
 	req := models.AccessRequest{
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-admin",
-		GatewayID: "gw-1",
-		Protocol:  "https",
-		TenantID:  "tenant-1",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-admin",
+		GatewayID:      "gw-1",
+		Protocol:       "https",
+		OrganizationID: "organization-1",
 	}
 	start := time.Now()
 	session, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{
@@ -359,13 +355,13 @@ func TestSessionManagerCapsRenewalAtPolicyMaxAge(t *testing.T) {
 	sm := NewSessionManager(s, time.Hour, 5)
 	now := time.Now()
 	req := models.AccessRequest{
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-admin",
-		GatewayID: "gw-1",
-		Protocol:  "https",
-		TenantID:  "tenant-1",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-admin",
+		GatewayID:      "gw-1",
+		Protocol:       "https",
+		OrganizationID: "organization-1",
 	}
 	existing := &models.Session{
 		ID:                   "sess-policy-max-age",
@@ -375,7 +371,7 @@ func TestSessionManagerCapsRenewalAtPolicyMaxAge(t *testing.T) {
 		Resource:             req.Resource,
 		GatewayID:            req.GatewayID,
 		Protocol:             req.Protocol,
-		TenantID:             req.TenantID,
+		OrganizationID:       req.OrganizationID,
 		RiskScore:            10,
 		CreatedAt:            now.Add(-115 * time.Second),
 		ExpiresAt:            now.Add(20 * time.Second),
@@ -408,13 +404,13 @@ func TestSessionManagerRevokesAndReplacesSessionOnRiskIncrease(t *testing.T) {
 	sm := NewSessionManager(s, time.Hour, 5)
 	now := time.Now()
 	req := models.AccessRequest{
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  "device-1",
-		Resource:  "res-admin",
-		GatewayID: "gw-1",
-		Protocol:  "https",
-		TenantID:  "tenant-1",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		Resource:       "res-admin",
+		GatewayID:      "gw-1",
+		Protocol:       "https",
+		OrganizationID: "organization-1",
 	}
 	existing := &models.Session{
 		ID:                   "sess-risk-baseline",
@@ -424,7 +420,7 @@ func TestSessionManagerRevokesAndReplacesSessionOnRiskIncrease(t *testing.T) {
 		Resource:             req.Resource,
 		GatewayID:            req.GatewayID,
 		Protocol:             req.Protocol,
-		TenantID:             req.TenantID,
+		OrganizationID:       req.OrganizationID,
 		RiskScore:            20,
 		CreatedAt:            now.Add(-time.Minute),
 		ExpiresAt:            now.Add(time.Hour),

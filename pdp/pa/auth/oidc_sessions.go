@@ -4,9 +4,17 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
+)
+
+const (
+	oidcAuthorizeStateKind  = "oidc_authorize"
+	oidcAuthCodeStateKind   = "oidc_auth_code"
+	oidcRefreshStateKind    = "oidc_refresh"
+	oidcFederationStateKind = "oidc_federation"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -38,9 +46,12 @@ func (m *OIDCManager) CreateAuthorizeSession(clientID, redirectURI, state, scope
 		ExpiresAt:           time.Now().Add(m.authorizeSessionTTL),
 	}
 
-	m.mu.Lock()
-	m.PendingAuthorize[id] = session
-	m.mu.Unlock()
+	if m.state == nil {
+		return nil, fmt.Errorf("OIDC state store is unavailable")
+	}
+	if err := saveOIDCState(m.state, oidcAuthorizeStateKind, id, session, session.ExpiresAt); err != nil {
+		return nil, err
+	}
 
 	log.Printf("[OIDC] Authorize session created: %s (client=%s, state=%s)", id, clientID, state)
 	return session, nil
@@ -48,25 +59,27 @@ func (m *OIDCManager) CreateAuthorizeSession(clientID, redirectURI, state, scope
 
 // GetAuthorizeSession retrieves a pending OIDC authorize session
 func (m *OIDCManager) GetAuthorizeSession(id string) (*OIDCAuthorizeSession, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	sess, ok := m.PendingAuthorize[id]
-	return sess, ok
+	var sess OIDCAuthorizeSession
+	if ok := loadOIDCState(m.state, oidcAuthorizeStateKind, id, &sess); !ok {
+		return nil, false
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		_ = m.state.DeleteEphemeralState(oidcAuthorizeStateKind, id)
+		return nil, false
+	}
+	return &sess, true
 }
 
 // CompleteAuthorizeSession marks the session as authenticated and generates
 // an authorization code that the gateway can exchange for a token.
 func (m *OIDCManager) CompleteAuthorizeSession(sessionID, authToken, userID, username, role string, mfaDone bool) (*AuthorizationCode, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	sess, ok := m.PendingAuthorize[sessionID]
+	sess, ok := m.GetAuthorizeSession(sessionID)
 	if !ok {
 		return nil, fmt.Errorf("OIDC authorize session not found: %s", sessionID)
 	}
 
 	if time.Now().After(sess.ExpiresAt) {
-		delete(m.PendingAuthorize, sessionID)
+		_ = m.state.DeleteEphemeralState(oidcAuthorizeStateKind, sessionID)
 		return nil, fmt.Errorf("OIDC authorize session expired")
 	}
 
@@ -95,13 +108,16 @@ func (m *OIDCManager) CompleteAuthorizeSession(sessionID, authToken, userID, use
 		Used:                false,
 	}
 
-	m.AuthCodes[code] = authCode
+	if err := saveOIDCState(m.state, oidcAuthCodeStateKind, code, authCode, authCode.ExpiresAt); err != nil {
+		return nil, err
+	}
 
 	// Update session status
 	sess.Status = "authenticated"
 	sess.AuthToken = authToken
 	sess.UserID = userID
 	sess.Username = username
+	_ = saveOIDCState(m.state, oidcAuthorizeStateKind, sessionID, sess, sess.ExpiresAt)
 
 	log.Printf("[OIDC] Authorization code generated for session %s: user=%s code=%s...%s",
 		sessionID, username, code[:4], code[len(code)-4:])
@@ -113,24 +129,21 @@ func (m *OIDCManager) CompleteAuthorizeSession(sessionID, authToken, userID, use
 // The code is single-use and must be used within 60 seconds.
 // Returns the auth code and a refresh token string.
 func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, codeVerifier string) (*AuthorizationCode, string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	authCode, ok := m.AuthCodes[code]
-	if !ok {
+	authCode := &AuthorizationCode{}
+	if ok := loadOIDCState(m.state, oidcAuthCodeStateKind, code, authCode); !ok {
+		return nil, "", fmt.Errorf("invalid authorization code")
+	}
+	if authCode.Code != code {
 		return nil, "", fmt.Errorf("invalid authorization code")
 	}
 
 	// Validate: code must not be used
 	if authCode.Used {
-		// Security: if a code is replayed, invalidate it
-		delete(m.AuthCodes, code)
 		return nil, "", fmt.Errorf("authorization code already used")
 	}
 
 	// Validate: code must not be expired
 	if time.Now().After(authCode.ExpiresAt) {
-		delete(m.AuthCodes, code)
 		return nil, "", fmt.Errorf("authorization code expired")
 	}
 
@@ -145,9 +158,9 @@ func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, co
 	}
 
 	// Validate client secret
-	client, ok := m.Clients[clientID]
-	if !ok {
-		return nil, "", fmt.Errorf("unknown client_id: %s", clientID)
+	client, err := m.ValidateClientID(clientID)
+	if err != nil {
+		return nil, "", err
 	}
 	if client.ClientSecret != "" && subtle.ConstantTimeCompare([]byte(client.ClientSecret), []byte(clientSecret)) != 1 {
 		return nil, "", fmt.Errorf("invalid client_secret")
@@ -167,15 +180,33 @@ func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, co
 		return nil, "", fmt.Errorf("PKCE code_verifier mismatch")
 	}
 
-	// Mark as used
-	authCode.Used = true
+	raw, ok, err := m.state.TakeEphemeralState(oidcAuthCodeStateKind, code)
+	if err != nil {
+		return nil, "", fmt.Errorf("consume authorization code: %w", err)
+	}
+	if !ok {
+		return nil, "", fmt.Errorf("authorization code already used")
+	}
+	consumedCode := &AuthorizationCode{}
+	if err := json.Unmarshal(raw, consumedCode); err != nil || consumedCode.Code != authCode.Code {
+		return nil, "", fmt.Errorf("invalid authorization code")
+	}
+	if consumedCode.Used {
+		return nil, "", fmt.Errorf("authorization code already used")
+	}
+	consumedCode.Used = true
+	replayExpiresAt := consumedCode.ExpiresAt
+	if !replayExpiresAt.After(time.Now()) {
+		replayExpiresAt = time.Now().Add(m.authCodeTTL)
+	}
+	_ = saveOIDCState(m.state, oidcAuthCodeStateKind, code, consumedCode, replayExpiresAt)
 
 	// Generate a refresh token for the client
 	refreshToken, err := generateOIDCCode()
 	if err != nil {
 		return nil, "", fmt.Errorf("generate refresh token: %w", err)
 	}
-	m.RefreshTokens[refreshToken] = &RefreshToken{
+	refresh := &RefreshToken{
 		Token:     refreshToken,
 		ClientID:  clientID,
 		UserID:    authCode.UserID,
@@ -188,8 +219,37 @@ func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, co
 		ExpiresAt: time.Now().Add(m.refreshTokenTTL),
 		Used:      false,
 	}
+	if err := saveOIDCState(m.state, oidcRefreshStateKind, refreshToken, refresh, refresh.ExpiresAt); err != nil {
+		return nil, "", err
+	}
 
 	log.Printf("[OIDC] Authorization code exchanged: user=%s client=%s (refresh_token issued)", authCode.Username, clientID)
 
 	return authCode, refreshToken, nil
+}
+
+func saveOIDCState(store RuntimeStateStore, kind, key string, value interface{}, expiresAt time.Time) error {
+	if store == nil {
+		return fmt.Errorf("OIDC state store is unavailable")
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return store.SaveEphemeralState(kind, key, raw, expiresAt)
+}
+
+func loadOIDCState(store RuntimeStateStore, kind, key string, value interface{}) bool {
+	if store == nil {
+		return false
+	}
+	raw, ok := store.GetEphemeralState(kind, key)
+	if !ok {
+		return false
+	}
+	if err := json.Unmarshal(raw, value); err != nil {
+		_ = store.DeleteEphemeralState(kind, key)
+		return false
+	}
+	return true
 }

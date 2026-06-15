@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -22,34 +20,42 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 	if resources == nil {
 		resources = []string{}
 	}
-	tenantIDs := gw.TenantIDs
-	if tenantIDs == nil {
-		tenantIDs = []string{}
+	organizationIDs := gw.OrganizationIDs
+	if organizationIDs == nil {
+		organizationIDs = []string{}
 	}
-	if gw.TenantID != "" && len(tenantIDs) == 0 {
-		tenantIDs = []string{gw.TenantID}
-	}
-	authMode := gw.AuthMode
-	if authMode == "" {
-		authMode = "builtin"
-	}
-	fedConfigJSON := ""
-	if gw.FederationConfig != nil {
-		fedConfigJSON = toJSON(gw.FederationConfig)
+	if gw.OrganizationID != "" && len(organizationIDs) == 0 {
+		organizationIDs = []string{gw.OrganizationID}
 	}
 
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO gateways
-		(id, name, fqdn, tenant_id, tenant_ids_json, enrollment_token, token_expires_at, status,
+	_, err := s.db.Exec(`INSERT INTO gateways
+		(id, name, fqdn, organization_id, organization_ids_json, enrollment_token, token_expires_at, status,
 		 cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		 oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		 assigned_resources_json, auth_mode, federation_config_json,
+		 listen_addr, public_ip, assigned_resources_json,
 		 created_at, updated_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		gw.ID, gw.Name, gw.FQDN, gw.TenantID, toJSON(tenantIDs),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			fqdn = EXCLUDED.fqdn,
+			organization_id = EXCLUDED.organization_id,
+			organization_ids_json = EXCLUDED.organization_ids_json,
+			enrollment_token = EXCLUDED.enrollment_token,
+			token_expires_at = EXCLUDED.token_expires_at,
+			status = EXCLUDED.status,
+			cert_pem = EXCLUDED.cert_pem,
+			cert_fingerprint = EXCLUDED.cert_fingerprint,
+			cert_serial = EXCLUDED.cert_serial,
+			cert_expires_at = EXCLUDED.cert_expires_at,
+			listen_addr = EXCLUDED.listen_addr,
+			public_ip = EXCLUDED.public_ip,
+			assigned_resources_json = EXCLUDED.assigned_resources_json,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at,
+			last_seen_at = EXCLUDED.last_seen_at`,
+		gw.ID, gw.Name, gw.FQDN, gw.OrganizationID, toJSON(organizationIDs),
 		gw.EnrollmentToken, gw.TokenExpiresAt, gw.Status,
 		gw.CertPEM, gw.CertFingerprint, gw.CertSerial, gw.CertExpiresAt,
-		gw.OIDCClientID, gw.OIDCClientSecret, gw.ListenAddr, gw.PublicIP,
-		toJSON(resources), authMode, fedConfigJSON,
+		gw.ListenAddr, gw.PublicIP, toJSON(resources),
 		fmtTime(gw.CreatedAt), fmtTime(gw.UpdatedAt), fmtTime(gw.LastSeenAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save gateway %s: %v", gw.ID, err)
@@ -57,11 +63,10 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 }
 
 func (s *Store) GetGateway(id string) (*models.Gateway, bool) {
-	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, organization_id, organization_ids_json,
 		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		assigned_resources_json, auth_mode, federation_config_json,
+		listen_addr, public_ip, assigned_resources_json,
 		created_at, updated_at, last_seen_at
 		FROM gateways WHERE id = ?`, id)
 	return s.scanGateway(row)
@@ -79,11 +84,10 @@ func (s *Store) GetGatewayByTokenHash(tokenHash string) (*models.Gateway, bool) 
 	if tokenHash == "" {
 		return nil, false
 	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, organization_id, organization_ids_json,
 		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		assigned_resources_json, auth_mode, federation_config_json,
+		listen_addr, public_ip, assigned_resources_json,
 		created_at, updated_at, last_seen_at
 		FROM gateways WHERE enrollment_token = ?`, tokenHash)
 	return s.scanGateway(row)
@@ -120,22 +124,20 @@ func (s *Store) GetGatewayByFQDN(fqdn string) (*models.Gateway, bool) {
 	if fqdn == "" {
 		return nil, false
 	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+	row := s.db.QueryRow(`SELECT id, name, fqdn, organization_id, organization_ids_json,
 		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		assigned_resources_json, auth_mode, federation_config_json,
+		listen_addr, public_ip, assigned_resources_json,
 		created_at, updated_at, last_seen_at
 		FROM gateways WHERE fqdn = ?`, fqdn)
 	return s.scanGateway(row)
 }
 
 func (s *Store) ListGateways() []*models.Gateway {
-	rows, err := s.db.Query(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
+	rows, err := s.db.Query(`SELECT id, name, fqdn, organization_id, organization_ids_json,
 		enrollment_token, token_expires_at, status,
 		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		assigned_resources_json, auth_mode, federation_config_json,
+		listen_addr, public_ip, assigned_resources_json,
 		created_at, updated_at, last_seen_at
 		FROM gateways ORDER BY created_at DESC`)
 	if err != nil {
@@ -147,28 +149,21 @@ func (s *Store) ListGateways() []*models.Gateway {
 	var gateways []*models.Gateway
 	for rows.Next() {
 		gw := &models.Gateway{}
-		var tenantIDsJSON, resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
-		if err := rows.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.TenantID, &tenantIDsJSON,
+		var organizationIDsJSON, resourcesJSON, createdAt, updatedAt, lastSeenAt string
+		if err := rows.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.OrganizationID, &organizationIDsJSON,
 			&gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
 			&gw.CertPEM, &gw.CertFingerprint, &gw.CertSerial, &gw.CertExpiresAt,
-			&gw.OIDCClientID, &gw.OIDCClientSecret, &gw.ListenAddr, &gw.PublicIP,
-			&resourcesJSON, &gw.AuthMode, &fedConfigJSON, &createdAt, &updatedAt, &lastSeenAt); err != nil {
+			&gw.ListenAddr, &gw.PublicIP, &resourcesJSON, &createdAt, &updatedAt, &lastSeenAt); err != nil {
 			continue
 		}
-		gw.TenantIDs = fromJSON[[]string](tenantIDsJSON)
-		if gw.TenantIDs == nil {
-			gw.TenantIDs = []string{}
+		gw.OrganizationIDs = fromJSON[[]string](organizationIDsJSON)
+		if gw.OrganizationIDs == nil {
+			gw.OrganizationIDs = []string{}
 		}
-		if gw.TenantID == "" && len(gw.TenantIDs) == 1 {
-			gw.TenantID = gw.TenantIDs[0]
+		if gw.OrganizationID == "" && len(gw.OrganizationIDs) == 1 {
+			gw.OrganizationID = gw.OrganizationIDs[0]
 		}
 		gw.AssignedResources = fromJSON[[]string](resourcesJSON)
-		if fedConfigJSON != "" {
-			gw.FederationConfig = fromJSONPtr[models.FederationConfig](fedConfigJSON)
-		}
-		if gw.AuthMode == "" {
-			gw.AuthMode = "builtin"
-		}
 		gw.CreatedAt = parseTime(createdAt)
 		gw.UpdatedAt = parseTime(updatedAt)
 		gw.LastSeenAt = parseTime(lastSeenAt)
@@ -177,14 +172,14 @@ func (s *Store) ListGateways() []*models.Gateway {
 	return gateways
 }
 
-func (s *Store) ListGatewaysByTenant(tenantID string) []*models.Gateway {
+func (s *Store) ListGatewaysByOrganization(organizationID string) []*models.Gateway {
 	gateways := s.ListGateways()
 	filtered := make([]*models.Gateway, 0, len(gateways))
 	for _, gateway := range gateways {
 		if gateway == nil {
 			continue
 		}
-		if strings.TrimSpace(gateway.TenantID) == strings.TrimSpace(tenantID) {
+		if strings.TrimSpace(gateway.OrganizationID) == strings.TrimSpace(organizationID) {
 			filtered = append(filtered, gateway)
 		}
 	}
@@ -202,46 +197,24 @@ func (s *Store) DeleteGateway(id string) bool {
 
 func (s *Store) scanGateway(row *sql.Row) (*models.Gateway, bool) {
 	gw := &models.Gateway{}
-	var tenantIDsJSON, resourcesJSON, fedConfigJSON, createdAt, updatedAt, lastSeenAt string
-	err := row.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.TenantID, &tenantIDsJSON,
+	var organizationIDsJSON, resourcesJSON, createdAt, updatedAt, lastSeenAt string
+	err := row.Scan(&gw.ID, &gw.Name, &gw.FQDN, &gw.OrganizationID, &organizationIDsJSON,
 		&gw.EnrollmentToken, &gw.TokenExpiresAt, &gw.Status,
 		&gw.CertPEM, &gw.CertFingerprint, &gw.CertSerial, &gw.CertExpiresAt,
-		&gw.OIDCClientID, &gw.OIDCClientSecret, &gw.ListenAddr, &gw.PublicIP,
-		&resourcesJSON, &gw.AuthMode, &fedConfigJSON, &createdAt, &updatedAt, &lastSeenAt)
+		&gw.ListenAddr, &gw.PublicIP, &resourcesJSON, &createdAt, &updatedAt, &lastSeenAt)
 	if err != nil {
 		return nil, false
 	}
-	gw.TenantIDs = fromJSON[[]string](tenantIDsJSON)
-	if gw.TenantIDs == nil {
-		gw.TenantIDs = []string{}
+	gw.OrganizationIDs = fromJSON[[]string](organizationIDsJSON)
+	if gw.OrganizationIDs == nil {
+		gw.OrganizationIDs = []string{}
 	}
-	if gw.TenantID == "" && len(gw.TenantIDs) == 1 {
-		gw.TenantID = gw.TenantIDs[0]
+	if gw.OrganizationID == "" && len(gw.OrganizationIDs) == 1 {
+		gw.OrganizationID = gw.OrganizationIDs[0]
 	}
 	gw.AssignedResources = fromJSON[[]string](resourcesJSON)
-	if fedConfigJSON != "" {
-		gw.FederationConfig = fromJSONPtr[models.FederationConfig](fedConfigJSON)
-	}
-	if gw.AuthMode == "" {
-		gw.AuthMode = "builtin"
-	}
 	gw.CreatedAt = parseTime(createdAt)
 	gw.UpdatedAt = parseTime(updatedAt)
 	gw.LastSeenAt = parseTime(lastSeenAt)
 	return gw, true
-}
-
-// GetGatewayByOIDCClientID looks up a gateway by its OIDC client_id.
-func (s *Store) GetGatewayByOIDCClientID(clientID string) (*models.Gateway, bool) {
-	if clientID == "" {
-		return nil, false
-	}
-	row := s.db.QueryRow(`SELECT id, name, fqdn, tenant_id, tenant_ids_json,
-		enrollment_token, token_expires_at, status,
-		cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
-		oidc_client_id, oidc_client_secret, listen_addr, public_ip,
-		assigned_resources_json, auth_mode, federation_config_json,
-		created_at, updated_at, last_seen_at
-		FROM gateways WHERE oidc_client_id = ?`, clientID)
-	return s.scanGateway(row)
 }

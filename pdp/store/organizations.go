@@ -26,9 +26,12 @@ func (s *Store) SaveOrganizationMembership(membership *models.OrganizationMember
 	if createdAt.IsZero() {
 		createdAt = time.Now()
 	}
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO organization_memberships
+	_, err := s.db.Exec(`INSERT INTO organization_memberships
 		(user_id, organization_id, role, created_at)
-		VALUES (?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (user_id, organization_id) DO UPDATE SET
+			role = EXCLUDED.role,
+			created_at = EXCLUDED.created_at`,
 		userID, organizationID, role, fmtTime(createdAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save organization membership user=%s organization=%s: %v", userID, organizationID, err)
@@ -48,14 +51,14 @@ func (s *Store) UserHasOrganizationAccess(userID, organizationID string) bool {
 	return err == nil && count > 0
 }
 
-func (s *Store) ListOrganizationsForUser(userID string) []*models.Tenant {
+func (s *Store) ListOrganizationsForUser(userID string) []*models.Organization {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return nil
 	}
 	rows, err := s.db.Query(`SELECT o.id, o.name, o.domain, o.description, o.enabled,
 			o.default_idp_id, o.domains_json, o.created_at, o.updated_at
-		FROM tenants o
+		FROM organizations o
 		INNER JOIN organization_memberships m ON m.organization_id = o.id
 		WHERE m.user_id = ?
 		ORDER BY o.created_at DESC`, userID)
@@ -98,10 +101,10 @@ func (s *Store) DeleteOrganizationMemberships(organizationID string) {
 	}
 }
 
-func scanOrganizations(rows *sql.Rows) []*models.Tenant {
-	var organizations []*models.Tenant
+func scanOrganizations(rows *sql.Rows) []*models.Organization {
+	var organizations []*models.Organization
 	for rows.Next() {
-		org := &models.Tenant{}
+		org := &models.Organization{}
 		var enabled int
 		var createdAt, updatedAt, domainsJSON string
 		if err := rows.Scan(&org.ID, &org.Name, &org.Domain, &org.Description, &enabled,

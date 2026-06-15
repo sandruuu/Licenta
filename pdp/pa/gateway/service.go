@@ -18,8 +18,6 @@ const (
 	defaultEnrollmentTokenTTL      = time.Hour
 	gatewayIDBytes                 = 16
 	gatewayEnrollmentTokenBytes    = 32
-
-	defaultGatewayAuthMode = "builtin"
 )
 
 var (
@@ -77,13 +75,10 @@ type RenewalResult struct {
 }
 
 type CreateGatewayRequest struct {
-	TenantID          string                   `json:"tenant_id"`
-	OrganizationID    string                   `json:"organization_id,omitempty"`
-	Name              string                   `json:"name"`
-	FQDN              string                   `json:"fqdn,omitempty"`
-	AssignedResources []string                 `json:"assigned_resources,omitempty"`
-	AuthMode          string                   `json:"auth_mode,omitempty"`
-	FederationConfig  *models.FederationConfig `json:"federation_config,omitempty"`
+	OrganizationID    string   `json:"organization_id"`
+	Name              string   `json:"name"`
+	FQDN              string   `json:"fqdn,omitempty"`
+	AssignedResources []string `json:"assigned_resources,omitempty"`
 }
 
 type CreateGatewayResult struct {
@@ -92,13 +87,10 @@ type CreateGatewayResult struct {
 }
 
 type UpdateGatewayRequest struct {
-	TenantID          string                   `json:"tenant_id,omitempty"`
-	OrganizationID    string                   `json:"organization_id,omitempty"`
-	Name              string                   `json:"name,omitempty"`
-	FQDN              string                   `json:"fqdn,omitempty"`
-	AssignedResources []string                 `json:"assigned_resources,omitempty"`
-	AuthMode          string                   `json:"auth_mode,omitempty"`
-	FederationConfig  *models.FederationConfig `json:"federation_config,omitempty"`
+	OrganizationID    string   `json:"organization_id,omitempty"`
+	Name              string   `json:"name,omitempty"`
+	FQDN              string   `json:"fqdn,omitempty"`
+	AssignedResources []string `json:"assigned_resources,omitempty"`
 }
 
 type RegenerateTokenResult struct {
@@ -108,23 +100,20 @@ type RegenerateTokenResult struct {
 }
 
 type GatewayListItem struct {
-	ID                string                   `json:"id"`
-	TenantID          string                   `json:"organization_id"`
-	Name              string                   `json:"name"`
-	FQDN              string                   `json:"fqdn"`
-	Status            string                   `json:"status"`
-	ListenAddr        string                   `json:"listen_addr,omitempty"`
-	PublicIP          string                   `json:"public_ip,omitempty"`
-	OIDCClientID      string                   `json:"oidc_client_id,omitempty"`
-	EnrollmentToken   string                   `json:"enrollment_token,omitempty"`
-	TokenExpiresAt    string                   `json:"token_expires_at,omitempty"`
-	CertExpiresAt     string                   `json:"cert_expires_at,omitempty"`
-	AssignedResources []string                 `json:"assigned_resources,omitempty"`
-	AuthMode          string                   `json:"auth_mode"`
-	FederationConfig  *models.FederationConfig `json:"federation_config,omitempty"`
-	CreatedAt         time.Time                `json:"created_at"`
-	UpdatedAt         time.Time                `json:"updated_at"`
-	LastSeenAt        time.Time                `json:"last_seen_at,omitempty"`
+	ID                string    `json:"id"`
+	OrganizationID    string    `json:"organization_id"`
+	Name              string    `json:"name"`
+	FQDN              string    `json:"fqdn"`
+	Status            string    `json:"status"`
+	ListenAddr        string    `json:"listen_addr,omitempty"`
+	PublicIP          string    `json:"public_ip,omitempty"`
+	EnrollmentToken   string    `json:"enrollment_token,omitempty"`
+	TokenExpiresAt    string    `json:"token_expires_at,omitempty"`
+	CertExpiresAt     string    `json:"cert_expires_at,omitempty"`
+	AssignedResources []string  `json:"assigned_resources,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	LastSeenAt        time.Time `json:"last_seen_at,omitempty"`
 }
 
 func NewService(store *store.Store, pkiRole string, cfgs ...Config) *Service {
@@ -190,22 +179,12 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	if name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalidRequest)
 	}
-	tenantID, err := s.validateTenant(firstNonEmpty(req.TenantID, req.OrganizationID))
+	organizationID, err := s.validateOrganization(req.OrganizationID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateAssignedResourcesTenant(tenantID, req.AssignedResources); err != nil {
+	if err := s.validateAssignedResourcesOrganization(organizationID, req.AssignedResources); err != nil {
 		return nil, err
-	}
-	authMode := strings.TrimSpace(req.AuthMode)
-	if authMode == "" {
-		authMode = defaultGatewayAuthMode
-	}
-	if authMode != defaultGatewayAuthMode {
-		return nil, fmt.Errorf("%w: gateway authentication is configured at tenant level; use tenant identity providers", ErrInvalidRequest)
-	}
-	if req.FederationConfig != nil {
-		return nil, fmt.Errorf("%w: federation_config is not supported on gateways; configure an identity provider on the tenant", ErrInvalidRequest)
 	}
 
 	gatewayID, err := randomHex(gatewayIDBytes)
@@ -222,15 +201,14 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 	tokenHash := hex.EncodeToString(tokenHashRaw[:])
 	gateway := &models.Gateway{
 		ID:                gatewayID,
-		TenantID:          tenantID,
-		TenantIDs:         []string{tenantID},
+		OrganizationID:    organizationID,
+		OrganizationIDs:   []string{organizationID},
 		Name:              name,
 		FQDN:              strings.TrimSpace(req.FQDN),
 		EnrollmentToken:   tokenHash,
 		TokenExpiresAt:    now.Add(s.enrollmentTokenTTL).Format(time.RFC3339),
 		Status:            "pending",
 		AssignedResources: append([]string(nil), req.AssignedResources...),
-		AuthMode:          authMode,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -259,42 +237,31 @@ func (s *Service) UpdateGateway(id string, req UpdateGatewayRequest) (*models.Ga
 	if req.FQDN != "" {
 		gateway.FQDN = req.FQDN
 	}
-	targetTenantID := gateway.TenantID
-	requestedTenantID := firstNonEmpty(req.TenantID, req.OrganizationID)
-	if strings.TrimSpace(requestedTenantID) != "" && !strings.EqualFold(requestedTenantID, gateway.TenantID) {
+	targetOrganizationID := gateway.OrganizationID
+	requestedOrganizationID := req.OrganizationID
+	if strings.TrimSpace(requestedOrganizationID) != "" && !strings.EqualFold(requestedOrganizationID, gateway.OrganizationID) {
 		if gateway.Status == "enrolled" {
 			return nil, fmt.Errorf("%w: enrolled gateways cannot be moved between organizations", ErrInvalidRequest)
 		}
-		tenantID, err := s.validateTenant(requestedTenantID)
+		organizationID, err := s.validateOrganization(requestedOrganizationID)
 		if err != nil {
 			return nil, err
 		}
-		targetTenantID = tenantID
+		targetOrganizationID = organizationID
 	}
 	targetResources := gateway.AssignedResources
 	if req.AssignedResources != nil {
 		targetResources = append([]string(nil), req.AssignedResources...)
 	}
-	if err := s.validateAssignedResourcesTenant(targetTenantID, targetResources); err != nil {
+	if err := s.validateAssignedResourcesOrganization(targetOrganizationID, targetResources); err != nil {
 		return nil, err
 	}
-	if !strings.EqualFold(targetTenantID, gateway.TenantID) {
-		gateway.TenantID = targetTenantID
-		gateway.TenantIDs = []string{targetTenantID}
+	if !strings.EqualFold(targetOrganizationID, gateway.OrganizationID) {
+		gateway.OrganizationID = targetOrganizationID
+		gateway.OrganizationIDs = []string{targetOrganizationID}
 	}
 	if req.AssignedResources != nil {
 		gateway.AssignedResources = targetResources
-	}
-	authMode := strings.TrimSpace(req.AuthMode)
-	if authMode != "" && authMode != defaultGatewayAuthMode {
-		return nil, fmt.Errorf("%w: gateway authentication is configured at tenant level; use tenant identity providers", ErrInvalidRequest)
-	}
-	if req.FederationConfig != nil {
-		return nil, fmt.Errorf("%w: federation_config is not supported on gateways; configure an identity provider on the tenant", ErrInvalidRequest)
-	}
-	if authMode == defaultGatewayAuthMode {
-		gateway.AuthMode = defaultGatewayAuthMode
-		gateway.FederationConfig = nil
 	}
 	gateway.UpdatedAt = s.clock()
 	s.store.SaveGateway(gateway)
@@ -365,8 +332,8 @@ func (s *Service) publishGatewayRevoked(gateway *models.Gateway, reason string) 
 		return
 	}
 	s.publisher.PublishCAEPEvent(events.TopicGatewayRevoked, map[string]string{
-		"gateway_id": gateway.ID,
-		"tenant_id":  gateway.TenantID,
-		"reason":     reason,
+		"gateway_id":      gateway.ID,
+		"organization_id": gateway.OrganizationID,
+		"reason":          reason,
 	})
 }

@@ -3,8 +3,6 @@ package store
 import (
 	"encoding/json"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────

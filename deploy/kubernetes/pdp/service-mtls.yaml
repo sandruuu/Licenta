@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pdp-mtls
+  namespace: trustcloud
+  labels:
+    app.kubernetes.io/name: pdp
+    app.kubernetes.io/part-of: trustcloud
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app.kubernetes.io/name: pdp
+  ports:
+    - name: tls
+      port: 443
+      targetPort: https

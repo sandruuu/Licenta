@@ -32,7 +32,7 @@ func TestFederationDiscoverRejectsIssuerMismatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fp := NewFederationProvider("openid", nil, time.Minute, time.Second)
+	fp := NewFederationProvider(newFederationTestState(), "openid", nil, time.Minute, time.Second)
 	_, err := fp.Discover(server.URL)
 	if err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
 		t.Fatalf("Discover() error = %v, want issuer mismatch", err)
@@ -55,7 +55,7 @@ func TestGenerateExternalAuthURLIncludesPromptWhenConfigured(t *testing.T) {
 	defer server.Close()
 	issuer = server.URL
 
-	fp := NewFederationProvider("openid profile email", nil, time.Minute, time.Second)
+	fp := NewFederationProvider(newFederationTestState(), "openid profile email", nil, time.Minute, time.Second)
 	authURL, err := fp.GenerateExternalAuthURL(&models.FederationConfig{
 		Issuer:       issuer,
 		ClientID:     "trustcloud",
@@ -104,7 +104,7 @@ func TestValidateAndMapExternalClaimsVerifiesIDTokenSignature(t *testing.T) {
 	defer server.Close()
 	issuer = server.URL
 
-	fp := NewFederationProvider("openid profile email", map[string]string{
+	fp := NewFederationProvider(newFederationTestState(), "openid profile email", map[string]string{
 		"username": "preferred_username",
 		"email":    "email",
 		"groups":   "groups",
@@ -124,6 +124,29 @@ func TestValidateAndMapExternalClaimsVerifiesIDTokenSignature(t *testing.T) {
 	if _, err := fp.ValidateAndMapExternalClaims(fedCfg, badToken, "nonce-1", nil); err == nil {
 		t.Fatal("ValidateAndMapExternalClaims() accepted token signed by unknown key")
 	}
+}
+
+type federationTestState struct {
+	values map[string][]byte
+}
+
+func newFederationTestState() *federationTestState {
+	return &federationTestState{values: map[string][]byte{}}
+}
+
+func (s *federationTestState) SaveEphemeralState(kind, key string, value []byte, _ time.Time) error {
+	s.values[kind+":"+key] = append([]byte(nil), value...)
+	return nil
+}
+
+func (s *federationTestState) GetEphemeralState(kind, key string) ([]byte, bool) {
+	value, ok := s.values[kind+":"+key]
+	return append([]byte(nil), value...), ok
+}
+
+func (s *federationTestState) DeleteEphemeralState(kind, key string) error {
+	delete(s.values, kind+":"+key)
+	return nil
 }
 
 func rsaTestJWK(kid string, key *rsa.PublicKey) JWK {

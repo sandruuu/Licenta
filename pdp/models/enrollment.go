@@ -19,7 +19,7 @@ type DeviceEnrollment struct {
 	ApprovedBy           string    `json:"approved_by,omitempty"`
 	UserID               string    `json:"user_id,omitempty"`
 	Username             string    `json:"username,omitempty"`
-	TenantID             string    `json:"tenant_id,omitempty"`
+	OrganizationID       string    `json:"organization_id,omitempty"`
 }
 
 // EnrollmentRequest is sent by a device agent to request certificate enrollment.

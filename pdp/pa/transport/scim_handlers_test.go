@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pdp/config"
+	"pdp/internal/testdb"
 	"pdp/models"
 	"pdp/pa"
 	"pdp/store"
@@ -26,7 +27,7 @@ func TestSCIMProvisioningCreatesUsersGroupsAndMemberships(t *testing.T) {
 		"active":true,
 		"emails":[{"value":"alice@example.test","primary":true}]
 	}`
-	recorder := performSCIMRequest(server, http.MethodPost, "/scim/v2/tenant-1/Users", userBody, "scim-secret")
+	recorder := performSCIMRequest(server, http.MethodPost, "/scim/v2/organization-1/Users", userBody, "scim-secret")
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("POST user status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -44,7 +45,7 @@ func TestSCIMProvisioningCreatesUsersGroupsAndMemberships(t *testing.T) {
 		"displayName":"Finance",
 		"members":[{"value":"` + userResp.ID + `","display":"Alice Example"}]
 	}`
-	recorder = performSCIMRequest(server, http.MethodPost, "/scim/v2/tenant-1/Groups", groupBody, "scim-secret")
+	recorder = performSCIMRequest(server, http.MethodPost, "/scim/v2/organization-1/Groups", groupBody, "scim-secret")
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("POST group status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -56,12 +57,12 @@ func TestSCIMProvisioningCreatesUsersGroupsAndMemberships(t *testing.T) {
 		t.Fatalf("group response mismatch: %+v", groupResp)
 	}
 
-	members := dataStore.ListDirectoryGroupMembers("tenant-1", "idp-1", groupResp.ID)
+	members := dataStore.ListDirectoryGroupMembers("organization-1", "idp-1", groupResp.ID)
 	if len(members) != 1 || members[0].UserID != userResp.ID {
 		t.Fatalf("stored members = %+v, want user %s", members, userResp.ID)
 	}
 
-	recorder = performSCIMRequest(server, http.MethodGet, `/scim/v2/tenant-1/Groups?filter=displayName%20eq%20%22Finance%22`, "", "scim-secret")
+	recorder = performSCIMRequest(server, http.MethodGet, `/scim/v2/organization-1/Groups?filter=displayName%20eq%20%22Finance%22`, "", "scim-secret")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET groups status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -78,7 +79,7 @@ func TestSCIMRejectsInvalidBearerToken(t *testing.T) {
 	dataStore := newSCIMTestStore(t)
 	server := newSCIMTestServer(dataStore)
 
-	recorder := performSCIMRequest(server, http.MethodGet, "/scim/v2/tenant-1/Users", "", "wrong-token")
+	recorder := performSCIMRequest(server, http.MethodGet, "/scim/v2/organization-1/Users", "", "wrong-token")
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s, want 401", recorder.Code, recorder.Body.String())
 	}
@@ -86,25 +87,21 @@ func TestSCIMRejectsInvalidBearerToken(t *testing.T) {
 
 func newSCIMTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
+	dataStore := testdb.NewStore(t)
 
 	now := time.Now().UTC()
-	dataStore.SaveTenant(&models.Tenant{ID: "tenant-1", Name: "Tenant 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
+	dataStore.SaveOrganization(&models.Organization{ID: "organization-1", Name: "Organization 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
 	dataStore.SaveIdentityProviderConfig(&models.IdentityProviderConfig{
-		ID:        "idp-1",
-		TenantID:  "tenant-1",
-		Name:      "Tenant 1 IdP",
-		Type:      "oidc",
-		Enabled:   true,
-		Issuer:    "https://idp.example.test",
-		ClientID:  "client-1",
-		SCIMToken: "scim-secret",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "idp-1",
+		OrganizationID: "organization-1",
+		Name:           "Organization 1 IdP",
+		Type:           "oidc",
+		Enabled:        true,
+		Issuer:         "https://idp.example.test",
+		ClientID:       "client-1",
+		SCIMToken:      "scim-secret",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	return dataStore
 }

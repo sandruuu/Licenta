@@ -116,7 +116,7 @@ export default function ResourceDetail() {
       const organizations = Array.isArray(organizationData) ? organizationData : [];
       const selectedResource = resourceList.find((item) => item.id === resourceID) || null;
       const selectedGateway = gatewayList.find((item) => item.id === selectedResource?.gateway_id) || null;
-      const organizationID = selectedResource?.tenant_id || selectedGateway?.tenant_id || selectedGateway?.tenant_ids?.[0] || '';
+      const organizationID = selectedResource?.organization_id || selectedGateway?.organization_id || selectedGateway?.organization_ids?.[0] || '';
       const [policyData, assignmentData, groupData] = organizationID ? await Promise.all([
         getPolicies().catch(() => []),
         getPolicyAssignments().catch(() => []),
@@ -163,7 +163,7 @@ export default function ResourceDetail() {
         name: editForm.name?.trim(),
         description: editForm.description?.trim(),
         type: editForm.type,
-        organization_id: editForm.tenant_id,
+        organization_id: editForm.organization_id,
         gateway_id: editForm.gateway_id,
         host: editForm.host?.trim(),
         port: parseInt(editForm.port, 10) || 0,
@@ -206,7 +206,7 @@ export default function ResourceDetail() {
   const policiesByID = new Map(policies.map((policy) => [policy.id, policy]));
   const resourceAssignments = assignments
     .filter((assignment) => assignment?.enabled !== false)
-    .filter((assignment) => sameID(assignment.tenant_id, resource.tenant_id))
+    .filter((assignment) => sameID(assignment.organization_id, resource.organization_id))
     .filter((assignment) => ['resource', 'resource_group'].includes(assignment.level))
     .filter((assignment) => sameID(assignment.resource_id, resource.id));
   const groupAccess = resourceAssignments
@@ -286,7 +286,7 @@ export default function ResourceDetail() {
             <DetailField label="External host" value={catalogFQDN} mono />
             <DetailField label="Port" value={resource.port} mono />
             <DetailField label="Internal host" value={resource.host || target} mono />
-            <DetailField label="Organization" value={organization?.name || resource.tenant_id} />
+            <DetailField label="Organization" value={organization?.name || resource.organization_id} />
             <DetailField label="Gateway" value={gateway?.name || gateway?.id} />
           </div>
         </section>

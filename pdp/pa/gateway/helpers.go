@@ -46,20 +46,20 @@ func (s *Service) readyStore() error {
 	return nil
 }
 
-func (s *Service) validateTenant(tenantID string) (string, error) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
+func (s *Service) validateOrganization(organizationID string) (string, error) {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
 		return "", fmt.Errorf("%w: organization_id is required", ErrInvalidRequest)
 	}
-	tenant, found := s.store.GetTenant(tenantID)
-	if !found || tenant == nil || !tenant.Enabled {
+	organization, found := s.store.GetOrganization(organizationID)
+	if !found || organization == nil || !organization.Enabled {
 		return "", fmt.Errorf("%w: organization not found or disabled", ErrInvalidRequest)
 	}
-	return tenantID, nil
+	return organizationID, nil
 }
 
-func (s *Service) validateAssignedResourcesTenant(tenantID string, resourceIDs []string) error {
-	tenantID = strings.TrimSpace(tenantID)
+func (s *Service) validateAssignedResourcesOrganization(organizationID string, resourceIDs []string) error {
+	organizationID = strings.TrimSpace(organizationID)
 	for _, resourceID := range resourceIDs {
 		resourceID = strings.TrimSpace(resourceID)
 		if resourceID == "" {
@@ -69,7 +69,7 @@ func (s *Service) validateAssignedResourcesTenant(tenantID string, resourceIDs [
 		if !found || resource == nil {
 			return fmt.Errorf("%w: assigned resource %s not found", ErrInvalidRequest, resourceID)
 		}
-		if strings.TrimSpace(resource.TenantID) != "" && !strings.EqualFold(resource.TenantID, tenantID) {
+		if strings.TrimSpace(resource.OrganizationID) != "" && !strings.EqualFold(resource.OrganizationID, organizationID) {
 			return fmt.Errorf("%w: assigned resource %s belongs to a different organization", ErrInvalidRequest, resourceID)
 		}
 	}
@@ -130,7 +130,7 @@ func gatewayCertificateProfile(gateway *models.Gateway) (CertificateProfile, err
 	if gateway == nil {
 		return CertificateProfile{}, fmt.Errorf("%w: gateway identity is required", ErrInvalidCSR)
 	}
-	organizationID := strings.TrimSpace(gateway.TenantID)
+	organizationID := strings.TrimSpace(gateway.OrganizationID)
 	gatewayID := strings.TrimSpace(gateway.ID)
 	fqdn := strings.TrimSpace(gateway.FQDN)
 	if organizationID == "" || gatewayID == "" {
@@ -150,7 +150,7 @@ func validateGatewayCSRRequest(csr *x509.CertificateRequest, gateway *models.Gat
 	if csr == nil || gateway == nil {
 		return fmt.Errorf("%w: CSR and gateway identity are required", ErrInvalidCSR)
 	}
-	organizationID := strings.TrimSpace(gateway.TenantID)
+	organizationID := strings.TrimSpace(gateway.OrganizationID)
 	gatewayID := strings.TrimSpace(gateway.ID)
 	if organizationID == "" || gatewayID == "" {
 		return fmt.Errorf("%w: gateway organization_id and gateway_id are required", ErrInvalidCSR)
@@ -188,7 +188,7 @@ func validateGatewayCertificate(certPEM []byte, csr *x509.CertificateRequest, ga
 	if cert.IsCA {
 		return fmt.Errorf("%w: issued gateway certificate must not be a CA", ErrInvalidCSR)
 	}
-	if !certificateHasGatewayIdentity(cert, gateway.TenantID, gateway.ID) {
+	if !certificateHasGatewayIdentity(cert, gateway.OrganizationID, gateway.ID) {
 		return fmt.Errorf("%w: issued certificate does not contain expected gateway URI SAN", ErrInvalidCSR)
 	}
 	if fqdn := strings.TrimSpace(gateway.FQDN); fqdn != "" && !stringSliceContainsFold(cert.DNSNames, fqdn) {
@@ -275,18 +275,16 @@ func randomHex(bytesLen int) (string, error) {
 func gatewayListItem(gateway *models.Gateway) GatewayListItem {
 	return GatewayListItem{
 		ID:                gateway.ID,
-		TenantID:          gateway.TenantID,
+		OrganizationID:    gateway.OrganizationID,
 		Name:              gateway.Name,
 		FQDN:              gateway.FQDN,
 		Status:            gateway.Status,
 		ListenAddr:        gateway.ListenAddr,
 		PublicIP:          gateway.PublicIP,
-		OIDCClientID:      gateway.OIDCClientID,
 		EnrollmentToken:   "", // Never expose token hash — admin gets plaintext at creation only
 		TokenExpiresAt:    gateway.TokenExpiresAt,
 		CertExpiresAt:     gateway.CertExpiresAt,
 		AssignedResources: append([]string(nil), gateway.AssignedResources...),
-		AuthMode:          defaultGatewayAuthMode,
 		CreatedAt:         gateway.CreatedAt,
 		UpdatedAt:         gateway.UpdatedAt,
 		LastSeenAt:        gateway.LastSeenAt,
@@ -299,12 +297,9 @@ func sanitizeGatewayForAdmin(gateway *models.Gateway) *models.Gateway {
 	}
 	copy := *gateway
 	copy.AssignedResources = append([]string(nil), gateway.AssignedResources...)
-	copy.TenantIDs = append([]string(nil), gateway.TenantIDs...)
+	copy.OrganizationIDs = append([]string(nil), gateway.OrganizationIDs...)
 	copy.EnrollmentToken = "" // Never expose token hash — defense in depth
-	copy.OIDCClientSecret = ""
 	copy.CertPEM = ""
-	copy.AuthMode = defaultGatewayAuthMode
-	copy.FederationConfig = nil
 	return &copy
 }
 

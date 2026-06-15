@@ -5,12 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testredis"
 	"pdp/models"
 )
 
 func TestServiceSubmitPendingDeviceEnrollmentHandlesDuplicates(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 	request := models.EnrollmentRequest{
 		DeviceID:  "device-1",
 		Component: "health",
@@ -46,7 +47,7 @@ func TestServiceSubmitPendingDeviceEnrollmentHandlesDuplicates(t *testing.T) {
 
 func TestServiceStartBrowserEnrollSessionRejectsSameKeyAndRevokesChangedKey(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		return "device-role"
@@ -88,7 +89,7 @@ func TestServiceStartBrowserEnrollSessionRejectsSameKeyAndRevokesChangedKey(t *t
 	if len(authority.revokedSerials) != 1 || authority.revokedSerials[0] != enrollment.CertSerial {
 		t.Fatalf("revoked serials = %#v, want [%s]", authority.revokedSerials, enrollment.CertSerial)
 	}
-	stored, found := dataStore.GetPendingEnroll(session.ID)
+	stored, found := service.getPendingEnroll(session.ID)
 	if !found || stored.DeviceID != "device-1" {
 		t.Fatalf("pending browser session was not stored: found=%v stored=%#v", found, stored)
 	}
@@ -96,7 +97,7 @@ func TestServiceStartBrowserEnrollSessionRejectsSameKeyAndRevokesChangedKey(t *t
 
 func TestServiceCompleteBrowserEnrollSessionUpdatesSession(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		if component != "endpoint" {
@@ -128,7 +129,7 @@ func TestServiceCompleteBrowserEnrollSessionUpdatesSession(t *testing.T) {
 	if len(authority.roles) != 1 || authority.roles[0] != "device-role" {
 		t.Fatalf("sign roles = %#v, want [device-role]", authority.roles)
 	}
-	storedSession, found := dataStore.GetPendingEnroll(session.ID)
+	storedSession, found := service.getPendingEnroll(session.ID)
 	if !found || storedSession.Status != "authenticated" || storedSession.CertPEM == "" || storedSession.CertPEM != string(completion.CertPEM) {
 		t.Fatalf("completed session was not persisted: found=%v stored=%#v", found, storedSession)
 	}
@@ -144,7 +145,7 @@ func TestServiceCompleteBrowserEnrollSessionUpdatesSession(t *testing.T) {
 
 func TestServiceBrowserEnrollSessionDenyAndExpire(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 
 	session, err := service.StartBrowserEnrollSession(models.EnrollmentRequest{
 		DeviceID:  "device-1",
@@ -175,12 +176,14 @@ func TestServiceBrowserEnrollSessionDenyAndExpire(t *testing.T) {
 		Status:    "pending",
 		ExpiresAt: time.Now().Add(-time.Minute),
 	}
-	dataStore.SavePendingEnroll(expired)
+	if err := service.savePendingEnroll(expired); err != nil {
+		t.Fatalf("save expired pending enroll: %v", err)
+	}
 	_, err = service.ActiveBrowserEnrollSession(expired.ID)
 	if !errors.Is(err, ErrExpiredSession) {
 		t.Fatalf("ActiveBrowserEnrollSession expired error = %v, want ErrExpiredSession", err)
 	}
-	if _, found := dataStore.GetPendingEnroll(expired.ID); found {
+	if _, found := service.getPendingEnroll(expired.ID); found {
 		t.Fatalf("expired pending enrollment session was not deleted")
 	}
 
@@ -192,7 +195,7 @@ func TestServiceBrowserEnrollSessionDenyAndExpire(t *testing.T) {
 
 func TestServiceAdminApproveAndRevokeEnrollment(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		if component != "endpoint" {
@@ -245,7 +248,7 @@ func TestServiceAdminApproveAndRevokeEnrollment(t *testing.T) {
 
 func TestServiceDeviceEnrollmentStatusAndList(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := NewService(dataStore, testredis.NewClient(t))
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		return "device-role"

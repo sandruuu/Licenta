@@ -4,7 +4,7 @@
 # ============================================================
 
 # ── Secrets & Environment ──
-# .env contains JWT_SECRET, passwords — NEVER COMMIT REAL SECRETS
+# .env contains local credentials and secrets — NEVER COMMIT REAL SECRETS
 .env
 .env.local
 .env.*.local

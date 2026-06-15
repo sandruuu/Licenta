@@ -58,7 +58,7 @@ func (s *Server) handleOIDCCompleteSession(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Bind the browser-authenticated user token to the device identity carried
-	// by the native Connect-App authorize request. This prevents a token minted
+	// by the endpoint authorize request. This prevents a token minted
 	// in an unbound browser-only flow from being replayed through the gateway.
 	boundToken, err := s.pa.Auth.JWT.GenerateAuthToken(
 		claims.UserID, claims.Username, role,

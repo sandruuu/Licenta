@@ -14,13 +14,13 @@ func TestGatewayIdentityURIUsesOrganizationPath(t *testing.T) {
 	}
 }
 
-func TestGatewayCertificateIdentityRejectsTenantPath(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://gateway/tenant/tenant-1/gateway/gw-1")
+func TestGatewayCertificateIdentityRejectsInvalidOrganizationPath(t *testing.T) {
+	identityURI, err := url.Parse("spiffe://gateway/account/organization-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}
 	if _, _, ok := GatewayCertificateIdentity(&x509.Certificate{URIs: []*url.URL{identityURI}}); ok {
-		t.Fatal("GatewayCertificateIdentity() accepted legacy tenant identity")
+		t.Fatal("GatewayCertificateIdentity() accepted malformed organization identity")
 	}
 }
 

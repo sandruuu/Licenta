@@ -9,75 +9,75 @@ import (
 	"pdp/models"
 )
 
-func TestHRDRejectsUnknownLoginHintDomainBeforeSingleTenantFallback(t *testing.T) {
+func TestHRDRejectsUnknownLoginHintDomainBeforeSingleOrganizationFallback(t *testing.T) {
 	server := newHRDResolutionTestServer(t, "demo.trustcloud.test", []string{"demo.trustcloud.test"})
 
 	request := httptest.NewRequest(http.MethodGet, "/auth/authorize?login_hint=user@unknown.test", nil)
-	if _, _, err := server.resolveIdentityProvider(request, "connect-app"); err == nil {
+	if _, _, err := server.resolveIdentityProvider(request, "trustagent-endpoint"); err == nil {
 		t.Fatalf("expected unknown login_hint domain to be rejected")
 	}
 
 	request = httptest.NewRequest(http.MethodGet, "/auth/authorize", nil)
-	idpCfg, tenant, err := server.resolveIdentityProvider(request, "connect-app")
+	idpCfg, organization, err := server.resolveIdentityProvider(request, "trustagent-endpoint")
 	if err != nil {
 		t.Fatalf("resolveIdentityProvider without login_hint returned error: %v", err)
 	}
-	if idpCfg == nil || idpCfg.ID != "idp-1" || tenant == nil || tenant.ID != "tenant-1" {
-		t.Fatalf("single tenant fallback mismatch: idp=%+v tenant=%+v", idpCfg, tenant)
+	if idpCfg == nil || idpCfg.ID != "idp-1" || organization == nil || organization.ID != "organization-1" {
+		t.Fatalf("single organization fallback mismatch: idp=%+v organization=%+v", idpCfg, organization)
 	}
 }
 
-func TestEnrollmentHRDRejectsUnknownEmailDomainBeforeSingleTenantFallback(t *testing.T) {
+func TestEnrollmentHRDRejectsUnknownEmailDomainBeforeSingleOrganizationFallback(t *testing.T) {
 	server := newHRDResolutionTestServer(t, "demo.trustcloud.test", []string{"demo.trustcloud.test"})
 
-	if idpCfg, tenant, ok := server.resolveEnrollmentIdentityProvider("user@unknown.test"); ok {
-		t.Fatalf("unknown enrollment email resolved unexpectedly: idp=%+v tenant=%+v", idpCfg, tenant)
+	if idpCfg, organization, ok := server.resolveEnrollmentIdentityProvider("user@unknown.test"); ok {
+		t.Fatalf("unknown enrollment email resolved unexpectedly: idp=%+v organization=%+v", idpCfg, organization)
 	}
 
-	idpCfg, tenant, ok := server.resolveEnrollmentIdentityProvider("")
-	if !ok || idpCfg == nil || idpCfg.ID != "idp-1" || tenant == nil || tenant.ID != "tenant-1" {
-		t.Fatalf("single tenant enrollment fallback mismatch: ok=%v idp=%+v tenant=%+v", ok, idpCfg, tenant)
+	idpCfg, organization, ok := server.resolveEnrollmentIdentityProvider("")
+	if !ok || idpCfg == nil || idpCfg.ID != "idp-1" || organization == nil || organization.ID != "organization-1" {
+		t.Fatalf("single organization enrollment fallback mismatch: ok=%v idp=%+v organization=%+v", ok, idpCfg, organization)
 	}
 }
 
-func TestAgentSessionHRDRejectsUnknownEmailDomainBeforeDefaultTenantFallback(t *testing.T) {
+func TestAgentSessionHRDRejectsUnknownEmailDomainBeforeDefaultOrganizationFallback(t *testing.T) {
 	server := newHRDResolutionTestServer(t, "demo.trustcloud.test", nil)
 
-	if idpCfg, ok := server.resolveAgentSessionIdentityProvider("tenant-1", "user@unknown.test"); ok {
+	if idpCfg, ok := server.resolveAgentSessionIdentityProvider("organization-1", "user@unknown.test"); ok {
 		t.Fatalf("unknown agent-session email resolved unexpectedly: idp=%+v", idpCfg)
 	}
 
-	idpCfg, ok := server.resolveAgentSessionIdentityProvider("tenant-1", "user@demo.trustcloud.test")
+	idpCfg, ok := server.resolveAgentSessionIdentityProvider("organization-1", "user@demo.trustcloud.test")
 	if !ok || idpCfg == nil || idpCfg.ID != "idp-1" {
-		t.Fatalf("tenant-domain agent-session HRD mismatch: ok=%v idp=%+v", ok, idpCfg)
+		t.Fatalf("organization-domain agent-session HRD mismatch: ok=%v idp=%+v", ok, idpCfg)
 	}
 }
 
-func newHRDResolutionTestServer(t *testing.T, tenantDomain string, idpDomains []string) *Server {
+func newHRDResolutionTestServer(t *testing.T, organizationDomain string, idpDomains []string) *Server {
 	t.Helper()
 	dataStore := newIdentityProviderTestStore(t)
 	now := time.Now()
-	dataStore.SaveTenant(&models.Tenant{
-		ID:           "tenant-1",
-		Name:         "Tenant 1",
-		Domain:       tenantDomain,
+	dataStore.SaveOrganization(&models.Organization{
+		ID:           "organization-1",
+		Name:         "Organization 1",
+		Domain:       organizationDomain,
 		Enabled:      true,
 		DefaultIdPID: "idp-1",
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})
 	dataStore.SaveIdentityProviderConfig(&models.IdentityProviderConfig{
-		ID:        "idp-1",
-		TenantID:  "tenant-1",
-		Name:      "Tenant 1 IdP",
-		Type:      "oidc",
-		Enabled:   true,
-		Domains:   idpDomains,
-		Issuer:    "https://idp1.example.test",
-		ClientID:  "client-1",
-		Scopes:    "openid profile email",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "idp-1",
+		OrganizationID: "organization-1",
+		Name:           "Organization 1 IdP",
+		Type:           "oidc",
+		Enabled:        true,
+		Domains:        idpDomains,
+		Issuer:         "https://idp1.example.test",
+		ClientID:       "client-1",
+		Scopes:         "openid profile email",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	return newIdentityProviderTestServer(dataStore)
 }

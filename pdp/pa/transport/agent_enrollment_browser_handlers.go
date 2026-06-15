@@ -52,9 +52,9 @@ func (s *Server) renderBrowserEnrollState(w http.ResponseWriter, session *paenro
 	case paenrollment.InteractiveStatusWaitingForUserLogin:
 		idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID)
 		if ok && idpCfg != nil && idpCfg.Enabled {
-			tenant, found := s.pa.Store.GetTenant(session.AuthRealmID)
-			if found && tenant != nil && tenant.Enabled {
-				s.redirectBrowserEnrollToIDP(w, nil, session, tenant, idpCfg)
+			organization, found := s.pa.Store.GetOrganization(session.AuthRealmID)
+			if found && organization != nil && organization.Enabled {
+				s.redirectBrowserEnrollToIDP(w, nil, session, organization, idpCfg)
 				return
 			}
 		}
@@ -87,16 +87,16 @@ func (s *Server) handleBrowserEnrollDiscovery(w http.ResponseWriter, r *http.Req
 		return
 	}
 	email := strings.TrimSpace(r.Form.Get("email"))
-	idpCfg, tenant, ok := s.resolveEnrollmentIdentityProvider(email)
+	idpCfg, organization, ok := s.resolveEnrollmentIdentityProvider(email)
 	if !ok {
 		renderEnrollmentPage(w, "Enroll device", "Email does not match any organization directory.", email, true)
 		return
 	}
-	s.redirectBrowserEnrollToIDP(w, r, session, tenant, idpCfg)
+	s.redirectBrowserEnrollToIDP(w, r, session, organization, idpCfg)
 }
 
-func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Request, session *paenrollment.InteractiveSession, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig) {
-	if session == nil || tenant == nil || idpCfg == nil {
+func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Request, session *paenrollment.InteractiveSession, organization *models.Organization, idpCfg *models.IdentityProviderConfig) {
+	if session == nil || organization == nil || idpCfg == nil {
 		http.Error(w, "Identity provider configuration error", http.StatusInternalServerError)
 		return
 	}
@@ -115,7 +115,7 @@ func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	if _, err := s.pa.Enrollment.BeginInteractiveIDPLogin(session.ID, tenant, idpCfg, pkceVerifier, nonce, state); err != nil {
+	if _, err := s.pa.Enrollment.BeginInteractiveIDPLogin(session.ID, organization, idpCfg, pkceVerifier, nonce, state); err != nil {
 		log.Printf("[ENROLL] Failed to lock enrollment session to IdP: session=%s err=%v", session.ID, err)
 		http.Error(w, "Enrollment session could not be updated", http.StatusConflict)
 		return
@@ -136,7 +136,7 @@ func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Identity provider configuration error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[ENROLL] Redirecting enrollment session to IdP: session=%s tenant=%s idp=%s", session.ID, tenant.ID, idpCfg.ID)
+	log.Printf("[ENROLL] Redirecting enrollment session to IdP: session=%s organization=%s idp=%s", session.ID, organization.ID, idpCfg.ID)
 	if r != nil {
 		http.Redirect(w, r, authURL, http.StatusFound)
 		return
@@ -145,23 +145,23 @@ func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusFound)
 }
 
-func (s *Server) resolveEnrollmentIdentityProvider(email string) (*models.IdentityProviderConfig, *models.Tenant, bool) {
+func (s *Server) resolveEnrollmentIdentityProvider(email string) (*models.IdentityProviderConfig, *models.Organization, bool) {
 	domain := extractDomainFromHint(email)
 	if domain != "" {
 		if idpCfg, ok := s.pa.Store.FindIdentityProviderByDomain(domain); ok && idpCfg.Enabled {
-			if tenant, found := s.pa.Store.GetTenant(idpCfg.TenantID); found && tenant.Enabled {
-				return idpCfg, tenant, true
+			if organization, found := s.pa.Store.GetOrganization(idpCfg.OrganizationID); found && organization.Enabled {
+				return idpCfg, organization, true
 			}
 		}
-		if tenant, ok := s.pa.Store.FindTenantByDomain(domain); ok && tenant.Enabled {
-			if idpCfg, resolvedTenant, ok := s.defaultIdentityProviderForTenant(tenant.ID); ok {
-				return idpCfg, resolvedTenant, true
+		if organization, ok := s.pa.Store.FindOrganizationByDomain(domain); ok && organization.Enabled {
+			if idpCfg, resolvedOrganization, ok := s.defaultIdentityProviderForOrganization(organization.ID); ok {
+				return idpCfg, resolvedOrganization, true
 			}
 		}
 		return nil, nil, false
 	}
-	if idpCfg, tenant, ok := s.singleTenantIdentityProvider(); ok {
-		return idpCfg, tenant, true
+	if idpCfg, organization, ok := s.singleOrganizationIdentityProvider(); ok {
+		return idpCfg, organization, true
 	}
 	return nil, nil, false
 }

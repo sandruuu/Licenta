@@ -6,46 +6,53 @@ import (
 	"strings"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
-// Tenant operations
+// Organization operations
 // ─────────────────────────────────────────────
 
-func (s *Store) SaveTenant(t *models.Tenant) {
+func (s *Store) SaveOrganization(t *models.Organization) {
 	t.Domain = normalizeDomain(t.Domain)
 	t.Domains = normalizeDomainAliases(t.Domain, t.Domains)
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO tenants
+	_, err := s.db.Exec(`INSERT INTO organizations
 		(id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			domain = EXCLUDED.domain,
+			description = EXCLUDED.description,
+			enabled = EXCLUDED.enabled,
+			default_idp_id = EXCLUDED.default_idp_id,
+			domains_json = EXCLUDED.domains_json,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`,
 		t.ID, t.Name, t.Domain, t.Description, b2i(t.Enabled),
 		t.DefaultIdPID, toJSON(t.Domains),
 		fmtTime(t.CreatedAt), fmtTime(t.UpdatedAt))
 	if err != nil {
-		log.Printf("[STORE] Failed to save tenant %s: %v", t.ID, err)
+		log.Printf("[STORE] Failed to save organization %s: %v", t.ID, err)
 	}
 }
 
-func (s *Store) GetTenant(id string) (*models.Tenant, bool) {
+func (s *Store) GetOrganization(id string) (*models.Organization, bool) {
 	row := s.db.QueryRow(`SELECT id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at
-		FROM tenants WHERE id = ?`, id)
-	return s.scanTenant(row)
+		FROM organizations WHERE id = ?`, id)
+	return s.scanOrganization(row)
 }
 
-func (s *Store) ListTenants() []*models.Tenant {
+func (s *Store) ListOrganizations() []*models.Organization {
 	rows, err := s.db.Query(`SELECT id, name, domain, description, enabled, default_idp_id, domains_json, created_at, updated_at
-		FROM tenants ORDER BY created_at DESC`)
+		FROM organizations ORDER BY created_at DESC`)
 	if err != nil {
-		log.Printf("[STORE] Failed to list tenants: %v", err)
+		log.Printf("[STORE] Failed to list organizations: %v", err)
 		return nil
 	}
 	defer rows.Close()
 
-	var tenants []*models.Tenant
+	var organizations []*models.Organization
 	for rows.Next() {
-		t := &models.Tenant{}
+		t := &models.Organization{}
 		var createdAt, updatedAt, domainsJSON string
 		var enabled int
 		if err := rows.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &t.DefaultIdPID, &domainsJSON, &createdAt, &updatedAt); err != nil {
@@ -58,13 +65,13 @@ func (s *Store) ListTenants() []*models.Tenant {
 		}
 		t.CreatedAt = parseTime(createdAt)
 		t.UpdatedAt = parseTime(updatedAt)
-		tenants = append(tenants, t)
+		organizations = append(organizations, t)
 	}
-	return tenants
+	return organizations
 }
 
-func (s *Store) DeleteTenant(id string) bool {
-	result, err := s.db.Exec("DELETE FROM tenants WHERE id = ?", id)
+func (s *Store) DeleteOrganization(id string) bool {
+	result, err := s.db.Exec("DELETE FROM organizations WHERE id = ?", id)
 	if err != nil {
 		return false
 	}
@@ -76,22 +83,22 @@ func (s *Store) DeleteTenant(id string) bool {
 // Identity Provider Config operations
 // ─────────────────────────────────────────────
 
-// FindTenantByDomain searches a tenant by primary domain or domain aliases.
-func (s *Store) FindTenantByDomain(domain string) (*models.Tenant, bool) {
+// FindOrganizationByDomain searches an organization by primary domain or domain aliases.
+func (s *Store) FindOrganizationByDomain(domain string) (*models.Organization, bool) {
 	domain = normalizeDomain(domain)
 	if domain == "" {
 		return nil, false
 	}
-	for _, tenant := range s.ListTenants() {
-		if tenant == nil {
+	for _, organization := range s.ListOrganizations() {
+		if organization == nil {
 			continue
 		}
-		if normalizeDomain(tenant.Domain) == domain {
-			return tenant, true
+		if normalizeDomain(organization.Domain) == domain {
+			return organization, true
 		}
-		for _, alias := range tenant.Domains {
+		for _, alias := range organization.Domains {
 			if normalizeDomain(alias) == domain {
-				return tenant, true
+				return organization, true
 			}
 		}
 	}
@@ -109,11 +116,27 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 		groupRoleMapping = []models.GroupRoleRule{}
 	}
 
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO identity_provider_configs
-		(id, tenant_id, name, type, enabled, domains_json, issuer, client_id, client_secret,
+	_, err := s.db.Exec(`INSERT INTO identity_provider_configs
+		(id, organization_id, name, type, enabled, domains_json, issuer, client_id, client_secret,
 		 scim_token, scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		cfg.ID, cfg.TenantID, cfg.Name, cfg.Type, b2i(cfg.Enabled),
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			organization_id = EXCLUDED.organization_id,
+			name = EXCLUDED.name,
+			type = EXCLUDED.type,
+			enabled = EXCLUDED.enabled,
+			domains_json = EXCLUDED.domains_json,
+			issuer = EXCLUDED.issuer,
+			client_id = EXCLUDED.client_id,
+			client_secret = EXCLUDED.client_secret,
+			scim_token = EXCLUDED.scim_token,
+			scopes = EXCLUDED.scopes,
+			auto_discovery = EXCLUDED.auto_discovery,
+			claim_mapping_json = EXCLUDED.claim_mapping_json,
+			group_role_mapping_json = EXCLUDED.group_role_mapping_json,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`,
+		cfg.ID, cfg.OrganizationID, cfg.Name, cfg.Type, b2i(cfg.Enabled),
 		toJSON(cfg.Domains), cfg.Issuer, cfg.ClientID, cfg.ClientSecret,
 		cfg.SCIMToken, cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
 		fmtTime(cfg.CreatedAt), fmtTime(cfg.UpdatedAt))
@@ -123,20 +146,20 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 }
 
 func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderConfig, bool) {
-	row := s.db.QueryRow(`SELECT id, tenant_id, name, type, enabled, domains_json,
+	row := s.db.QueryRow(`SELECT id, organization_id, name, type, enabled, domains_json,
 		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE id = ?`, id)
 	return s.scanIdentityProviderConfig(row)
 }
 
-func (s *Store) ListIdentityProviderConfigsForTenant(tenantID string) []*models.IdentityProviderConfig {
-	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
+func (s *Store) ListIdentityProviderConfigsForOrganization(organizationID string) []*models.IdentityProviderConfig {
+	rows, err := s.db.Query(`SELECT id, organization_id, name, type, enabled, domains_json,
 		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
-		FROM identity_provider_configs WHERE tenant_id = ? ORDER BY created_at ASC`, tenantID)
+		FROM identity_provider_configs WHERE organization_id = ? ORDER BY created_at ASC`, organizationID)
 	if err != nil {
-		log.Printf("[STORE] Failed to list IdP configs for tenant %s: %v", tenantID, err)
+		log.Printf("[STORE] Failed to list IdP configs for organization %s: %v", organizationID, err)
 		return nil
 	}
 	defer rows.Close()
@@ -152,7 +175,7 @@ func (s *Store) FindIdentityProviderByDomain(domain string) (*models.IdentityPro
 		return nil, false
 	}
 
-	rows, err := s.db.Query(`SELECT id, tenant_id, name, type, enabled, domains_json,
+	rows, err := s.db.Query(`SELECT id, organization_id, name, type, enabled, domains_json,
 		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE enabled = 1`)
@@ -198,14 +221,14 @@ func normalizeDomainAliases(primary string, aliases []string) []string {
 	return normalized
 }
 
-// GetDefaultIdentityProviderForTenant returns the default IdP for a tenant,
-// by looking up the tenant's DefaultIdPID field. Returns nil if not set.
-func (s *Store) GetDefaultIdentityProviderForTenant(tenantID string) (*models.IdentityProviderConfig, bool) {
-	tenant, found := s.GetTenant(tenantID)
-	if !found || tenant.DefaultIdPID == "" {
+// GetDefaultIdentityProviderForOrganization returns the default IdP for an organization,
+// by looking up the organization's DefaultIdPID field. Returns nil if not set.
+func (s *Store) GetDefaultIdentityProviderForOrganization(organizationID string) (*models.IdentityProviderConfig, bool) {
+	organization, found := s.GetOrganization(organizationID)
+	if !found || organization.DefaultIdPID == "" {
 		return nil, false
 	}
-	return s.GetIdentityProviderConfig(tenant.DefaultIdPID)
+	return s.GetIdentityProviderConfig(organization.DefaultIdPID)
 }
 
 func (s *Store) DeleteIdentityProviderConfig(id string) bool {
@@ -224,7 +247,7 @@ func (s *Store) scanIdentityProviderConfig(row interface {
 	var enabled, autoDiscovery int
 	var domainsJSON, claimMappingJSON, groupRoleMappingJSON, createdAt, updatedAt string
 
-	err := row.Scan(&cfg.ID, &cfg.TenantID, &cfg.Name, &cfg.Type, &enabled,
+	err := row.Scan(&cfg.ID, &cfg.OrganizationID, &cfg.Name, &cfg.Type, &enabled,
 		&domainsJSON, &cfg.Issuer, &cfg.ClientID, &cfg.ClientSecret, &cfg.SCIMToken,
 		&cfg.Scopes, &autoDiscovery, &claimMappingJSON, &groupRoleMappingJSON,
 		&createdAt, &updatedAt)
@@ -261,8 +284,8 @@ func (s *Store) scanIdentityProviderConfigs(rows *sql.Rows) []*models.IdentityPr
 	return configs
 }
 
-func (s *Store) scanTenant(row *sql.Row) (*models.Tenant, bool) {
-	t := &models.Tenant{}
+func (s *Store) scanOrganization(row *sql.Row) (*models.Organization, bool) {
+	t := &models.Organization{}
 	var createdAt, updatedAt, domainsJSON string
 	var enabled int
 	err := row.Scan(&t.ID, &t.Name, &t.Domain, &t.Description, &enabled, &t.DefaultIdPID, &domainsJSON, &createdAt, &updatedAt)

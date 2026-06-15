@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"pdp/config"
@@ -22,6 +21,7 @@ const (
 	userBaselineMaxLocations = 50
 	userBaselineMinLocations = 5
 	userBaselineMinDays      = 3
+	geoCacheStateKind        = "geo_cache"
 )
 
 // GeoLocation holds the result of an IP geolocation lookup.
@@ -35,18 +35,17 @@ type GeoLocation struct {
 
 // geoCache is a single cached geolocation entry with TTL.
 type geoCache struct {
-	loc       GeoLocation
-	expiresAt time.Time
+	Loc       GeoLocation `json:"loc"`
+	ExpiresAt time.Time   `json:"expires_at"`
 }
 
 // GeoLocator resolves IP addresses to geographical coordinates using the
-// ipapi.co free tier (HTTPS, 1000 req/day). Results are cached in-memory
+// ipapi.co free tier (HTTPS, 1000 req/day). Results are cached in Redis
 // with a 1-hour TTL. All failures are graceful — callers get a zero-value
 // GeoLocation and a nil error so that geolocation never blocks access.
 type GeoLocator struct {
 	store                    *store.Store
-	cache                    map[string]geoCache
-	mu                       sync.RWMutex
+	runtime                  RuntimeStateStore
 	httpClient               *http.Client
 	providerURL              string
 	cacheTTL                 time.Duration
@@ -56,8 +55,14 @@ type GeoLocator struct {
 	impossibleTravelSpeedKMH float64
 }
 
+type RuntimeStateStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	DeleteEphemeralState(kind, key string) error
+}
+
 // NewGeoLocator creates a GeoLocator backed by the given store.
-func NewGeoLocator(s *store.Store, cfgs ...config.GeoConfig) *GeoLocator {
+func NewGeoLocator(s *store.Store, runtimeState RuntimeStateStore, cfgs ...config.GeoConfig) *GeoLocator {
 	cfg := config.GeoConfig{
 		ProviderURL:              "https://ipapi.co/{ip}/json/",
 		HTTPTimeout:              3 * time.Second,
@@ -91,8 +96,8 @@ func NewGeoLocator(s *store.Store, cfgs ...config.GeoConfig) *GeoLocator {
 		}
 	}
 	return &GeoLocator{
-		store: s,
-		cache: make(map[string]geoCache),
+		store:   s,
+		runtime: runtimeState,
 		httpClient: &http.Client{
 			Timeout: cfg.HTTPTimeout,
 		},
@@ -117,13 +122,9 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		return GeoLocation{}, nil
 	}
 
-	// Check cache
-	g.mu.RLock()
-	if entry, ok := g.cache[ip]; ok && time.Now().Before(entry.expiresAt) {
-		g.mu.RUnlock()
-		return entry.loc, nil
+	if loc, ok := g.cachedLocation(ip); ok {
+		return loc, nil
 	}
-	g.mu.RUnlock()
 
 	resp, err := g.httpClient.Get(g.lookupURL(ip))
 	if err != nil {
@@ -164,20 +165,53 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		CountryCode: result.CountryCode,
 	}
 
-	g.mu.Lock()
-	g.cache[ip] = geoCache{loc: loc, expiresAt: time.Now().Add(g.cacheTTL)}
-	// Evict expired entries when cache grows large
-	if len(g.cache) > g.cacheMaxEntries {
-		now := time.Now()
-		for k, v := range g.cache {
-			if now.After(v.expiresAt) {
-				delete(g.cache, k)
-			}
-		}
-	}
-	g.mu.Unlock()
+	g.cacheLocation(ip, loc)
 
 	return loc, nil
+}
+
+func (g *GeoLocator) cachedLocation(ip string) (GeoLocation, bool) {
+	if g == nil || g.runtime == nil {
+		return GeoLocation{}, false
+	}
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return GeoLocation{}, false
+	}
+	raw, ok := g.runtime.GetEphemeralState(geoCacheStateKind, ip)
+	if !ok {
+		return GeoLocation{}, false
+	}
+	var entry geoCache
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		_ = g.runtime.DeleteEphemeralState(geoCacheStateKind, ip)
+		return GeoLocation{}, false
+	}
+	if !entry.ExpiresAt.IsZero() && time.Now().UTC().After(entry.ExpiresAt.UTC()) {
+		_ = g.runtime.DeleteEphemeralState(geoCacheStateKind, ip)
+		return GeoLocation{}, false
+	}
+	return entry.Loc, true
+}
+
+func (g *GeoLocator) cacheLocation(ip string, loc GeoLocation) {
+	if g == nil || g.runtime == nil {
+		return
+	}
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return
+	}
+	ttl := g.cacheTTL
+	if ttl <= 0 {
+		ttl = time.Hour
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+	raw, err := json.Marshal(geoCache{Loc: loc, ExpiresAt: expiresAt})
+	if err != nil {
+		return
+	}
+	_ = g.runtime.SaveEphemeralState(geoCacheStateKind, ip, raw, expiresAt)
 }
 
 func (g *GeoLocator) lookupURL(ip string) string {

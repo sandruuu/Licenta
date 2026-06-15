@@ -11,8 +11,8 @@ import (
 )
 
 // redirectToExternalIdP performs the OIDC Authorization Code flow redirect
-// to an external IdP using a tenant-level IdentityProviderConfig.
-func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, oidcSession *auth.OIDCAuthorizeSession, tenant *models.Tenant, idpCfg *models.IdentityProviderConfig, nonce string) {
+// to an external IdP using an organization-level IdentityProviderConfig.
+func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, oidcSession *auth.OIDCAuthorizeSession, organization *models.Organization, idpCfg *models.IdentityProviderConfig, nonce string) {
 	pkceVerifier, pkceChallenge, err := auth.GeneratePKCE()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -42,28 +42,28 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 		return
 	}
 
-	tenantID := ""
-	if tenant != nil {
-		tenantID = tenant.ID
+	organizationID := ""
+	if organization != nil {
+		organizationID = organization.ID
 	}
 	now := time.Now()
 
-	// Store federation session with tenant/IdP context for callback
+	// Store federation session with organization/IdP context for callback
 	fedSession := &auth.FederationSession{
-		ID:            oidcSession.ID,
-		OIDCSessionID: oidcSession.ID,
-		TenantID:      tenantID,
-		IdPID:         idpCfg.ID,
-		Issuer:        idpCfg.Issuer,
-		PKCEVerifier:  pkceVerifier,
-		Nonce:         fedNonce,
-		State:         fedState,
-		CreatedAt:     now,
-		ExpiresAt:     now.Add(s.appConfig().Runtime.OIDCAuthorizeSessionTTL),
+		ID:             oidcSession.ID,
+		OIDCSessionID:  oidcSession.ID,
+		OrganizationID: organizationID,
+		IdPID:          idpCfg.ID,
+		Issuer:         idpCfg.Issuer,
+		PKCEVerifier:   pkceVerifier,
+		Nonce:          fedNonce,
+		State:          fedState,
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(s.appConfig().Runtime.OIDCAuthorizeSessionTTL),
 	}
 	s.pa.Auth.OIDC.CreateFederationSession(fedSession)
 
-	log.Printf("[FEDERATION] Redirecting to external IdP: tenant=%s idp=%s issuer=%s", tenantID, idpCfg.Name, idpCfg.Issuer)
+	log.Printf("[FEDERATION] Redirecting to external IdP: organization=%s idp=%s issuer=%s", organizationID, idpCfg.Name, idpCfg.Issuer)
 	http.Redirect(w, r, extAuthURL, http.StatusFound)
 }
 
@@ -72,7 +72,7 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 // ──────────────────────────────────────────────────────────────────────
 
 // resolveFederatedConfig determines the issuer, claim mapping, and IdP config
-// for the callback from the tenant-level IdentityProviderConfig captured in
+// for the callback from the organization-level IdentityProviderConfig captured in
 // the federation session.
 func (s *Server) resolveFederatedConfig(fedSession *auth.FederationSession) (authSource string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) {
 	if fedSession.IdPID != "" {
@@ -89,7 +89,7 @@ func (s *Server) resolveFederatedConfig(fedSession *auth.FederationSession) (aut
 }
 
 // buildFederationConfigForExchange constructs a FederationConfig struct for
-// the token exchange call from the tenant-level IdP config.
+// the token exchange call from the organization-level IdP config.
 func (s *Server) buildFederationConfigForExchange(_ *auth.FederationSession, _ string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) *models.FederationConfig {
 	if idpCfg != nil {
 		return &models.FederationConfig{
@@ -158,7 +158,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Resolve the federation config from the tenant-level IdentityProviderConfig.
+	// Resolve the federation config from the organization-level IdentityProviderConfig.
 	authSource, claimMapping, idpCfg := s.resolveFederatedConfig(fedSession)
 	if authSource == "" {
 		http.Error(w, "Federation configuration not found", http.StatusInternalServerError)
@@ -192,7 +192,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Determine role from tenant IdP group mapping when present.
+	// Determine role from organization IdP group mapping when present.
 	role := "user"
 	if idpCfg != nil && len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
 		role = auth.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
@@ -200,7 +200,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(
-		claims.Subject, authSource, claims.Username, claims.Email, role, fedSession.TenantID,
+		claims.Subject, authSource, claims.Username, claims.Email, role, fedSession.OrganizationID,
 	)
 	if err != nil {
 		log.Printf("[FEDERATION] User provisioning failed: %v", err)
@@ -215,7 +215,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Issue PDP JWT with MFADone=false (MFA step-up handled at access time)
-	// and bind it to the device asserted by the Connect-App OIDC request.
+	// and bind it to the device asserted by the endpoint OIDC request.
 	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, user.Role, deviceID, fedSession.Nonce, false)
 	if err != nil {
 		http.Error(w, "Token generation failed", http.StatusInternalServerError)
@@ -243,7 +243,7 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		user.Username, authSource)
 
 	s.pa.Audit.LogEvent("federated_login", user.ID, user.Username,
-		r.RemoteAddr, "", "", "Federated auth via "+authSource+" (role="+role+") tenant="+fedSession.TenantID, true)
+		r.RemoteAddr, "", "", "Federated auth via "+authSource+" (role="+role+") organization="+fedSession.OrganizationID, true)
 
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }

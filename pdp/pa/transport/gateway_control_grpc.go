@@ -11,6 +11,7 @@ import (
 
 	"pdp/models"
 	pagateway "pdp/pa/gateway"
+	"pdp/runtime/redisstate"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -37,8 +38,8 @@ var ErrGatewayControlNotConnected = pagateway.ErrControlNotConnected
 type GatewayControlSession = pagateway.ProvisionedSession
 type GatewayControlRegistry = pagateway.ControlRegistry
 
-func NewGatewayControlRegistry() *GatewayControlRegistry {
-	return pagateway.NewControlRegistry()
+func NewGatewayControlRegistry(runtimeState *redisstate.Client) *GatewayControlRegistry {
+	return pagateway.NewControlRegistry(runtimeState)
 }
 
 func sendGatewayControlCommand(stream grpc.ServerStream, command *structpb.Struct) error {
@@ -99,7 +100,7 @@ func (service *gatewayControlGRPCService) ControlStream(stream grpc.ServerStream
 	endpoint := strings.TrimSpace(structFieldString(hello, "gateway_endpoint"))
 	service.server.markGatewayControlConnected(gateway, endpoint)
 	if service.server.gatewayControl == nil {
-		service.server.gatewayControl = NewGatewayControlRegistry()
+		service.server.gatewayControl = NewGatewayControlRegistry(service.server.pa.Runtime)
 	}
 	connection := service.server.gatewayControl.Register(gateway, endpoint)
 	if connection == nil {
@@ -143,8 +144,8 @@ func (s *Server) authenticateGatewayCertificate(peerCert *x509.Certificate) (*mo
 		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q not found or not enrolled", gatewayID)
 		return nil, 403, "gateway not enrolled or certificate identity not recognized"
 	}
-	if strings.TrimSpace(gateway.TenantID) != organizationID {
-		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q organization mismatch cert=%q store=%q", gatewayID, organizationID, gateway.TenantID)
+	if strings.TrimSpace(gateway.OrganizationID) != organizationID {
+		log.Printf("[AUTH] Rejected gateway request: gateway_id=%q organization mismatch cert=%q store=%q", gatewayID, organizationID, gateway.OrganizationID)
 		return nil, 403, "gateway certificate organization does not match enrollment record"
 	}
 	if strings.TrimSpace(gateway.CertFingerprint) == "" {

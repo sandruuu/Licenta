@@ -4,27 +4,23 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
-	"pdp/store"
 )
 
-func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
+func TestBuildForOrganizationUserDerivesFQDNFromExternalURL(t *testing.T) {
+	dataStore := testdb.NewStore(t)
 	now := time.Now()
 
 	dataStore.SaveResource(&models.Resource{
-		ID:          "res-1",
-		Name:        "Internal Web",
-		Type:        "web",
-		ExternalURL: "https://internal-web.trustcloud.test/app",
-		TenantID:    "tenant-1",
-		Enabled:     true,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:             "res-1",
+		Name:           "Internal Web",
+		Type:           "web",
+		ExternalURL:    "https://internal-web.trustcloud.test/app",
+		OrganizationID: "organization-1",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:        "policy-allow",
@@ -35,22 +31,22 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 		UpdatedAt: now,
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:         "assign-allow",
-		PolicyID:   "policy-allow",
-		TenantID:   "tenant-1",
-		Level:      "resource",
-		ResourceID: "res-1",
-		Enabled:    true,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:             "assign-allow",
+		PolicyID:       "policy-allow",
+		OrganizationID: "organization-1",
+		Level:          "resource",
+		ResourceID:     "res-1",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 
-	snapshot := NewService(dataStore).BuildForTenantUser("tenant-1", &models.User{
-		ID:       "user-1",
-		Username: "user@example.test",
-		Email:    "user@example.test",
-		Role:     "user",
-		TenantID: "tenant-1",
+	snapshot := NewService(dataStore).BuildForOrganizationUser("organization-1", &models.User{
+		ID:             "user-1",
+		Username:       "user@example.test",
+		Email:          "user@example.test",
+		Role:           "user",
+		OrganizationID: "organization-1",
 	}, nil, nil)
 	if len(snapshot.Resources) != 1 {
 		t.Fatalf("resources = %+v, want one resource", snapshot.Resources)
@@ -60,19 +56,15 @@ func TestBuildForTenantUserDerivesFQDNFromExternalURL(t *testing.T) {
 	}
 }
 
-func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
+func TestBuildForOrganizationUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
+	dataStore := testdb.NewStore(t)
 
 	now := time.Now()
 	for _, resource := range []*models.Resource{
-		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SaveResource(resource)
 	}
@@ -84,19 +76,19 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 		dataStore.SavePolicyRule(rule)
 	}
 	for _, assignment := range []*models.PolicyAssignment{
-		{ID: "assign-users", PolicyID: "policy-users", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "assign-all", PolicyID: "policy-all", TenantID: "tenant-1", Level: "resource", ResourceID: "res-all", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "assign-deny", PolicyID: "policy-deny", TenantID: "tenant-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-users", PolicyID: "policy-users", OrganizationID: "organization-1", Level: "resource_group", ResourceID: "res-users", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-all", PolicyID: "policy-all", OrganizationID: "organization-1", Level: "resource", ResourceID: "res-all", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "assign-deny", PolicyID: "policy-deny", OrganizationID: "organization-1", Level: "resource_group", ResourceID: "res-denied", GroupID: "grp-users", GroupName: "TrustCloud-Users", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SavePolicyAssignment(assignment)
 	}
 
-	snapshot := NewService(dataStore).BuildForTenantUser("tenant-1", &models.User{
-		ID:       "user-1",
-		Username: "user@example.test",
-		Email:    "user@example.test",
-		Role:     "user",
-		TenantID: "tenant-1",
+	snapshot := NewService(dataStore).BuildForOrganizationUser("organization-1", &models.User{
+		ID:             "user-1",
+		Username:       "user@example.test",
+		Email:          "user@example.test",
+		Role:           "user",
+		OrganizationID: "organization-1",
 	}, []string{"grp-users"}, []string{"TrustCloud-Users"})
 
 	got := make([]string, 0, len(snapshot.Resources))
@@ -114,23 +106,19 @@ func TestBuildForTenantUserIncludesOnlyPolicyAllowedResources(t *testing.T) {
 	}
 }
 
-func TestBuildForTenantUserDoesNotPublishResourcesFromOrganizationPolicies(t *testing.T) {
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
+func TestBuildForOrganizationUserDoesNotPublishResourcesFromOrganizationPolicies(t *testing.T) {
+	dataStore := testdb.NewStore(t)
 
 	now := time.Now()
 	for _, resource := range []*models.Resource{
-		{ID: "res-web", Name: "Web", Type: "web", ExternalURL: "https://web.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-ssh", Name: "SSH", Type: "ssh", ExternalURL: "ssh.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-rdp", Name: "RDP", Type: "rdp", ExternalURL: "rdp.trustcloud.test", TenantID: "tenant-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-web", Name: "Web", Type: "web", ExternalURL: "https://web.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-ssh", Name: "SSH", Type: "ssh", ExternalURL: "ssh.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-rdp", Name: "RDP", Type: "rdp", ExternalURL: "rdp.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SaveResource(resource)
 	}
 
-	dataStore.EnsureDefaultGlobalPolicyForTenant("tenant-1")
+	dataStore.EnsureDefaultGlobalPolicyForOrganization("organization-1")
 	dataStore.SavePolicyRule(&models.PolicyRule{
 		ID:        "policy-org-baseline",
 		Name:      "Organization baseline",
@@ -140,21 +128,21 @@ func TestBuildForTenantUserDoesNotPublishResourcesFromOrganizationPolicies(t *te
 		UpdatedAt: now,
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assign-org-baseline",
-		PolicyID:  "policy-org-baseline",
-		TenantID:  "tenant-1",
-		Level:     "organization",
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "assign-org-baseline",
+		PolicyID:       "policy-org-baseline",
+		OrganizationID: "organization-1",
+		Level:          "organization",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 
-	snapshot := NewService(dataStore).BuildForTenantUser("tenant-1", &models.User{
-		ID:       "user-1",
-		Username: "user@example.test",
-		Email:    "user@example.test",
-		Role:     "user",
-		TenantID: "tenant-1",
+	snapshot := NewService(dataStore).BuildForOrganizationUser("organization-1", &models.User{
+		ID:             "user-1",
+		Username:       "user@example.test",
+		Email:          "user@example.test",
+		Role:           "user",
+		OrganizationID: "organization-1",
 	}, nil, nil)
 	if len(snapshot.Resources) != 0 {
 		t.Fatalf("resources = %+v, want none without an explicit resource policy", snapshot.Resources)

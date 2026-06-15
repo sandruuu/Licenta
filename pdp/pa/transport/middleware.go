@@ -47,42 +47,36 @@ func loggingMiddleware(next http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses.
-func securityHeadersMiddleware(deviceHealthAgentURL string) func(http.Handler) http.Handler {
-	connectSrc := "'self'"
-	if trimmed := strings.TrimSpace(deviceHealthAgentURL); trimmed != "" {
-		connectSrc += " " + trimmed
-	}
-
+func securityHeadersMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
-			w.Header().Set("Content-Security-Policy", contentSecurityPolicy(r, connectSrc))
+			w.Header().Set("Content-Security-Policy", contentSecurityPolicy(r))
 			w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
-func contentSecurityPolicy(r *http.Request, connectSrc string) string {
+func contentSecurityPolicy(r *http.Request) string {
 	if r != nil && strings.HasPrefix(r.URL.Path, "/browser/step-up/") {
 		return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 	}
-	policy := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src " + connectSrc + "; frame-ancestors 'none'; base-uri 'self'"
+	policy := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
 	if r == nil || (!strings.HasPrefix(r.URL.Path, "/browser/enroll/") && !strings.HasPrefix(r.URL.Path, "/browser/session/")) {
 		policy += "; form-action 'self'"
 	}
 	return policy
 }
 
-// corsMiddleware adds CORS headers for web-based admin UI
+// corsMiddleware adds CORS headers for configured public origins.
 func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			// Restrict to dashboard and localhost origins
 			if origin != "" && isAllowedPDPOrigin(origin, allowedOrigins) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
@@ -103,12 +97,8 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 
 func isAllowedPDPOrigin(origin string, extraOrigins []string) bool {
 	u, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || u.Scheme == "" || u.Host == "" {
 		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" || host == "127.0.0.1" {
-		return true
 	}
 	for _, allowed := range extraOrigins {
 		if origin == allowed {

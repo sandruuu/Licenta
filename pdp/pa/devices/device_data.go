@@ -3,7 +3,6 @@ package devices
 import (
 	"errors"
 	"log"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,11 +14,10 @@ import (
 )
 
 var (
-	ErrServiceUnavailable  = errors.New("device data service is not available")
-	ErrDeviceIDRequired    = errors.New("device_id is required")
-	ErrDeviceIDMismatch    = errors.New("device_id does not match certificate identity")
-	ErrNoPriorHealthReport = errors.New("no prior health report on file")
-	ErrNoPriorDeviceData   = errors.New("no prior device data report on file")
+	ErrServiceUnavailable = errors.New("device data service is not available")
+	ErrDeviceIDRequired   = errors.New("device_id is required")
+	ErrDeviceIDMismatch   = errors.New("device_id does not match certificate identity")
+	ErrNoPriorDeviceData  = errors.New("no prior device data report on file")
 )
 
 type EventPublisher interface {
@@ -52,18 +50,6 @@ func (service *Service) SetEventPublisher(publisher EventPublisher) {
 	service.publisherMu.Unlock()
 }
 
-func (service *Service) RecordHealth(report *models.DeviceHealthReport) {
-	if service == nil || service.store == nil || report == nil {
-		return
-	}
-	service.store.SaveDeviceHealth(report)
-	if service.audit != nil {
-		service.audit.LogEvent("device_health_report", "", "", "", report.DeviceID,
-			"", "Device health reported: score="+strconv.Itoa(report.OverallScore), true)
-	}
-	log.Printf("[PA] Device health report received: device=%s score=%d", report.DeviceID, report.OverallScore)
-}
-
 func (service *Service) RecordDeviceData(report *models.DeviceDataReport) {
 	service.RecordDeviceDataWithSourceIP(report, "")
 }
@@ -78,32 +64,6 @@ func (service *Service) RecordDeviceDataWithSourceIP(report *models.DeviceDataRe
 			"", "Device data received", true)
 	}
 	log.Printf("[PA] Device data report received: device=%s checks=%d", report.DeviceID, len(report.Checks))
-}
-
-func (service *Service) AcceptHealthReport(certDeviceID string, report models.DeviceHealthReport) (models.DeviceHealthReport, error) {
-	if err := service.ready(); err != nil {
-		return report, err
-	}
-	certDeviceID = strings.TrimSpace(certDeviceID)
-	report.DeviceID = strings.TrimSpace(report.DeviceID)
-	if report.DeviceID == "" {
-		return report, ErrDeviceIDRequired
-	}
-	if report.DeviceID != certDeviceID {
-		log.Printf("[PA] Device health report rejected: device_id=%q does not match cert CN=%q", report.DeviceID, certDeviceID)
-		return report, ErrDeviceIDMismatch
-	}
-	if report.ReportedAt.IsZero() {
-		report.ReportedAt = service.nowTime()
-	}
-	service.RecordHealth(&report)
-	service.publish(events.TopicHealthChanged, map[string]string{
-		"device_id": report.DeviceID,
-		"tenant_id": report.TenantID,
-		"reason":    "device_health_reported",
-		"score":     strconv.Itoa(report.OverallScore),
-	})
-	return report, nil
 }
 
 func (service *Service) AcceptDeviceDataReport(certDeviceID string, report models.DeviceDataReport) (models.DeviceDataReport, error) {
@@ -131,26 +91,11 @@ func (service *Service) AcceptDeviceDataReportWithSourceIP(certDeviceID string, 
 	}
 	service.RecordDeviceDataWithSourceIP(&report, sourceIP)
 	service.publish(events.TopicHealthChanged, map[string]string{
-		"device_id": report.DeviceID,
-		"tenant_id": report.TenantID,
-		"reason":    "device_data_reported",
+		"device_id":       report.DeviceID,
+		"organization_id": report.OrganizationID,
+		"reason":          "device_data_reported",
 	})
 	return report, nil
-}
-
-func (service *Service) TouchHealthHeartbeat(deviceID string) (time.Time, error) {
-	if err := service.ready(); err != nil {
-		return time.Time{}, err
-	}
-	deviceID = strings.TrimSpace(deviceID)
-	if deviceID == "" {
-		return time.Time{}, ErrDeviceIDRequired
-	}
-	now := service.nowTime()
-	if !service.store.TouchDeviceHealth(deviceID, now) {
-		return now, ErrNoPriorHealthReport
-	}
-	return now, nil
 }
 
 func (service *Service) TouchDeviceDataHeartbeat(deviceID string) (time.Time, error) {

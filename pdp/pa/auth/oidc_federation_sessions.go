@@ -3,27 +3,37 @@ package auth
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"log"
 )
 
-// CreateFederationSession stores a pending external IdP authentication session.
+// CreateFederationSession records a pending external IdP authentication flow.
 func (m *OIDCManager) CreateFederationSession(sess *FederationSession) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.FederationSessions[sess.State] = sess
-	log.Printf("[OIDC] Federation session created: state=%s oidc_session=%s tenant=%s idp=%s",
-		sess.State, sess.OIDCSessionID, sess.TenantID, sess.IdPID)
+	if sess == nil || m.state == nil {
+		return
+	}
+	if err := saveOIDCState(m.state, oidcFederationStateKind, sess.State, sess, sess.ExpiresAt); err != nil {
+		log.Printf("[OIDC] Failed to save federation session: state=%s err=%v", sess.State, err)
+		return
+	}
+	log.Printf("[OIDC] Federation session created: state=%s oidc_session=%s organization=%s idp=%s",
+		sess.State, sess.OIDCSessionID, sess.OrganizationID, sess.IdPID)
 }
 
 // GetFederationSession retrieves and removes a federation session by state (one-time use).
 func (m *OIDCManager) GetFederationSession(state string) (*FederationSession, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	sess, ok := m.FederationSessions[state]
-	if ok {
-		delete(m.FederationSessions, state)
+	if m == nil || m.state == nil {
+		return nil, false
 	}
-	return sess, ok
+	raw, ok, err := m.state.TakeEphemeralState(oidcFederationStateKind, state)
+	if err != nil || !ok {
+		return nil, false
+	}
+	var sess FederationSession
+	if err := json.Unmarshal(raw, &sess); err != nil {
+		return nil, false
+	}
+	return &sess, true
 }
 
 func generateOIDCID(prefix string) (string, error) {

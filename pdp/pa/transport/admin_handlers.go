@@ -75,7 +75,7 @@ func (s *Server) handleAdminOrganizations(w http.ResponseWriter, r *http.Request
 		})
 
 	case http.MethodPost:
-		var organization models.Tenant
+		var organization models.Organization
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&organization); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
@@ -85,8 +85,8 @@ func (s *Server) handleAdminOrganizations(w http.ResponseWriter, r *http.Request
 		}
 		organization.CreatedAt = time.Now()
 		organization.UpdatedAt = time.Now()
-		s.pa.Store.SaveTenant(&organization)
-		s.pa.Store.EnsureDefaultGlobalPolicyForTenant(organization.ID)
+		s.pa.Store.SaveOrganization(&organization)
+		s.pa.Store.EnsureDefaultGlobalPolicyForOrganization(organization.ID)
 		s.pa.Store.SaveOrganizationMembership(&models.OrganizationMembership{
 			UserID:         currentAdminUserID(r),
 			OrganizationID: organization.ID,
@@ -116,7 +116,7 @@ func (s *Server) handleAdminOrganizationByID(w http.ResponseWriter, r *http.Requ
 
 	switch r.Method {
 	case http.MethodGet:
-		organization, found := s.pa.Store.GetTenant(organizationID)
+		organization, found := s.pa.Store.GetOrganization(organizationID)
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
@@ -124,12 +124,12 @@ func (s *Server) handleAdminOrganizationByID(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: organization})
 
 	case http.MethodPut:
-		var organization models.Tenant
+		var organization models.Organization
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&organization); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 			return
 		}
-		existing, found := s.pa.Store.GetTenant(organizationID)
+		existing, found := s.pa.Store.GetOrganization(organizationID)
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
@@ -140,11 +140,11 @@ func (s *Server) handleAdminOrganizationByID(w http.ResponseWriter, r *http.Requ
 			organization.DefaultIdPID = existing.DefaultIdPID
 		}
 		organization.UpdatedAt = time.Now()
-		s.pa.Store.SaveTenant(&organization)
+		s.pa.Store.SaveOrganization(&organization)
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Organization updated", Data: organization})
 
 	case http.MethodDelete:
-		if !s.pa.Store.DeleteTenant(organizationID) {
+		if !s.pa.Store.DeleteOrganization(organizationID) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 			return
 		}
@@ -196,7 +196,7 @@ func (s *Server) handleAdminSessionByID(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !s.requireOrganizationAccess(w, r, session.TenantID) {
+	if !s.requireOrganizationAccess(w, r, session.OrganizationID) {
 		return
 	}
 	if err := s.pa.Sessions.RevokeSession(sessionID); err != nil {

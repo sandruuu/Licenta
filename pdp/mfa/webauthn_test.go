@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pdp/config"
+	"pdp/internal/testredis"
 	"pdp/models"
 )
 
@@ -18,7 +19,7 @@ func TestBeginRegistrationRequestsDiscoverablePasskey(t *testing.T) {
 			WebAuthnChallengeTTL:    5 * time.Minute,
 			WebAuthnCleanupInterval: time.Hour,
 		},
-	})
+	}, testredis.NewClient(t))
 	if provider == nil {
 		t.Fatal("WebAuthn provider was not created")
 	}

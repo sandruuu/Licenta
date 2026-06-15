@@ -128,13 +128,13 @@ export default function OrganizationDetail() {
   }, [load]);
 
   const organizationGateways = useMemo(
-    () => gateways.filter((gateway) => gateway.tenant_id === organizationID || gateway.tenant_ids?.includes?.(organizationID)),
+    () => gateways.filter((gateway) => gateway.organization_id === organizationID || gateway.organization_ids?.includes?.(organizationID)),
     [gateways, organizationID],
   );
 
   const organizationResources = useMemo(() => {
     const gatewayIDs = new Set(organizationGateways.map((gateway) => gateway.id));
-    return resources.filter((resource) => resource.tenant_id === organizationID || gatewayIDs.has(resource.gateway_id));
+    return resources.filter((resource) => resource.organization_id === organizationID || gatewayIDs.has(resource.gateway_id));
   }, [resources, organizationID, organizationGateways]);
 
   const configuredIdP = idps[0] || null;
@@ -187,7 +187,7 @@ export default function OrganizationDetail() {
       name: '',
       description: '',
       type,
-      tenant_id: organizationID,
+      organization_id: organizationID,
       gateway_id: organizationGateways[0]?.id || '',
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
@@ -637,7 +637,7 @@ export default function OrganizationDetail() {
             <FormInput value={resourceForm.host || ''} onChange={(event) => setResourceForm({ ...resourceForm, host: event.target.value })} placeholder="10.0.0.5 or server.internal" />
           </FormField>
           <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
-            <FormInput value={resourceForm.external_url || ''} onChange={(event) => setResourceForm({ ...resourceForm, external_url: event.target.value })} placeholder="https://app.example.com or ssh.example.com" />
+            <FormInput value={resourceForm.external_url || ''} onChange={(event) => setResourceForm({ ...resourceForm, external_url: event.target.value })} placeholder="https://app.company.com or ssh.company.com" />
           </FormField>
 
           <div className="flex flex-wrap items-center gap-x-8 gap-y-3 pt-2 md:col-span-4">

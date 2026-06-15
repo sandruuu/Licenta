@@ -20,31 +20,31 @@ func TestServiceRenewGatewayCertificateUpdatesCertificateAndRevokesOldSerial(t *
 	})
 	service.now = func() time.Time { return fixedNow }
 
-	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test")), 7, "gateway-role", CertificateProfile{
+	oldCertPEM, err := ca.sign([]byte(newGatewayCSR(t, gatewayTestOrganizationID, "gw-1", "edge.example.test")), 7, "gateway-role", CertificateProfile{
 		CommonName: "edge.example.test",
 		DNSNames:   []string{"edge.example.test"},
-		URISANs:    []string{GatewayIdentityURI(gatewayTestTenantID, "gw-1")},
+		URISANs:    []string{GatewayIdentityURI(gatewayTestOrganizationID, "gw-1")},
 	})
 	if err != nil {
 		t.Fatalf("sign old certificate: %v", err)
 	}
 	_, oldSerial := certificateIdentity(oldCertPEM)
 	gateway := &models.Gateway{
-		ID:            "gw-1",
-		TenantID:      gatewayTestTenantID,
-		TenantIDs:     []string{gatewayTestTenantID},
-		Name:          "Edge Gateway",
-		FQDN:          "edge.example.test",
-		Status:        "enrolled",
-		CertPEM:       string(oldCertPEM),
-		CertSerial:    oldSerial,
-		CertExpiresAt: fixedNow.Add(2 * time.Hour).Format(time.RFC3339),
-		CreatedAt:     fixedNow.Add(-time.Hour),
-		UpdatedAt:     fixedNow.Add(-time.Hour),
+		ID:              "gw-1",
+		OrganizationID:  gatewayTestOrganizationID,
+		OrganizationIDs: []string{gatewayTestOrganizationID},
+		Name:            "Edge Gateway",
+		FQDN:            "edge.example.test",
+		Status:          "enrolled",
+		CertPEM:         string(oldCertPEM),
+		CertSerial:      oldSerial,
+		CertExpiresAt:   fixedNow.Add(2 * time.Hour).Format(time.RFC3339),
+		CreatedAt:       fixedNow.Add(-time.Hour),
+		UpdatedAt:       fixedNow.Add(-time.Hour),
 	}
 	dataStore.SaveGateway(gateway)
 
-	result, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestTenantID, "gw-1", "edge.example.test"))
+	result, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestOrganizationID, "gw-1", "edge.example.test"))
 	if err != nil {
 		t.Fatalf("RenewGatewayCertificate returned error: %v", err)
 	}
@@ -67,9 +67,9 @@ func TestServiceRenewGatewayCertificateValidatesCSRIdentity(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := newGatewayTestService(t, dataStore, fixedNow)
-	gateway := &models.Gateway{ID: "gw-1", TenantID: gatewayTestTenantID, FQDN: "edge.example.test", Status: "enrolled"}
+	gateway := &models.Gateway{ID: "gw-1", OrganizationID: gatewayTestOrganizationID, FQDN: "edge.example.test", Status: "enrolled"}
 
-	_, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestTenantID, "gw-other", "edge.example.test"))
+	_, err := service.RenewGatewayCertificate(gateway, newGatewayCSR(t, gatewayTestOrganizationID, "gw-other", "edge.example.test"))
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("error = %v, want ErrForbidden", err)
 	}

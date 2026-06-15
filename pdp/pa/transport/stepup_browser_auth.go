@@ -3,23 +3,26 @@ package transport
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"pdp/pa"
+	"pdp/runtime/redisstate"
 )
 
 const stepUpAuthCookieName = "tc_stepup_auth"
+const (
+	stepUpBrowserAuthStateKind = "step_up_browser_auth"
+	stepUpFederatedStateKind   = "step_up_federated_reauth"
+)
 
 type stepUpBrowserAuthStore struct {
-	mu       sync.RWMutex
-	sessions map[string]*stepUpBrowserAuthSession
-	fed      map[string]*stepUpFederatedReauthSession
-	ttl      time.Duration
+	state *redisstate.Client
+	ttl   time.Duration
 }
 
 type stepUpBrowserAuthSession struct {
@@ -34,30 +37,29 @@ type stepUpBrowserAuthSession struct {
 }
 
 type stepUpFederatedReauthSession struct {
-	State        string
-	ChallengeID  string
-	UserID       string
-	TargetMethod string
-	TenantID     string
-	IdPID        string
-	PKCEVerifier string
-	Nonce        string
-	ExpiresAt    time.Time
+	State          string
+	ChallengeID    string
+	UserID         string
+	TargetMethod   string
+	OrganizationID string
+	IdPID          string
+	PKCEVerifier   string
+	Nonce          string
+	ExpiresAt      time.Time
 }
 
-func newStepUpBrowserAuthStore(ttl time.Duration) *stepUpBrowserAuthStore {
+func newStepUpBrowserAuthStore(state *redisstate.Client, ttl time.Duration) *stepUpBrowserAuthStore {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
 	return &stepUpBrowserAuthStore{
-		sessions: make(map[string]*stepUpBrowserAuthSession),
-		fed:      make(map[string]*stepUpFederatedReauthSession),
-		ttl:      ttl,
+		state: state,
+		ttl:   ttl,
 	}
 }
 
 func (store *stepUpBrowserAuthStore) create(r *http.Request, challenge *pa.StepUpChallenge, targetMethod string, now time.Time) (*stepUpBrowserAuthSession, error) {
-	if store == nil || challenge == nil {
+	if store == nil || store.state == nil || challenge == nil {
 		return nil, fmt.Errorf("step-up auth store is unavailable")
 	}
 	id, err := randomSessionSecret(32)
@@ -77,73 +79,72 @@ func (store *stepUpBrowserAuthStore) create(r *http.Request, challenge *pa.StepU
 		AuthenticatedAt: now,
 		ExpiresAt:       now.Add(store.ttl),
 	}
-	store.mu.Lock()
-	store.expireLocked(now)
-	store.sessions[id] = session
-	store.mu.Unlock()
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.state.SaveEphemeralState(stepUpBrowserAuthStateKind, id, raw, session.ExpiresAt); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 
 func (store *stepUpBrowserAuthStore) get(id string, now time.Time) (*stepUpBrowserAuthSession, bool) {
-	if store == nil {
+	if store == nil || store.state == nil {
 		return nil, false
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	store.expireLocked(now)
-	session := store.sessions[strings.TrimSpace(id)]
-	if session == nil || !now.Before(session.ExpiresAt) {
+	raw, ok := store.state.GetEphemeralState(stepUpBrowserAuthStateKind, strings.TrimSpace(id))
+	if !ok {
 		return nil, false
 	}
-	copy := *session
+	var session stepUpBrowserAuthSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		_ = store.state.DeleteEphemeralState(stepUpBrowserAuthStateKind, id)
+		return nil, false
+	}
+	if !now.Before(session.ExpiresAt) {
+		_ = store.state.DeleteEphemeralState(stepUpBrowserAuthStateKind, id)
+		return nil, false
+	}
+	copy := session
 	return &copy, true
 }
 
 func (store *stepUpBrowserAuthStore) saveFederated(session *stepUpFederatedReauthSession) {
-	if store == nil || session == nil {
+	if store == nil || store.state == nil || session == nil {
 		return
 	}
-	store.mu.Lock()
-	store.expireLocked(time.Now().UTC())
-	store.fed[strings.TrimSpace(session.State)] = session
-	store.mu.Unlock()
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return
+	}
+	_ = store.state.SaveEphemeralState(stepUpFederatedStateKind, strings.TrimSpace(session.State), raw, session.ExpiresAt)
 }
 
 func (store *stepUpBrowserAuthStore) takeFederated(state string, now time.Time) (*stepUpFederatedReauthSession, bool) {
-	if store == nil {
+	if store == nil || store.state == nil {
 		return nil, false
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	store.expireLocked(now)
 	state = strings.TrimSpace(state)
-	session := store.fed[state]
-	if session == nil || !now.Before(session.ExpiresAt) {
-		delete(store.fed, state)
+	raw, ok, err := store.state.TakeEphemeralState(stepUpFederatedStateKind, state)
+	if err != nil || !ok {
 		return nil, false
 	}
-	delete(store.fed, state)
-	copy := *session
+	var session stepUpFederatedReauthSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		return nil, false
+	}
+	if !now.Before(session.ExpiresAt) {
+		return nil, false
+	}
+	copy := session
 	return &copy, true
-}
-
-func (store *stepUpBrowserAuthStore) expireLocked(now time.Time) {
-	for id, session := range store.sessions {
-		if session == nil || !now.Before(session.ExpiresAt) {
-			delete(store.sessions, id)
-		}
-	}
-	for state, session := range store.fed {
-		if session == nil || !now.Before(session.ExpiresAt) {
-			delete(store.fed, state)
-		}
-	}
 }
 
 func (s *Server) setStepUpAuthCookie(w http.ResponseWriter, session *stepUpBrowserAuthSession) {

@@ -53,43 +53,43 @@ func EmptySnapshot() Snapshot {
 	return newSnapshot(nil, DeviceDataPolicy{}, defaultTTLSeconds)
 }
 
-func (service *Service) BuildForTenantUser(tenantID string, user *models.User, groupIDs, groupNames []string) Snapshot {
+func (service *Service) BuildForOrganizationUser(organizationID string, user *models.User, groupIDs, groupNames []string) Snapshot {
 	if service == nil || service.store == nil || user == nil {
 		return EmptySnapshot()
 	}
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
-		tenantID = strings.TrimSpace(user.TenantID)
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
+		organizationID = strings.TrimSpace(user.OrganizationID)
 	}
-	if tenantID == "" {
+	if organizationID == "" {
 		return EmptySnapshot()
 	}
 
-	resources := service.store.ListResourcesByTenant(tenantID)
-	accessible := service.accessibleResources(tenantID, user, groupIDs, groupNames, resources)
+	resources := service.store.ListResourcesByOrganization(organizationID)
+	accessible := service.accessibleResources(organizationID, user, groupIDs, groupNames, resources)
 	entries := buildResources(accessible)
-	deviceDataPolicy := buildDeviceDataPolicyForUser(service.store, tenantID, user, groupIDs, groupNames, accessible)
+	deviceDataPolicy := buildDeviceDataPolicyForUser(service.store, organizationID, user, groupIDs, groupNames, accessible)
 	return newSnapshot(entries, deviceDataPolicy, service.ttlSeconds)
 }
 
-func (service *Service) accessibleResources(tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) []*models.Resource {
+func (service *Service) accessibleResources(organizationID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) []*models.Resource {
 	accessible := make([]*models.Resource, 0, len(resources))
 	for _, resource := range resources {
 		if resource == nil || !resource.Enabled || strings.TrimSpace(resource.ID) == "" {
 			continue
 		}
-		if service.resourceAllowedByPolicy(tenantID, user, groupIDs, groupNames, resource) {
+		if service.resourceAllowedByPolicy(organizationID, user, groupIDs, groupNames, resource) {
 			accessible = append(accessible, resource)
 		}
 	}
 	return accessible
 }
 
-func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) bool {
+func (service *Service) resourceAllowedByPolicy(organizationID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) bool {
 	if service == nil || service.store == nil || user == nil || resource == nil {
 		return false
 	}
-	rules := service.catalogRulesForResource(tenantID, user, groupIDs, groupNames, resource)
+	rules := service.catalogRulesForResource(organizationID, user, groupIDs, groupNames, resource)
 	for _, rule := range rules {
 		if rule == nil || !rule.Enabled {
 			continue
@@ -110,11 +110,11 @@ func (service *Service) resourceAllowedByPolicy(tenantID string, user *models.Us
 	return false
 }
 
-func (service *Service) catalogRulesForResource(tenantID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) []*models.PolicyRule {
+func (service *Service) catalogRulesForResource(organizationID string, user *models.User, groupIDs, groupNames []string, resource *models.Resource) []*models.PolicyRule {
 	if service == nil || service.store == nil || user == nil || resource == nil {
 		return nil
 	}
-	assignments := service.store.ListPolicyAssignmentsForAccessGroups(tenantID, resource.ID, groupIDs, groupNames)
+	assignments := service.store.ListPolicyAssignmentsForAccessGroups(organizationID, resource.ID, groupIDs, groupNames)
 	rules := make([]*models.PolicyRule, 0, len(assignments))
 	for _, assignment := range assignments {
 		if assignment == nil || !assignment.Enabled {
@@ -271,7 +271,7 @@ func version(resources []ResourceEntry, deviceDataPolicy DeviceDataPolicy) strin
 	return hex.EncodeToString(fingerprint[:16])
 }
 
-func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) DeviceDataPolicy {
+func buildDeviceDataPolicyForUser(dataStore *store.Store, organizationID string, user *models.User, groupIDs, groupNames []string, resources []*models.Resource) DeviceDataPolicy {
 	if dataStore == nil || user == nil {
 		return DeviceDataPolicy{}
 	}
@@ -281,7 +281,7 @@ func buildDeviceDataPolicyForUser(dataStore *store.Store, tenantID string, user 
 		if resource == nil || strings.TrimSpace(resource.ID) == "" {
 			continue
 		}
-		for _, rule := range (&Service{store: dataStore}).catalogRulesForResource(tenantID, user, groupIDs, groupNames, resource) {
+		for _, rule := range (&Service{store: dataStore}).catalogRulesForResource(organizationID, user, groupIDs, groupNames, resource) {
 			if rule == nil || !rule.Enabled || !deviceDataPolicyRuleAction(rule.Action) {
 				continue
 			}

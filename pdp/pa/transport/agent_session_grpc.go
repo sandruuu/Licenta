@@ -46,14 +46,14 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 	if requested := strings.TrimSpace(structFieldString(request, "device_id")); requested != "" && requested != deviceID {
 		return nil, status.Error(codes.PermissionDenied, "device_id does not match mTLS device identity")
 	}
-	tenantID := strings.TrimSpace(enrollment.TenantID)
-	if tenantID == "" {
-		if _, tenant, ok := service.server.singleTenantIdentityProvider(); ok && tenant != nil {
-			tenantID = tenant.ID
+	organizationID := strings.TrimSpace(enrollment.OrganizationID)
+	if organizationID == "" {
+		if _, organization, ok := service.server.singleOrganizationIdentityProvider(); ok && organization != nil {
+			organizationID = organization.ID
 		}
 	}
-	if tenantID == "" {
-		return nil, status.Error(codes.FailedPrecondition, "enrolled device has no tenant context for user authentication")
+	if organizationID == "" {
+		return nil, status.Error(codes.FailedPrecondition, "enrolled device has no organization context for user authentication")
 	}
 	localUser := structFieldStruct(request, "local_user")
 	localUserSIDHash := strings.TrimSpace(structFieldString(localUser, "sid_hash"))
@@ -61,6 +61,10 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 	windowsSessionID := strings.TrimSpace(structFieldString(localUser, "windows_session_id"))
 	if localUserSIDHash == "" || windowsLogonSessionID == "" || windowsSessionID == "" {
 		return nil, status.Error(codes.InvalidArgument, "local_user sid_hash, windows_logon_session_id and windows_session_id are required")
+	}
+	publicOrigin, err := service.server.publicOrigin()
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	sessionID, err := util.GenerateID("srq")
 	if err != nil {
@@ -77,7 +81,7 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 	}
 	session := &agentSessionTransaction{
 		ID:                    sessionID,
-		TenantID:              tenantID,
+		OrganizationID:        organizationID,
 		DeviceID:              deviceID,
 		DeviceCertThumbprint:  peerThumbprint,
 		LocalUserSIDHash:      localUserSIDHash,
@@ -85,7 +89,7 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		WindowsSessionID:      windowsSessionID,
 		DeviceDataRevision:    strings.TrimSpace(structFieldString(request, "device_data_revision")),
 		ClaimSecretHash:       hashSessionSecret(claimSecret),
-		AuthURL:               service.server.publicOrigin() + "/browser/session/" + sessionID,
+		AuthURL:               publicOrigin + "/browser/session/" + sessionID,
 		Status:                agentSessionStatusWaitingForUserLogin,
 		PolicyEpoch:           1,
 		CreatedAt:             now,
@@ -161,7 +165,7 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 		UserID:                      session.AuthenticatedUserID,
 		Username:                    firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
 		Role:                        role,
-		TenantID:                    session.TenantID,
+		OrganizationID:              session.OrganizationID,
 		DeviceID:                    session.DeviceID,
 		LocalUserSIDHash:            session.LocalUserSIDHash,
 		WindowsLogonSessionID:       session.WindowsLogonSessionID,
@@ -245,7 +249,7 @@ func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, reque
 	}
 	revokedResourceSessions := 0
 	if service.server.pa.Sessions != nil {
-		revokedResourceSessions = service.server.pa.Sessions.RevokeSessionsForDeviceUser(claims.UserID, claims.DeviceID, claims.TenantID, "agent_logout")
+		revokedResourceSessions = service.server.pa.Sessions.RevokeSessionsForDeviceUser(claims.UserID, claims.DeviceID, claims.OrganizationID, "agent_logout")
 	}
 	return structpb.NewStruct(map[string]interface{}{
 		"revoked":                   true,
@@ -266,14 +270,14 @@ func (service *agentSessionGRPCService) authenticatedAgentDevice(ctx context.Con
 		return deviceEnrollment{}, "", status.Error(codes.Unauthenticated, "client certificate required")
 	}
 	return deviceEnrollment{
-		DeviceID: enrollment.DeviceID,
-		TenantID: enrollment.TenantID,
+		DeviceID:       enrollment.DeviceID,
+		OrganizationID: enrollment.OrganizationID,
 	}, clientCertificateFingerprint(peerCert), nil
 }
 
 type deviceEnrollment struct {
-	DeviceID string
-	TenantID string
+	DeviceID       string
+	OrganizationID string
 }
 
 func (service *agentSessionGRPCService) validatedSessionRequest(ctx context.Context, request *structpb.Struct) (*agentSessionTransaction, error) {

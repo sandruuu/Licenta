@@ -5,8 +5,6 @@ import (
 	"log"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -15,8 +13,7 @@ import (
 
 func (s *Store) GetResource(id string) (*models.Resource, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
-		allowed_roles_json, created_at, updated_at
+		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at
 		FROM resources WHERE id = ?`, id)
 	return s.scanResource(row)
 }
@@ -24,11 +21,10 @@ func (s *Store) GetResource(id string) (*models.Resource, bool) {
 func (s *Store) scanResource(row *sql.Row) (*models.Resource, bool) {
 	r := &models.Resource{}
 	var enabled int
-	var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
+	var tagsJSON, metaJSON, createdAt, updatedAt string
 
 	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
-		&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
-		&rolesJSON, &createdAt, &updatedAt)
+		&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
 	}
@@ -36,7 +32,6 @@ func (s *Store) scanResource(row *sql.Row) (*models.Resource, bool) {
 	r.Enabled = i2b(enabled)
 	r.Tags = fromJSON[[]string](tagsJSON)
 	r.Metadata = fromJSON[map[string]string](metaJSON)
-	r.AllowedRoles = fromJSON[[]string](rolesJSON)
 	r.CreatedAt = parseTime(createdAt)
 	r.UpdatedAt = parseTime(updatedAt)
 	return r, true
@@ -51,19 +46,28 @@ func (s *Store) SaveResource(res *models.Resource) {
 	if meta == nil {
 		meta = map[string]string{}
 	}
-	roles := res.AllowedRoles
-	if roles == nil {
-		roles = []string{}
-	}
 
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO resources
+	_, err := s.db.Exec(`INSERT INTO resources
 		(id, name, description, type, host, port, external_url, enabled,
-		 tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
-		 allowed_roles_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			type = EXCLUDED.type,
+			host = EXCLUDED.host,
+			port = EXCLUDED.port,
+			external_url = EXCLUDED.external_url,
+			enabled = EXCLUDED.enabled,
+			tags_json = EXCLUDED.tags_json,
+			metadata_json = EXCLUDED.metadata_json,
+			organization_id = EXCLUDED.organization_id,
+			gateway_id = EXCLUDED.gateway_id,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`,
 		res.ID, res.Name, res.Description, res.Type, res.Host, res.Port, res.ExternalURL,
-		b2i(res.Enabled), toJSON(tags), toJSON(meta), res.TenantID, res.GatewayID, res.ClientID, res.ClientSecret,
-		toJSON(roles), fmtTime(res.CreatedAt), fmtTime(res.UpdatedAt))
+		b2i(res.Enabled), toJSON(tags), toJSON(meta), res.OrganizationID, res.GatewayID,
+		fmtTime(res.CreatedAt), fmtTime(res.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save resource %s: %v", res.ID, err)
 	}
@@ -71,8 +75,7 @@ func (s *Store) SaveResource(res *models.Resource) {
 
 func (s *Store) ListResources() []*models.Resource {
 	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
-		allowed_roles_json, created_at, updated_at FROM resources`)
+		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at FROM resources`)
 	if err != nil {
 		return nil
 	}
@@ -82,18 +85,16 @@ func (s *Store) ListResources() []*models.Resource {
 	for rows.Next() {
 		r := &models.Resource{}
 		var enabled int
-		var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
+		var tagsJSON, metaJSON, createdAt, updatedAt string
 
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
-			&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
-			&rolesJSON, &createdAt, &updatedAt); err != nil {
+			&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 
 		r.Enabled = i2b(enabled)
 		r.Tags = fromJSON[[]string](tagsJSON)
 		r.Metadata = fromJSON[map[string]string](metaJSON)
-		r.AllowedRoles = fromJSON[[]string](rolesJSON)
 		r.CreatedAt = parseTime(createdAt)
 		r.UpdatedAt = parseTime(updatedAt)
 		resources = append(resources, r)
@@ -101,11 +102,10 @@ func (s *Store) ListResources() []*models.Resource {
 	return resources
 }
 
-func (s *Store) ListResourcesByTenant(tenantID string) []*models.Resource {
+func (s *Store) ListResourcesByOrganization(organizationID string) []*models.Resource {
 	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
-		allowed_roles_json, created_at, updated_at FROM resources
-		WHERE tenant_id = ?`, tenantID)
+		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at FROM resources
+		WHERE organization_id = ?`, organizationID)
 	if err != nil {
 		return nil
 	}
@@ -118,31 +118,19 @@ func (s *Store) scanResources(rows *sql.Rows) []*models.Resource {
 	for rows.Next() {
 		r := &models.Resource{}
 		var enabled int
-		var tagsJSON, metaJSON, rolesJSON, createdAt, updatedAt string
+		var tagsJSON, metaJSON, createdAt, updatedAt string
 		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
-			&enabled, &tagsJSON, &metaJSON, &r.TenantID, &r.GatewayID, &r.ClientID, &r.ClientSecret,
-			&rolesJSON, &createdAt, &updatedAt); err != nil {
+			&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt); err != nil {
 			continue
 		}
 		r.Enabled = i2b(enabled)
 		r.Tags = fromJSON[[]string](tagsJSON)
 		r.Metadata = fromJSON[map[string]string](metaJSON)
-		r.AllowedRoles = fromJSON[[]string](rolesJSON)
 		r.CreatedAt = parseTime(createdAt)
 		r.UpdatedAt = parseTime(updatedAt)
 		resources = append(resources, r)
 	}
 	return resources
-}
-
-// GetResourceByClientID is retained for legacy databases where protected
-// resources briefly carried OIDC-style client IDs.
-func (s *Store) GetResourceByClientID(clientID string) (*models.Resource, bool) {
-	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
-		tags_json, metadata_json, tenant_id, gateway_id, client_id, client_secret,
-		allowed_roles_json, created_at, updated_at
-		FROM resources WHERE client_id = ?`, clientID)
-	return s.scanResource(row)
 }
 
 func (s *Store) DeleteResource(id string) bool {

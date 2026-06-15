@@ -1,84 +1,67 @@
 package store
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
+	"strings"
 	"sync"
-
-	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
-// Store provides thread-safe data storage backed by SQLite.
-// Replaces the previous in-memory maps + JSON file persistence.
+// Store provides thread-safe data storage backed by PostgreSQL.
 type Store struct {
-	db           *sql.DB
-	dataDir      string
-	databasePath string
+	db          *DB
+	dataDir     string
+	databaseURL string
 
-	// auditMu serialises audit_log inserts so the hash chain (S4.2) is
-	// well-defined under concurrent callers. The chain is computed in
-	// Go rather than in SQL so we don't depend on SQLite-specific
-	// triggers/extensions.
+	// auditMu serializes audit_log inserts so the hash chain is deterministic
+	// under concurrent callers.
 	auditMu sync.Mutex
-
-	// PendingEnroll is ephemeral (browser enrollment sessions, 5-min TTL) — kept in memory
-	enrollMu      sync.RWMutex
-	PendingEnroll map[string]*models.PendingEnrollSession
 }
 
-// New creates a new Store with the specified data directory.
+// New creates a Store using PDP_DATABASE_URL.
 func New(dataDir string) *Store {
+	return NewWithDatabaseURL(dataDir, os.Getenv(databaseURLEnv))
+}
+
+// NewWithDatabaseURL creates a Store with the PostgreSQL connection string.
+func NewWithDatabaseURL(dataDir, databaseURL string) *Store {
 	s := &Store{
-		dataDir:       dataDir,
-		PendingEnroll: make(map[string]*models.PendingEnrollSession),
+		dataDir:     dataDir,
+		databaseURL: strings.TrimSpace(databaseURL),
 	}
 	if dataDir != "" {
-		os.MkdirAll(dataDir, 0755)
+		_ = os.MkdirAll(dataDir, 0o755)
 	}
 	return s
 }
 
-// NewWithDatabasePath creates a Store with an explicit SQLite file path.
-func NewWithDatabasePath(dataDir, databasePath string) *Store {
-	s := New(dataDir)
-	s.databasePath = databasePath
-	return s
-}
-
-// InitDB opens the SQLite database and creates tables.
+// InitDB opens the PostgreSQL database and creates tables.
 func (s *Store) InitDB() error {
-	dbPath := s.databasePath
-	if dbPath == "" && s.dataDir != "" {
-		dbPath = filepath.Join(s.dataDir, "trustcloud.db")
-	}
-	if dbPath == "" {
-		dbPath = "trustcloud.db"
+	databaseURL := strings.TrimSpace(s.databaseURL)
+	if databaseURL == "" {
+		return fmt.Errorf("database_url is required")
 	}
 
-	var err error
-	s.db, err = sql.Open("sqlite", dbPath)
+	db, err := openPostgres(databaseURL)
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-
-	// SQLite performance tuning
-	s.db.Exec("PRAGMA journal_mode=WAL")
-	s.db.Exec("PRAGMA synchronous=NORMAL")
-	s.db.Exec("PRAGMA cache_size=5000")
-	s.db.Exec("PRAGMA busy_timeout=5000")
-	s.db.SetMaxOpenConns(1)
+	s.db = db
+	if err := s.db.Ping(); err != nil {
+		_ = s.db.Close()
+		s.db = nil
+		return fmt.Errorf("ping database: %w", err)
+	}
 
 	if err := s.createTables(); err != nil {
+		_ = s.db.Close()
+		s.db = nil
 		return fmt.Errorf("create tables: %w", err)
 	}
-	s.EnsureDefaultGlobalPoliciesForTenants()
+	s.EnsureDefaultGlobalPoliciesForOrganizations()
 
-	log.Printf("[STORE] SQLite database initialized: %s", dbPath)
+	log.Printf("[STORE] PostgreSQL database initialized")
 	return nil
 }
 

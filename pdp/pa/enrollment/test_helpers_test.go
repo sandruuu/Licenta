@@ -12,21 +12,19 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
+	"pdp/internal/testredis"
 	"pdp/store"
 )
 
 func newEnrollmentTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := dataStore.Close(); err != nil {
-			t.Fatalf("close store: %v", err)
-		}
-	})
-	return dataStore
+	return testdb.NewStore(t)
+}
+
+func newEnrollmentTestService(t *testing.T, dataStore *store.Store) *Service {
+	t.Helper()
+	return NewService(dataStore, testredis.NewClient(t))
 }
 
 type testCertificateAuthority struct {

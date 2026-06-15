@@ -1,6 +1,7 @@
 package enrollment
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -9,6 +10,9 @@ import (
 	"pdp/models"
 	"pdp/util"
 )
+
+const pendingEnrollStateKind = "pending_enroll"
+const pendingEnrollExpiredStateGrace = 2 * time.Minute
 
 func (s *Service) SubmitPendingDeviceEnrollment(req models.EnrollmentRequest) (*PendingEnrollmentResult, error) {
 	prepared, err := s.prepareEnrollmentRequest(req)
@@ -84,7 +88,9 @@ func (s *Service) StartBrowserEnrollSession(req models.EnrollmentRequest) (*mode
 		CreatedAt:            time.Now(),
 		ExpiresAt:            time.Now().Add(s.activeBrowserSessionTTL()),
 	}
-	s.store.SavePendingEnroll(session)
+	if err := s.savePendingEnroll(session); err != nil {
+		return nil, err
+	}
 
 	log.Printf("[ENROLL] Browser enrollment session created: %s (device=%s, host=%s)", sessionID, prepared.deviceID, prepared.hostname)
 
@@ -99,12 +105,12 @@ func (s *Service) ActiveBrowserEnrollSession(sessionID string) (*models.PendingE
 	if sessionID == "" {
 		return nil, fmt.Errorf("%w: session ID is required", ErrInvalidRequest)
 	}
-	session, found := s.store.GetPendingEnroll(sessionID)
+	session, found := s.getPendingEnroll(sessionID)
 	if !found {
 		return nil, ErrNotFound
 	}
 	if session.ExpiresAt.Before(time.Now()) {
-		s.store.DeletePendingEnroll(sessionID)
+		s.deletePendingEnroll(sessionID)
 		return nil, ErrExpiredSession
 	}
 	return session, nil
@@ -116,7 +122,9 @@ func (s *Service) DenyBrowserEnrollSession(sessionID string) (*models.PendingEnr
 		return nil, err
 	}
 	session.Status = "denied"
-	s.store.SavePendingEnroll(session)
+	if err := s.savePendingEnroll(session); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 
@@ -148,7 +156,9 @@ func (s *Service) CompleteBrowserEnrollSession(sessionID, authToken, userID, use
 	if strings.TrimSpace(caPEM) != "" {
 		session.CAPEM = caPEM
 	}
-	s.store.SavePendingEnroll(session)
+	if err := s.savePendingEnroll(session); err != nil {
+		return nil, err
+	}
 
 	return &BrowserEnrollSessionCompletion{
 		Session:    session,
@@ -166,7 +176,7 @@ func (s *Service) BrowserEnrollSessionStatus(sessionID string) (*BrowserEnrollSe
 	if sessionID == "" {
 		return nil, fmt.Errorf("%w: session ID is required", ErrInvalidRequest)
 	}
-	session, found := s.store.GetPendingEnroll(sessionID)
+	session, found := s.getPendingEnroll(sessionID)
 	if !found {
 		return nil, ErrNotFound
 	}
@@ -183,6 +193,48 @@ func (s *Service) BrowserEnrollSessionStatus(sessionID string) (*BrowserEnrollSe
 		status.Message = "Authentication failed"
 	}
 	return status, nil
+}
+
+func (s *Service) savePendingEnroll(session *models.PendingEnrollSession) error {
+	if s == nil || s.runtime == nil || session == nil {
+		return fmt.Errorf("enrollment runtime state is unavailable")
+	}
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	expiresAt := session.ExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(s.activeBrowserSessionTTL())
+	}
+	return s.runtime.SaveEphemeralState(pendingEnrollStateKind, session.ID, raw, expiresAt.Add(pendingEnrollExpiredStateGrace))
+}
+
+func (s *Service) getPendingEnroll(sessionID string) (*models.PendingEnrollSession, bool) {
+	if s == nil || s.runtime == nil {
+		return nil, false
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, false
+	}
+	raw, ok := s.runtime.GetEphemeralState(pendingEnrollStateKind, sessionID)
+	if !ok {
+		return nil, false
+	}
+	var session models.PendingEnrollSession
+	if err := json.Unmarshal(raw, &session); err != nil {
+		_ = s.runtime.DeleteEphemeralState(pendingEnrollStateKind, sessionID)
+		return nil, false
+	}
+	return &session, true
+}
+
+func (s *Service) deletePendingEnroll(sessionID string) {
+	if s == nil || s.runtime == nil {
+		return
+	}
+	_ = s.runtime.DeleteEphemeralState(pendingEnrollStateKind, strings.TrimSpace(sessionID))
 }
 
 func (s *Service) DeviceEnrollmentStatus(enrollmentID string) (*models.EnrollmentResponse, error) {

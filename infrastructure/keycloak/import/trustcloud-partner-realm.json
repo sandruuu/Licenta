@@ -20,7 +20,7 @@
     {
       "clientId": "trustcloud-partner",
       "name": "TrustCloud Auth Broker - Partner",
-      "description": "OIDC client registration used by the PDP/PA auth broker for the partner tenant federation test.",
+      "description": "OIDC client registration used by the PDP/PA auth broker for the partner organization federation test.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,

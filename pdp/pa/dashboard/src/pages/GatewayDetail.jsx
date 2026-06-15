@@ -78,7 +78,7 @@ export default function GatewayDetail() {
       const resourceList = Array.isArray(resourceData) ? resourceData : [];
       const organizations = Array.isArray(organizationData) ? organizationData : [];
       const selectedGateway = gatewayList.find((item) => item.id === gatewayID) || null;
-      const organizationID = selectedGateway?.tenant_id || selectedGateway?.tenant_ids?.[0] || '';
+      const organizationID = selectedGateway?.organization_id || selectedGateway?.organization_ids?.[0] || '';
 
       setGateway(selectedGateway);
       setOrganization(organizations.find((item) => item.id === organizationID) || null);
@@ -104,7 +104,7 @@ export default function GatewayDetail() {
       id: gateway.id,
       name: gateway.name || '',
       fqdn: gateway.fqdn || '',
-      tenant_id: gateway.tenant_id || organization?.id || '',
+      organization_id: gateway.organization_id || organization?.id || '',
     });
     setEditOpen(true);
   };
@@ -116,7 +116,7 @@ export default function GatewayDetail() {
       await updateGateway(gateway.id, {
         name: editForm.name?.trim(),
         fqdn: editForm.fqdn?.trim(),
-        organization_id: editForm.tenant_id,
+        organization_id: editForm.organization_id,
       });
       setEditOpen(false);
       await load();
@@ -284,7 +284,7 @@ export default function GatewayDetail() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button onClick={saveEdit} disabled={editSaving || !editForm.name?.trim() || !editForm.tenant_id}>
+            <Button onClick={saveEdit} disabled={editSaving || !editForm.name?.trim() || !editForm.organization_id}>
               {editSaving ? 'Saving...' : 'Save Changes'}
             </Button>
           </>

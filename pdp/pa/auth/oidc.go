@@ -3,11 +3,10 @@ package auth
 import (
 	"fmt"
 	"log"
-	"net"
-	"net/url"
 	"strings"
-	"sync"
 	"time"
+
+	"pdp/models"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -19,36 +18,45 @@ import (
 //   - OIDC authorize requests (pending browser authentication sessions)
 //
 // Flow:
-//   1. Connect-App opens /auth/authorize?client_id=connect-app&...
-//   2. PDP shows login or federates to the external IdP
-//   3. PDP generates an auth code and redirects to the loopback callback
-//   4. Connect-App exchanges the code for a PDP JWT via POST /auth/token
+//   1. A registered endpoint client opens /auth/authorize.
+//   2. PDP shows login or federates to the external IdP.
+//   3. PDP generates an auth code and redirects to the registered callback.
+//   4. The client exchanges the code for a PDP JWT via POST /auth/token.
 // ──────────────────────────────────────────────────────────────────────
 
 // OIDCManager manages OIDC authorization state on the PA.
 type OIDCManager struct {
-	mu sync.RWMutex
-
-	// Registered OIDC clients (native endpoint clients)
-	Clients map[string]*OIDCClient
+	// Registered OIDC clients are persisted so all PDP replicas validate the
+	// same client registry.
+	clients OIDCClientStore
 
 	// Pending authorization codes (short-lived, max 60s)
-	AuthCodes map[string]*AuthorizationCode
+	state RuntimeStateStore
 
 	// Pending OIDC authorize requests — the user has been redirected
 	// to the login page but hasn't completed authentication yet.
-	PendingAuthorize map[string]*OIDCAuthorizeSession
 
 	// Active refresh tokens (long-lived, rotated on use)
-	RefreshTokens map[string]*RefreshToken
 
 	// Pending federation sessions — user is authenticating at external IdP
-	FederationSessions map[string]*FederationSession
 
 	authorizeSessionTTL time.Duration
 	authCodeTTL         time.Duration
 	refreshTokenTTL     time.Duration
 	cleanupInterval     time.Duration
+}
+
+type RuntimeStateStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	TakeEphemeralState(kind, key string) ([]byte, bool, error)
+	DeleteEphemeralState(kind, key string) error
+	CleanExpiredEphemeralState(now time.Time) int
+}
+
+type OIDCClientStore interface {
+	SaveOIDCClient(client *models.OIDCClient) error
+	GetOIDCClient(clientID string) (*models.OIDCClient, bool)
 }
 
 // RefreshToken represents a long-lived token that can be exchanged for
@@ -70,18 +78,7 @@ type RefreshToken struct {
 
 // OIDCClient represents a registered OAuth/OIDC client. Public native clients
 // have no ClientSecret and must use PKCE S256.
-type OIDCClient struct {
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	RedirectURIs []string `json:"redirect_uris"` // allowed callback URLs
-	Name         string   `json:"name"`
-	Public       bool     `json:"public"`
-	RequirePKCE  bool     `json:"require_pkce"`
-}
-
-const (
-	NativeConnectAppClientID = "connect-app"
-)
+type OIDCClient = models.OIDCClient
 
 // AuthorizationCode is a short-lived code exchanged for tokens.
 type AuthorizationCode struct {
@@ -128,13 +125,10 @@ type OIDCAuthorizeSession struct {
 }
 
 // NewOIDCManager creates a new OIDC manager using durations loaded from PDP config.
-func NewOIDCManager(authorizeSessionTTL, authCodeTTL, refreshTokenTTL, cleanupInterval time.Duration) *OIDCManager {
+func NewOIDCManager(state RuntimeStateStore, clients OIDCClientStore, authorizeSessionTTL, authCodeTTL, refreshTokenTTL, cleanupInterval time.Duration) *OIDCManager {
 	mgr := &OIDCManager{
-		Clients:             make(map[string]*OIDCClient),
-		AuthCodes:           make(map[string]*AuthorizationCode),
-		PendingAuthorize:    make(map[string]*OIDCAuthorizeSession),
-		RefreshTokens:       make(map[string]*RefreshToken),
-		FederationSessions:  make(map[string]*FederationSession),
+		clients:             clients,
+		state:               state,
 		authorizeSessionTTL: authorizeSessionTTL,
 		authCodeTTL:         authCodeTTL,
 		refreshTokenTTL:     refreshTokenTTL,
@@ -148,48 +142,30 @@ func NewOIDCManager(authorizeSessionTTL, authCodeTTL, refreshTokenTTL, cleanupIn
 }
 
 // RegisterClient adds or updates an OIDC client registration
-func (m *OIDCManager) RegisterClient(client *OIDCClient) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Clients[client.ClientID] = client
-	log.Printf("[OIDC] Client registered: %s (%s)", client.ClientID, client.Name)
-}
-
-// RegisterNativeConnectAppClient registers the Connect-App as an OAuth/OIDC
-// native public client. It has no shared secret and must use PKCE S256 with a
-// loopback redirect URI as recommended by RFC 8252 and RFC 7636.
-func (m *OIDCManager) RegisterNativeConnectAppClient() {
-	m.registerNativeEndpointClient(NativeConnectAppClientID, "TrustAgent Connect-App")
-}
-
-func (m *OIDCManager) registerNativeEndpointClient(clientID, name string) {
-	m.RegisterClient(&OIDCClient{
-		ClientID: clientID,
-		RedirectURIs: []string{
-			"http://127.0.0.1:*",
-			"http://localhost:*",
-		},
-		Name:        name,
-		Public:      true,
-		RequirePKCE: true,
-	})
-}
-
-func IsNativeEndpointClientID(clientID string) bool {
-	switch strings.TrimSpace(clientID) {
-	case NativeConnectAppClientID:
-		return true
-	default:
-		return false
+func (m *OIDCManager) RegisterClient(client *OIDCClient) error {
+	if m.clients == nil {
+		return fmt.Errorf("OIDC client store is unavailable")
 	}
+	if client == nil || strings.TrimSpace(client.ClientID) == "" {
+		return fmt.Errorf("OIDC client_id is required")
+	}
+	if err := m.clients.SaveOIDCClient(client); err != nil {
+		return err
+	}
+	log.Printf("[OIDC] Client registered: %s (%s)", client.ClientID, client.Name)
+	return nil
 }
 
 // ValidateClientID checks that a client_id is registered (no secret required)
 func (m *OIDCManager) ValidateClientID(clientID string) (*OIDCClient, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	client, ok := m.Clients[clientID]
+	if m.clients == nil {
+		return nil, fmt.Errorf("OIDC client store is unavailable")
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return nil, fmt.Errorf("client_id is required")
+	}
+	client, ok := m.clients.GetOIDCClient(clientID)
 	if !ok {
 		return nil, fmt.Errorf("unknown client_id: %s", clientID)
 	}
@@ -208,15 +184,6 @@ func (m *OIDCManager) ValidateRedirectURI(client *OIDCClient, redirectURI string
 		if allowed == redirectURI {
 			return true
 		}
-		if isNativeLoopbackPattern(allowed) {
-			if isLoopbackRedirectMatch(allowed, redirectURI) {
-				return true
-			}
-			continue
-		}
-		if isLoopbackRedirectMatch(allowed, redirectURI) {
-			return true
-		}
 		// Support prefix wildcard: "https://*/auth/callback" style
 		if len(allowed) > 1 && allowed[len(allowed)-1] == '*' {
 			prefix := allowed[:len(allowed)-1]
@@ -226,32 +193,4 @@ func (m *OIDCManager) ValidateRedirectURI(client *OIDCClient, redirectURI string
 		}
 	}
 	return false
-}
-
-func isNativeLoopbackPattern(allowed string) bool {
-	return allowed == "http://127.0.0.1:*" || allowed == "http://localhost:*"
-}
-
-func isLoopbackRedirectMatch(allowed, redirectURI string) bool {
-	if !isNativeLoopbackPattern(allowed) {
-		return false
-	}
-	u, err := url.Parse(redirectURI)
-	if err != nil || u.Scheme != "http" {
-		return false
-	}
-	host := u.Hostname()
-	if host != "localhost" && !net.ParseIP(host).IsLoopback() {
-		return false
-	}
-	if u.Port() == "" || u.Path != "/callback" {
-		return false
-	}
-	if allowed == "http://127.0.0.1:*" && host != "127.0.0.1" {
-		return false
-	}
-	if allowed == "http://localhost:*" && host != "localhost" {
-		return false
-	}
-	return true
 }

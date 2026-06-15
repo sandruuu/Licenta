@@ -2,34 +2,12 @@ package config
 
 import (
 	"encoding/json"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
 
-const (
-	PDPFQDNEnv                 = "PDP_FQDN"
-	PDPPublicHostEnv           = "PDP_PUBLIC_HOST"
-	PDPPublicOriginEnv         = "PDP_PUBLIC_ORIGIN"
-	PDPFederatedCallbackURLEnv = "PDP_FEDERATED_CALLBACK_URL"
-	PDPWebAuthnRPIDEnv         = "PDP_WEBAUTHN_RP_ID"
-	PDPWebAuthnRPOriginsEnv    = "PDP_WEBAUTHN_RP_ORIGINS"
-	PDPCORSOriginsEnv          = "PDP_CORS_ORIGINS"
-	PDPAdminRequireMFAEnv      = "PDP_ADMIN_REQUIRE_MFA"
-	PDPPKIURLEnv               = "PDP_PKI_URL"
-	PDPPKITokenEnv             = "PDP_PKI_TOKEN"
-	PDPPKIPathEnv              = "PDP_PKI_PATH"
-	PDPPKIRolePDPEnv           = "PDP_PKI_ROLE_PDP"
-	PDPPKIRoleDeviceEnv        = "PDP_PKI_ROLE_DEVICE"
-	PDPPKIRoleGatewayEnv       = "PDP_PKI_ROLE_GATEWAY"
-	PDPTransitKeyEnv           = "PDP_TRANSIT_KEY"
-	PDPPKICAFileEnv            = "PDP_PKI_CA_FILE"
-	PDPPKIServerNameEnv        = "PDP_PKI_SERVER_NAME"
-)
-
-// RuntimeConfig holds operational knobs that used to live as literals in code.
+// RuntimeConfig holds operational knobs for PDP runtime behavior.
 type RuntimeConfig struct {
 	StoreAutoSaveInterval      time.Duration `json:"store_auto_save_interval"`
 	SessionCleanupInterval     time.Duration `json:"session_cleanup_interval"`
@@ -40,6 +18,8 @@ type RuntimeConfig struct {
 	HTTPReadHeaderTimeout      time.Duration `json:"http_read_header_timeout"`
 	HTTPWriteTimeout           time.Duration `json:"http_write_timeout"`
 	HTTPIdleTimeout            time.Duration `json:"http_idle_timeout"`
+	HTTPShutdownTimeout        time.Duration `json:"http_shutdown_timeout"`
+	ReadinessDrainDelay        time.Duration `json:"readiness_drain_delay"`
 	EventBufferSize            int           `json:"event_buffer_size"`
 	CatalogTTLSeconds          int           `json:"catalog_ttl_seconds"`
 	AuthRateLimitWindow        time.Duration `json:"auth_rate_limit_window"`
@@ -61,20 +41,8 @@ type RuntimeConfig struct {
 	ResourceSessionRenewBefore time.Duration `json:"resource_session_renew_before"`
 }
 
-// BootstrapAdminConfig controls optional first-admin creation.
-type BootstrapAdminConfig struct {
-	Enabled  bool   `json:"enabled"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
-}
-
 // PublicDashboardConfig is safe to expose to the React dashboard.
 type PublicDashboardConfig struct {
-	DeviceHealthAgentURL    string            `json:"device_health_agent_url"`
-	DeviceHealthTimeoutMS   int               `json:"device_health_timeout_ms"`
-	DeviceHealthRetryMS     int               `json:"device_health_retry_ms"`
 	FederatedCallbackURL    string            `json:"federated_callback_url"`
 	OIDCDefaultScopes       string            `json:"oidc_default_scopes"`
 	OIDCDefaultClaimMapping map[string]string `json:"oidc_default_claim_mapping"`
@@ -91,11 +59,6 @@ type GatewayConfig struct {
 type EnrollmentConfig struct {
 	CertificateValidityDays int           `json:"certificate_validity_days"`
 	BrowserSessionTTL       time.Duration `json:"browser_session_ttl"`
-}
-
-// AdminAuthConfig controls authentication for the PDP administrator console.
-type AdminAuthConfig struct {
-	RequireMFA *bool `json:"require_mfa,omitempty"`
 }
 
 // GeoConfig controls external IP geolocation behavior.
@@ -151,10 +114,11 @@ type RiskConfig struct {
 // Config holds all PDP service configuration
 type Config struct {
 	// Server settings
-	ListenAddr string `json:"listen_addr"` // e.g. ":8443"
-	PDPFQDN    string `json:"pdp_fqdn"`    // FQDN for self-enrollment CSR (e.g. "pdp")
-	TLSCert    string `json:"tls_cert"`    // Path where the PDP TLS certificate is stored
-	MTLSCA     string `json:"mtls_ca"`     // Path where the issuer CA certificate is stored
+	ListenAddr  string   `json:"listen_addr"`   // e.g. ":8443"
+	PDPFQDN     string   `json:"pdp_fqdn"`      // FQDN for self-enrollment CSR (e.g. "pdp")
+	TLSDNSNames []string `json:"tls_dns_names"` // Additional DNS SANs for the PDP TLS certificate
+	TLSCert     string   `json:"tls_cert"`      // Path where the PDP TLS certificate is stored
+	MTLSCA      string   `json:"mtls_ca"`       // Path where the issuer CA certificate is stored
 
 	// Vault PKI settings (certificate signing backend)
 	PKIURL         string        `json:"pki_url"`          // Vault base URL (e.g. "https://vault:8200")
@@ -190,7 +154,8 @@ type Config struct {
 	DataDir string `json:"data_dir"` // directory for data files and Vault Transit encrypted key
 
 	// Database settings
-	DatabasePath        string `json:"database_path"`          // SQLite database path
+	DatabaseURL         string `json:"database_url"`           // PostgreSQL connection URL
+	RedisURL            string `json:"redis_url"`              // Redis connection URL for runtime state
 	PDPKeyEncryptedPath string `json:"pdp_key_encrypted_path"` // Vault Transit encrypted PDP key path
 
 	WebAuthnRPID      string `json:"webauthn_rp_id"`      // Relying Party ID (domain, e.g. "pdp.lab.local")
@@ -198,16 +163,14 @@ type Config struct {
 	WebAuthnRPOrigins string `json:"webauthn_rp_origins"` // Comma-separated allowed origins (e.g. "https://pdp.lab.local:8443")
 
 	// CORS settings
-	CORSOrigins []string `json:"cors_origins"` // Additional allowed CORS origins (localhost always allowed)
+	CORSOrigins []string `json:"cors_origins"` // Allowed CORS origins for browser clients.
 
-	Runtime        RuntimeConfig         `json:"runtime"`
-	BootstrapAdmin BootstrapAdminConfig  `json:"bootstrap_admin"`
-	Public         PublicDashboardConfig `json:"public"`
-	AdminAuth      AdminAuthConfig       `json:"admin_auth"`
-	Gateway        GatewayConfig         `json:"gateway"`
-	Enrollment     EnrollmentConfig      `json:"enrollment"`
-	Geo            GeoConfig             `json:"geo"`
-	Risk           RiskConfig            `json:"risk"`
+	Runtime    RuntimeConfig         `json:"runtime"`
+	Public     PublicDashboardConfig `json:"public"`
+	Gateway    GatewayConfig         `json:"gateway"`
+	Enrollment EnrollmentConfig      `json:"enrollment"`
+	Geo        GeoConfig             `json:"geo"`
+	Risk       RiskConfig            `json:"risk"`
 }
 
 // LoadFromFile loads configuration from the PDP JSON configuration file.
@@ -226,334 +189,38 @@ func LoadFromFile(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// ApplyEnvironmentOverrides lets deployment overlays publish the PDP under a
-// public hostname without mutating the local lab config.json.
-func (c *Config) ApplyEnvironmentOverrides() {
-	if c == nil {
-		return
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPFQDNEnv)); value != "" {
-		c.PDPFQDN = value
-	}
-	applyStringEnv(PDPPKIURLEnv, &c.PKIURL)
-	applyStringEnv(PDPPKITokenEnv, &c.PKIToken)
-	applyStringEnv(PDPPKIPathEnv, &c.PKIPath)
-	applyStringEnv(PDPPKIRolePDPEnv, &c.PKIRolePDP)
-	applyStringEnv(PDPPKIRoleDeviceEnv, &c.PKIRoleDevice)
-	applyStringEnv(PDPPKIRoleGatewayEnv, &c.PKIRoleGateway)
-	if value := strings.TrimSpace(os.Getenv(PDPTransitKeyEnv)); value != "" {
-		c.PKITransitKey = value
-		c.JWTTransitKey = value
-		c.MFATransitKey = value
-	}
-	applyStringEnv(PDPPKICAFileEnv, &c.PKICAFile)
-	applyStringEnv(PDPPKIServerNameEnv, &c.PKIServerName)
-	if origin, rpHost := publicOriginFromEnvironment(); origin != "" {
-		c.applyPublicOrigin(origin, rpHost)
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPFederatedCallbackURLEnv)); value != "" {
-		c.Public.FederatedCallbackURL = value
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPWebAuthnRPIDEnv)); value != "" {
-		c.WebAuthnRPID = value
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPWebAuthnRPOriginsEnv)); value != "" {
-		c.WebAuthnRPOrigins = value
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPCORSOriginsEnv)); value != "" {
-		c.CORSOrigins = splitCSV(value)
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPAdminRequireMFAEnv)); value != "" {
-		if parsed, err := strconv.ParseBool(value); err == nil {
-			c.AdminAuth.RequireMFA = &parsed
-		}
-	}
-}
-
-func applyStringEnv(name string, target *string) {
-	if target == nil {
-		return
-	}
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		*target = value
-	}
-}
-
-func publicOriginFromEnvironment() (string, string) {
-	if value := strings.TrimSpace(os.Getenv(PDPPublicOriginEnv)); value != "" {
-		return normalizePublicOrigin(value)
-	}
-	if value := strings.TrimSpace(os.Getenv(PDPPublicHostEnv)); value != "" {
-		return normalizePublicOrigin("https://" + value)
-	}
-	return "", ""
-}
-
-func normalizePublicOrigin(value string) (string, string) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", ""
-	}
-	if parsed.Scheme != "https" && parsed.Scheme != "http" {
-		return "", ""
-	}
-	return parsed.Scheme + "://" + parsed.Host, parsed.Hostname()
-}
-
-func (c *Config) applyPublicOrigin(origin, rpHost string) {
-	c.Public.FederatedCallbackURL = strings.TrimRight(origin, "/") + "/auth/federated/callback"
-	c.WebAuthnRPOrigins = origin
-	if rpHost != "" && (c.WebAuthnRPID == "" || c.WebAuthnRPID == "localhost") {
-		c.WebAuthnRPID = rpHost
-	}
-	c.CORSOrigins = appendUnique(c.CORSOrigins, origin)
-}
-
-func splitCSV(value string) []string {
-	parts := strings.Split(value, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if trimmed := strings.TrimSpace(part); trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
-}
-
-func appendUnique(values []string, value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return values
-	}
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
 // PublicConfig returns the subset of configuration safe for browser clients.
 func (c *Config) PublicConfig() PublicDashboardConfig {
 	return c.Public
 }
 
-// AdminMFARequired reports whether the PDP admin console requires a second
-// factor after password authentication. Missing config keeps the secure default.
-func (c *Config) AdminMFARequired() bool {
-	return c == nil || c.AdminAuth.RequireMFA == nil || *c.AdminAuth.RequireMFA
+// CertificateDNSNames returns the complete, de-duplicated SAN set that the PDP
+// server certificate must cover. PDPFQDN is always included first because it is
+// the certificate common name used during self-enrollment.
+func (c *Config) CertificateDNSNames() []string {
+	if c == nil {
+		return nil
+	}
+	names := make([]string, 0, len(c.TLSDNSNames)+1)
+	names = append(names, c.PDPFQDN)
+	names = append(names, c.TLSDNSNames...)
+	return uniqueTrimmedStrings(names)
 }
 
-// ApplyDefaults fills defensive fallback values for programmatic tests and
-// older config files. Runtime deployments should keep these values explicit in
-// config.json.
-func (c *Config) ApplyDefaults() {
-	if c == nil {
-		return
-	}
-	if c.Runtime.EventBufferSize <= 0 {
-		c.Runtime.EventBufferSize = 64
-	}
-	if c.Runtime.CatalogTTLSeconds <= 0 {
-		c.Runtime.CatalogTTLSeconds = 300
-	}
-	if c.Runtime.PKIRenewCheckInterval <= 0 {
-		c.Runtime.PKIRenewCheckInterval = 6 * time.Hour
-	}
-	if c.Runtime.EnrollmentCleanupInterval <= 0 {
-		c.Runtime.EnrollmentCleanupInterval = time.Minute
-	}
-	if c.Runtime.OIDCEnrollmentTokenTTL <= 0 {
-		c.Runtime.OIDCEnrollmentTokenTTL = 5 * time.Minute
-	}
-	if c.Runtime.WebAuthnChallengeTTL <= 0 {
-		c.Runtime.WebAuthnChallengeTTL = 5 * time.Minute
-	}
-	if c.Runtime.WebAuthnCleanupInterval <= 0 {
-		c.Runtime.WebAuthnCleanupInterval = 2 * time.Minute
-	}
-	if c.Runtime.FederationCacheTTL <= 0 {
-		c.Runtime.FederationCacheTTL = 6 * time.Hour
-	}
-	if c.Runtime.FederationHTTPTimeout <= 0 {
-		c.Runtime.FederationHTTPTimeout = 10 * time.Second
-	}
-	if c.Runtime.BrowserAuthSessionTTL <= 0 {
-		c.Runtime.BrowserAuthSessionTTL = 5 * time.Minute
-	}
-	if c.Runtime.CSRFCookieMaxAgeSeconds <= 0 {
-		c.Runtime.CSRFCookieMaxAgeSeconds = 3600
-	}
-	if c.Runtime.EnrollRateLimitWindow <= 0 {
-		c.Runtime.EnrollRateLimitWindow = time.Minute
-	}
-	if c.Runtime.EnrollRateLimitMax <= 0 {
-		c.Runtime.EnrollRateLimitMax = 5
-	}
-	if c.Runtime.GatewayRevokeTimeout <= 0 {
-		c.Runtime.GatewayRevokeTimeout = 5 * time.Second
-	}
-	if c.Runtime.ResourceSessionRenewBefore <= 0 {
-		c.Runtime.ResourceSessionRenewBefore = time.Minute
-	}
-	if c.TOTPIssuer == "" {
-		c.TOTPIssuer = "TrustCloud"
-	}
-	if c.AdminAuth.RequireMFA == nil {
-		requireMFA := true
-		c.AdminAuth.RequireMFA = &requireMFA
-	}
-	if c.MFATransitKey == "" {
-		if c.JWTTransitKey != "" {
-			c.MFATransitKey = c.JWTTransitKey
-		} else {
-			c.MFATransitKey = c.PKITransitKey
+func uniqueTrimmedStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
 		}
-	}
-	if c.MFASecretKeyEncryptedPath == "" && c.DataDir != "" {
-		c.MFASecretKeyEncryptedPath = c.DataDir + "/mfa_secret.key.enc"
-	}
-	if c.Gateway.CertificateValidityDays <= 0 {
-		c.Gateway.CertificateValidityDays = 7
-	}
-	if c.Gateway.EnrollmentTokenTTL <= 0 {
-		c.Gateway.EnrollmentTokenTTL = time.Hour
-	}
-	if c.Enrollment.CertificateValidityDays <= 0 {
-		c.Enrollment.CertificateValidityDays = 1
-	}
-	if c.Enrollment.BrowserSessionTTL <= 0 {
-		c.Enrollment.BrowserSessionTTL = 5 * time.Minute
-	}
-	if c.Geo.ProviderURL == "" {
-		c.Geo.ProviderURL = "https://ipapi.co/{ip}/json/"
-	}
-	if c.Geo.HTTPTimeout <= 0 {
-		c.Geo.HTTPTimeout = 3 * time.Second
-	}
-	if c.Geo.CacheTTL <= 0 {
-		c.Geo.CacheTTL = time.Hour
-	}
-	if c.Geo.CacheMaxEntries <= 0 {
-		c.Geo.CacheMaxEntries = 10000
-	}
-	if c.Geo.SameAreaDistanceKM <= 0 {
-		c.Geo.SameAreaDistanceKM = 50
-	}
-	if c.Geo.SuspiciousTravelSpeedKMH <= 0 {
-		c.Geo.SuspiciousTravelSpeedKMH = 500
-	}
-	if c.Geo.ImpossibleTravelSpeedKMH <= 0 {
-		c.Geo.ImpossibleTravelSpeedKMH = 900
-	}
-	if c.Risk.DeviceDataCriticalAfter <= 0 {
-		c.Risk.DeviceDataCriticalAfter = 30 * time.Minute
-	}
-	if c.Risk.DeviceDataStaleAfter <= 0 {
-		c.Risk.DeviceDataStaleAfter = 10 * time.Minute
-	}
-	if c.Risk.DeviceDataCriticalPoints <= 0 {
-		c.Risk.DeviceDataCriticalPoints = 30
-	}
-	if c.Risk.DeviceDataStalePoints <= 0 {
-		c.Risk.DeviceDataStalePoints = 15
-	}
-	if c.Risk.NoDeviceHealthPoints <= 0 {
-		c.Risk.NoDeviceHealthPoints = 25
-	}
-	if c.Risk.HealthExcellentMin <= 0 {
-		c.Risk.HealthExcellentMin = 80
-	}
-	if c.Risk.HealthGoodMin <= 0 {
-		c.Risk.HealthGoodMin = 60
-	}
-	if c.Risk.HealthFairMin <= 0 {
-		c.Risk.HealthFairMin = 40
-	}
-	if c.Risk.HealthGoodPoints <= 0 {
-		c.Risk.HealthGoodPoints = 10
-	}
-	if c.Risk.HealthFairPoints <= 0 {
-		c.Risk.HealthFairPoints = 20
-	}
-	if c.Risk.HealthPoorPoints <= 0 {
-		c.Risk.HealthPoorPoints = 35
-	}
-	if len(c.Risk.CriticalCheckPoints) == 0 {
-		c.Risk.CriticalCheckPoints = map[string]int{
-			"Firewall":        5,
-			"Antivirus":       5,
-			"Disk Encryption": 3,
-			"Password & Lock": 2,
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
 		}
+		seen[key] = struct{}{}
+		result = append(result, trimmed)
 	}
-	if c.Risk.FailedAttemptsHigh <= 0 {
-		c.Risk.FailedAttemptsHigh = 5
-	}
-	if c.Risk.FailedAttemptsMedium <= 0 {
-		c.Risk.FailedAttemptsMedium = 3
-	}
-	if c.Risk.FailedAttemptsLow <= 0 {
-		c.Risk.FailedAttemptsLow = 1
-	}
-	if c.Risk.FailedAttemptsHighPoints <= 0 {
-		c.Risk.FailedAttemptsHighPoints = 20
-	}
-	if c.Risk.FailedAttemptsMediumPoints <= 0 {
-		c.Risk.FailedAttemptsMediumPoints = 10
-	}
-	if c.Risk.FailedAttemptsLowPoints <= 0 {
-		c.Risk.FailedAttemptsLowPoints = 5
-	}
-	if c.Risk.BusinessHoursEnd <= c.Risk.BusinessHoursStart {
-		c.Risk.BusinessHoursStart = 8
-		c.Risk.BusinessHoursEnd = 18
-	}
-	if len(c.Risk.BusinessDays) == 0 {
-		c.Risk.BusinessDays = []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"}
-	}
-	if c.Risk.OutsideBusinessPoints <= 0 {
-		c.Risk.OutsideBusinessPoints = 10
-	}
-	if c.Risk.NightHoursEnd <= c.Risk.NightHoursStart {
-		c.Risk.NightHoursStart = 0
-		c.Risk.NightHoursEnd = 6
-	}
-	if c.Risk.NightHoursPoints <= 0 {
-		c.Risk.NightHoursPoints = 5
-	}
-	if c.Risk.NewDevicePoints <= 0 {
-		c.Risk.NewDevicePoints = 10
-	}
-	if c.Risk.NewLocationPoints <= 0 {
-		c.Risk.NewLocationPoints = 5
-	}
-	if c.Risk.UserBaselineAnomalyPoints <= 0 {
-		c.Risk.UserBaselineAnomalyPoints = 15
-	}
-	if len(c.Risk.ProtocolPoints) == 0 {
-		c.Risk.ProtocolPoints = map[string]int{
-			"rdp":   10,
-			"ssh":   5,
-			"http":  0,
-			"https": 0,
-		}
-	}
-	if c.Risk.UnknownProtocolPoints <= 0 {
-		c.Risk.UnknownProtocolPoints = 5
-	}
-	if c.Risk.ImpossibleTravelPoints <= 0 {
-		c.Risk.ImpossibleTravelPoints = 30
-	}
-	if c.Risk.SuspiciousGeoVelocityKMH <= 0 {
-		c.Risk.SuspiciousGeoVelocityKMH = 500
-	}
-	if c.Risk.SuspiciousGeoVelocityPoints <= 0 {
-		c.Risk.SuspiciousGeoVelocityPoints = 15
-	}
-	if c.Risk.MaxAnomalyPoints <= 0 {
-		c.Risk.MaxAnomalyPoints = 25
-	}
-	if c.Risk.MaxScore <= 0 {
-		c.Risk.MaxScore = 100
-	}
+	return result
 }

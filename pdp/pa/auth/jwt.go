@@ -46,7 +46,7 @@ type CustomClaims struct {
 	UserID                      string              `json:"user_id"`
 	Username                    string              `json:"username"`
 	Role                        string              `json:"role"`
-	TenantID                    string              `json:"tenant_id,omitempty"`
+	OrganizationID              string              `json:"organization_id,omitempty"`
 	DeviceID                    string              `json:"device_id,omitempty"`
 	SessionID                   string              `json:"session_id,omitempty"`
 	UserSID                     string              `json:"user_sid,omitempty"`
@@ -69,7 +69,7 @@ type AgentSessionTokenRequest struct {
 	UserID                      string
 	Username                    string
 	Role                        string
-	TenantID                    string
+	OrganizationID              string
 	DeviceID                    string
 	LocalUserSIDHash            string
 	WindowsLogonSessionID       string
@@ -100,7 +100,7 @@ type JWKS struct {
 	Keys []JWK `json:"keys"`
 }
 
-// NewJWTManager creates a new JWT manager with an in-memory ES256 signing key.
+// NewJWTManager creates a JWT manager around the configured ES256 signing key.
 func NewJWTManager(privKey *ecdsa.PrivateKey, tokenExpiry time.Duration, enrollmentTokenExpiry ...time.Duration) (*JWTManager, error) {
 	if privKey == nil {
 		return nil, fmt.Errorf("JWT signing key is nil")
@@ -231,7 +231,7 @@ func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (st
 		UserID:                      strings.TrimSpace(req.UserID),
 		Username:                    strings.TrimSpace(req.Username),
 		Role:                        strings.TrimSpace(req.Role),
-		TenantID:                    strings.TrimSpace(req.TenantID),
+		OrganizationID:              strings.TrimSpace(req.OrganizationID),
 		DeviceID:                    strings.TrimSpace(req.DeviceID),
 		SessionID:                   strings.TrimSpace(req.SessionID),
 		LocalUserSIDHash:            strings.TrimSpace(req.LocalUserSIDHash),

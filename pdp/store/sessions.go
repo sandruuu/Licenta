@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -16,7 +14,7 @@ import (
 
 func (s *Store) GetSession(id string) (*models.Session, bool) {
 	row := s.db.QueryRow(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, tenant_id, policy_id, created_at, expires_at, last_activity,
+		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
 		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
 		revoke_on_posture_change, revoke_on_risk_increase, revoked
 		FROM sessions WHERE id = ?`, id)
@@ -26,7 +24,7 @@ func (s *Store) GetSession(id string) (*models.Session, bool) {
 	var createdAt, expiresAt, lastActivity, revalidateAfter string
 
 	err := row.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-		&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.TenantID, &sess.PolicyID,
+		&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.OrganizationID, &sess.PolicyID,
 		&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.SessionMaxAgeSeconds,
 		&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revokeOnRiskIncrease, &revoked)
 	if err != nil {
@@ -44,14 +42,34 @@ func (s *Store) GetSession(id string) (*models.Session, bool) {
 }
 
 func (s *Store) SaveSession(session *models.Session) {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO sessions
+	_, err := s.db.Exec(`INSERT INTO sessions
 		(id, user_id, username, device_id, source_ip, resource, gateway_id, protocol, risk_score,
-		 tenant_id, policy_id, created_at, expires_at, last_activity, revalidate_after,
+		 organization_id, policy_id, created_at, expires_at, last_activity, revalidate_after,
 		 session_max_age_seconds, revalidate_every_seconds, revoke_on_posture_change,
 		 revoke_on_risk_increase, revoked)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			user_id = EXCLUDED.user_id,
+			username = EXCLUDED.username,
+			device_id = EXCLUDED.device_id,
+			source_ip = EXCLUDED.source_ip,
+			resource = EXCLUDED.resource,
+			gateway_id = EXCLUDED.gateway_id,
+			protocol = EXCLUDED.protocol,
+			risk_score = EXCLUDED.risk_score,
+			organization_id = EXCLUDED.organization_id,
+			policy_id = EXCLUDED.policy_id,
+			created_at = EXCLUDED.created_at,
+			expires_at = EXCLUDED.expires_at,
+			last_activity = EXCLUDED.last_activity,
+			revalidate_after = EXCLUDED.revalidate_after,
+			session_max_age_seconds = EXCLUDED.session_max_age_seconds,
+			revalidate_every_seconds = EXCLUDED.revalidate_every_seconds,
+			revoke_on_posture_change = EXCLUDED.revoke_on_posture_change,
+			revoke_on_risk_increase = EXCLUDED.revoke_on_risk_increase,
+			revoked = EXCLUDED.revoked`,
 		session.ID, session.UserID, session.Username, session.DeviceID, session.SourceIP,
-		session.Resource, session.GatewayID, session.Protocol, session.RiskScore, session.TenantID, session.PolicyID,
+		session.Resource, session.GatewayID, session.Protocol, session.RiskScore, session.OrganizationID, session.PolicyID,
 		fmtTime(session.CreatedAt), fmtTime(session.ExpiresAt),
 		fmtTime(session.LastActivity), fmtTime(session.RevalidateAfter),
 		session.SessionMaxAgeSeconds, session.RevalidateEverySeconds,
@@ -63,7 +81,7 @@ func (s *Store) SaveSession(session *models.Session) {
 
 func (s *Store) ListSessions() []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, tenant_id, policy_id, created_at, expires_at, last_activity,
+		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
 		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
 		revoke_on_posture_change, revoke_on_risk_increase, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at > ?`, fmtTime(time.Now()))
@@ -76,7 +94,7 @@ func (s *Store) ListSessions() []*models.Session {
 
 func (s *Store) ListUserSessions(userID string) []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, tenant_id, policy_id, created_at, expires_at, last_activity,
+		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
 		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
 		revoke_on_posture_change, revoke_on_risk_increase, revoked
 		FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ?`, userID, fmtTime(time.Now()))
@@ -95,7 +113,7 @@ func (s *Store) scanSessions(rows *sql.Rows) []*models.Session {
 		var createdAt, expiresAt, lastActivity, revalidateAfter string
 
 		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-			&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.TenantID, &sess.PolicyID,
+			&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.OrganizationID, &sess.PolicyID,
 			&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.SessionMaxAgeSeconds,
 			&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revokeOnRiskIncrease, &revoked); err != nil {
 			continue
@@ -135,7 +153,7 @@ func (s *Store) CleanExpiredSessionsWithSnapshot(now time.Time) ([]*models.Sessi
 	defer tx.Rollback()
 
 	rows, err := tx.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, tenant_id, policy_id, created_at, expires_at, last_activity,
+		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
 		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
 		revoke_on_posture_change, revoke_on_risk_increase, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at < ?`, fmtTime(now))

@@ -20,13 +20,13 @@ type PolicyRule struct {
 // PolicyAssignment attaches a reusable policy rule to a Duo-style access layer.
 // Supported levels are organization, group, resource, and resource_group.
 type PolicyAssignment struct {
-	ID         string `json:"id"`
-	PolicyID   string `json:"policy_id"`
-	TenantID   string `json:"tenant_id"`
-	Level      string `json:"level"`
-	GroupID    string `json:"group_id,omitempty"`
-	GroupName  string `json:"group_name,omitempty"`
-	OrderIndex int    `json:"order_index"`
+	ID             string `json:"id"`
+	PolicyID       string `json:"policy_id"`
+	OrganizationID string `json:"organization_id"`
+	Level          string `json:"level"`
+	GroupID        string `json:"group_id,omitempty"`
+	GroupName      string `json:"group_name,omitempty"`
+	OrderIndex     int    `json:"order_index"`
 
 	ResourceID string    `json:"resource_id,omitempty"`
 	Enabled    bool      `json:"enabled"`

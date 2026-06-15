@@ -854,8 +854,8 @@ Pornire login:
 Browser si IdP:
 
 1. Tray deschide browserul catre `https://pdp.example.com/browser/session/{session_request_id}`.
-2. PDP stie tenant/auth realm-ul din certificatul device si din enrollment.
-3. User login nu poate schimba tenantul/contextul device-ului.
+2. PDP stie organizatia/auth realm-ul din certificatul device si din enrollment.
+3. User login nu poate schimba organizatia/contextul device-ului.
 4. PDP alege IdP-ul configurat sau face discovery limitat la contextul device-ului.
 5. PDP genereaza `state`, `nonce` si PKCE pentru PDP -> IdP.
 6. Browserul este redirectat la IdP.
@@ -1867,7 +1867,7 @@ Campuri de eveniment parsate:
 - `session_id`;
 - `device_id`;
 - `user_id`;
-- `tenant_id`;
+- `organization_id`;
 - `resource_id`;
 - `gateway_id`;
 - `policy_id`;

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"pdp/mfa"
 	"pdp/models"
 	"pdp/pki"
+	"pdp/runtime/redisstate"
 	"pdp/store"
 	"pdp/util"
 )
@@ -25,17 +27,18 @@ type Service struct {
 	Federation *FederationProvider
 	Secrets    *SecretProtector
 	Store      *store.Store
+	Runtime    *redisstate.Client
 	Cfg        *config.Config
 }
 
 // New creates a new authentication service.
-func New(cfg *config.Config, s *store.Store) *Service {
+func New(cfg *config.Config, s *store.Store, runtimeState *redisstate.Client) *Service {
 	if cfg == nil {
 		log.Fatal("[AUTH] PDP config is required")
 	}
 	cfg.ApplyDefaults()
 
-	jwtKey, err := loadJWTSigningKey(cfg)
+	jwtKey, err := loadJWTSigningKey(cfg, runtimeState)
 	if err != nil {
 		log.Fatalf("[AUTH] Failed to load JWT signing key: %v", err)
 	}
@@ -46,30 +49,32 @@ func New(cfg *config.Config, s *store.Store) *Service {
 	}
 	log.Printf("[AUTH] JWT signing initialized (ES256, kid=%s)", jwtMgr.keyID)
 
-	secretProtector, err := NewSecretProtector(cfg)
+	secretProtector, err := NewSecretProtector(cfg, runtimeState)
 	if err != nil {
 		log.Fatalf("[AUTH] Failed to initialize MFA secret protection: %v", err)
 	}
-	if !secretProtector.Persistent() {
-		log.Printf("[AUTH] MFA secret protection is using an in-memory key because data_dir is not configured")
-	}
-
 	return &Service{
 		Users:      NewUserManager(s, secretProtector),
 		JWT:        jwtMgr,
-		OIDC:       NewOIDCManager(cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
-		WebAuthn:   mfa.NewWebAuthnProvider(cfg),
-		Federation: NewFederationProvider(cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
+		OIDC:       NewOIDCManager(runtimeState, s, cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
+		WebAuthn:   mfa.NewWebAuthnProvider(cfg, runtimeState),
+		Federation: NewFederationProvider(runtimeState, cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
 		Secrets:    secretProtector,
 		Store:      s,
+		Runtime:    runtimeState,
 		Cfg:        cfg,
 	}
 }
 
-func loadJWTSigningKey(cfg *config.Config) (*ecdsa.PrivateKey, error) {
-	if strings.TrimSpace(cfg.PKIURL) == "" || strings.TrimSpace(cfg.PKIToken) == "" {
-		log.Printf("[AUTH] Vault Transit not configured; using in-memory JWT signing key")
-		return GenerateJWTSigningKey()
+func loadJWTSigningKey(cfg *config.Config, runtimeState *redisstate.Client) (*ecdsa.PrivateKey, error) {
+	if strings.TrimSpace(cfg.PKIURL) == "" ||
+		strings.TrimSpace(cfg.PKIToken) == "" ||
+		strings.TrimSpace(cfg.JWTTransitKey) == "" ||
+		strings.TrimSpace(cfg.JWTKeyEncryptedPath) == "" {
+		return nil, fmt.Errorf("Vault Transit configuration is required for JWT signing key")
+	}
+	if runtimeState == nil {
+		return nil, fmt.Errorf("Redis runtime state is required for JWT signing key lock")
 	}
 
 	vaultCfg := pki.VaultConfig{
@@ -82,18 +87,24 @@ func loadJWTSigningKey(cfg *config.Config) (*ecdsa.PrivateKey, error) {
 		Timeout:        cfg.PKITimeout,
 	}
 
-	key, err := pki.RestoreOrCreateNamedKey(context.Background(), vaultCfg, cfg.JWTKeyEncryptedPath, "JWT signing")
-	if err != nil {
-		return nil, err
-	}
-	return key, nil
+	var key *ecdsa.PrivateKey
+	err := runtimeState.WithLock(context.Background(), "jwt-signing-key", 2*time.Minute, 2*time.Minute, func() error {
+		var err error
+		key, err = pki.RestoreOrCreateNamedKey(context.Background(), vaultCfg, cfg.JWTKeyEncryptedPath, "JWT signing")
+		return err
+	})
+	return key, err
 }
 
 // Login handles primary authentication with email and password.
 // MFA is deferred to resource-access step-up challenges.
 func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error) {
 	identifier := req.Identifier()
-	if locked, until := svc.Store.IsLockedOut(identifier); locked {
+	locked, until, err := svc.Runtime.IsLockedOut(identifier)
+	if err != nil {
+		return nil, fmt.Errorf("check login lockout: %w", err)
+	}
+	if locked {
 		svc.audit("login", identifier, "", "", false,
 			"Account locked until "+until.Format(time.RFC3339))
 		return &models.LoginResponse{
@@ -104,7 +115,7 @@ func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error
 
 	user, err := svc.Users.AuthenticateByEmail(identifier, req.Password)
 	if err != nil {
-		svc.Store.RecordFailedLogin(identifier, svc.Cfg.MaxLoginAttempts, svc.Cfg.LockoutDuration)
+		_ = svc.Runtime.RecordFailedLogin(identifier, svc.Cfg.MaxLoginAttempts, svc.Cfg.LockoutDuration)
 		svc.audit("login", identifier, "", "", false, "Invalid credentials")
 		return &models.LoginResponse{
 			Status:  "denied",
@@ -112,7 +123,7 @@ func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error
 		}, nil
 	}
 
-	svc.Store.ResetLoginAttempts(identifier)
+	_ = svc.Runtime.ResetLoginAttempts(identifier)
 
 	svc.audit("login", user.Username, user.ID, "", true, "Primary authentication completed; MFA required")
 	log.Printf("[AUTH] Login: %s - primary authentication completed; MFA required", user.Username)

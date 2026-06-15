@@ -50,12 +50,12 @@ func (service *gatewayEnrollmentGRPCService) Enroll(ctx context.Context, request
 		return nil, status.Error(codes.Unavailable, "CA certificate is not available")
 	}
 	payload := map[string]interface{}{
-		"status":     gatewayEnrollmentResponseStatusEnroll,
-		"gateway_id": result.Gateway.ID,
-		"tenant_id":  result.Gateway.TenantID,
-		"cert_pem":   string(result.CertPEM),
-		"ca_pem":     string(caPEM),
-		"message":    "Gateway enrolled successfully. Certificate valid for 7 days.",
+		"status":          gatewayEnrollmentResponseStatusEnroll,
+		"gateway_id":      result.Gateway.ID,
+		"organization_id": result.Gateway.OrganizationID,
+		"cert_pem":        string(result.CertPEM),
+		"ca_pem":          string(caPEM),
+		"message":         "Gateway enrolled successfully. Certificate valid for 7 days.",
 	}
 	return structpb.NewStruct(payload)
 }
@@ -82,12 +82,12 @@ func (service *gatewayEnrollmentGRPCService) RenewCertificate(ctx context.Contex
 		return nil, status.Error(codes.Unavailable, "CA certificate is not available")
 	}
 	payload := map[string]interface{}{
-		"status":     gatewayEnrollmentResponseStatusRenew,
-		"gateway_id": result.Gateway.ID,
-		"tenant_id":  result.Gateway.TenantID,
-		"cert_pem":   string(result.CertPEM),
-		"ca_pem":     string(caPEM),
-		"message":    "Certificate renewed (7-day validity)",
+		"status":          gatewayEnrollmentResponseStatusRenew,
+		"gateway_id":      result.Gateway.ID,
+		"organization_id": result.Gateway.OrganizationID,
+		"cert_pem":        string(result.CertPEM),
+		"ca_pem":          string(caPEM),
+		"message":         "Certificate renewed (7-day validity)",
 	}
 	return structpb.NewStruct(payload)
 }

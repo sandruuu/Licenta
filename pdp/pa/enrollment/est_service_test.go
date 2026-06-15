@@ -10,7 +10,7 @@ import (
 
 func TestServiceCompleteESTEnrollmentIssuesReusesAndRejectsReplay(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		if component != "endpoint" {
@@ -62,7 +62,7 @@ func TestServiceCompleteESTEnrollmentIssuesReusesAndRejectsReplay(t *testing.T) 
 
 func TestServiceCompleteESTEnrollmentValidatesTokenAndCSRBinding(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		return "device-role"
@@ -130,7 +130,7 @@ func TestServiceCompleteESTEnrollmentValidatesTokenAndCSRBinding(t *testing.T) {
 
 func TestServiceCompleteESTEnrollmentAcceptsDeviceURISAN(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		return "device-role"
@@ -161,7 +161,7 @@ func TestServiceCompleteESTEnrollmentAcceptsDeviceURISAN(t *testing.T) {
 
 func TestServiceIssueEnrollmentTokenGeneratesNonceAndIncludesOptionalFields(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 
 	var issuedForDevice string
 	var issuedNonce string
@@ -199,7 +199,7 @@ func TestServiceIssueEnrollmentTokenGeneratesNonceAndIncludesOptionalFields(t *t
 
 func TestServiceIssueEnrollmentTokenValidatesParentTokenAndDeviceBinding(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	issuerCalls := 0
 	service.SetEnrollmentTokenIssuer(func(userID, username, role, deviceID, nonce, userSID string) (string, time.Duration, error) {
 		issuerCalls++

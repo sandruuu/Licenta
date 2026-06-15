@@ -36,7 +36,7 @@ type config struct {
 	KeycloakPassword     string
 	PDPBaseURL           string
 	PDPSCIMBaseURL       string
-	PDPTenantID          string
+	PDPOrganizationID    string
 	PDPSCIMToken         string
 	PDPTLSSkipVerify     bool
 	SyncInterval         time.Duration
@@ -196,7 +196,7 @@ func loadConfig() (config, error) {
 		KeycloakUsername:    env("KEYCLOAK_ADMIN_USERNAME", env("KEYCLOAK_ADMIN", "admin")),
 		KeycloakPassword:    env("KEYCLOAK_ADMIN_PASSWORD", "admin"),
 		PDPBaseURL:          strings.TrimRight(env("PDP_BASE_URL", defaultPDPBaseURL), "/"),
-		PDPTenantID:         strings.TrimSpace(os.Getenv("PDP_TENANT_ID")),
+		PDPOrganizationID:   strings.TrimSpace(os.Getenv("PDP_ORGANIZATION_ID")),
 		PDPSCIMToken:        strings.TrimSpace(os.Getenv("PDP_SCIM_TOKEN")),
 		PDPTLSSkipVerify:    envBool("PDP_TLS_SKIP_VERIFY", true),
 		SyncInterval:        envDuration("SYNC_INTERVAL", 60*time.Second),
@@ -216,8 +216,8 @@ func loadConfig() (config, error) {
 		}
 	}
 	cfg.PDPSCIMBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PDP_SCIM_BASE_URL")), "/")
-	if cfg.PDPSCIMBaseURL == "" && cfg.PDPTenantID != "" {
-		cfg.PDPSCIMBaseURL = fmt.Sprintf("%s/scim/v2/%s", cfg.PDPBaseURL, url.PathEscape(cfg.PDPTenantID))
+	if cfg.PDPSCIMBaseURL == "" && cfg.PDPOrganizationID != "" {
+		cfg.PDPSCIMBaseURL = fmt.Sprintf("%s/scim/v2/%s", cfg.PDPBaseURL, url.PathEscape(cfg.PDPOrganizationID))
 	}
 
 	var missing []string
@@ -234,7 +234,7 @@ func loadConfig() (config, error) {
 		missing = append(missing, "KEYCLOAK_CLIENT_SECRET or KEYCLOAK_ADMIN_USERNAME/KEYCLOAK_ADMIN_PASSWORD")
 	}
 	if cfg.PDPSCIMBaseURL == "" {
-		missing = append(missing, "PDP_TENANT_ID or PDP_SCIM_BASE_URL")
+		missing = append(missing, "PDP_ORGANIZATION_ID or PDP_SCIM_BASE_URL")
 	}
 	if cfg.PDPSCIMToken == "" {
 		missing = append(missing, "PDP_SCIM_TOKEN")

@@ -4,8 +4,6 @@ import (
 	"time"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // GetUserByExternalSubject finds a federated user by their external IdP subject+source.
@@ -15,10 +13,10 @@ func (s *Store) GetUserByExternalSubject(externalSubject, authSource string) (*m
 	return s.scanUser(row)
 }
 
-func (s *Store) GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID string) (*models.User, bool) {
+func (s *Store) GetUserByExternalSubjectForOrganization(externalSubject, authSource, organizationID string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT `+userSelectColumns+`
-		FROM users WHERE external_subject = ? AND auth_source = ? AND tenant_id = ?`,
-		externalSubject, authSource, tenantID)
+		FROM users WHERE external_subject = ? AND auth_source = ? AND organization_id = ?`,
+		externalSubject, authSource, organizationID)
 	return s.scanUser(row)
 }
 
@@ -27,7 +25,7 @@ func (s *Store) GetUserByExternalSubjectForTenant(externalSubject, authSource, t
 // ─────────────────────────────────────────────
 
 // SaveLoginLocation stores a geolocation record for a user login event.
-// Keeps at most 50 records per user; older entries are pruned automatically.
+// Keeps at most 50 records per user; surplus entries are pruned automatically.
 func (s *Store) SaveLoginLocation(userID, sourceIP string, lat, lon float64, city, country string) error {
 	return s.SaveLoginLocationAt(userID, sourceIP, lat, lon, city, country, time.Now().UTC())
 }
@@ -47,7 +45,7 @@ func (s *Store) SaveLoginLocationAt(userID, sourceIP string, lat, lon float64, c
 		return err
 	}
 
-	// Prune old entries — keep last 50 per user
+	// Keep the 50 most recent entries per user.
 	s.db.Exec(
 		`DELETE FROM login_locations WHERE user_id = ? AND id NOT IN (
 			SELECT id FROM login_locations WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50
@@ -173,7 +171,7 @@ func (s *Store) GetUserDevices(userID string) []string {
 }
 
 // GetDeviceUserBinding returns the earliest known binding between a user and a
-// device. The oldest binding is used to decide whether a device is still new.
+// device. The first binding timestamp decides whether a device is still new.
 func (s *Store) GetDeviceUserBinding(userID, deviceID string) (*models.DeviceUser, bool) {
 	row := s.db.QueryRow(
 		`SELECT device_id, user_id, username, role, bound_at

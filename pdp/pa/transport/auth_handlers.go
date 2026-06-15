@@ -16,22 +16,22 @@ import (
 // Returns true if the request should be rejected (rate limit exceeded).
 func (s *Server) checkAuthRateLimit(w http.ResponseWriter, r *http.Request) bool {
 	ip, _, _ := strings.Cut(r.RemoteAddr, ":")
-	s.authLimiterMu.Lock()
-	defer s.authLimiterMu.Unlock()
-
-	entry, ok := s.authLimiter[ip]
-	now := time.Now()
 	appCfg := s.appConfig()
-	if !ok || now.After(entry.resetAt) {
-		s.authLimiter[ip] = &enrollRateEntry{count: 1, resetAt: now.Add(appCfg.Runtime.AuthRateLimitWindow)}
-		return false
-	}
-	entry.count++
-	if entry.count > appCfg.Runtime.AuthRateLimitMax {
-		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests, try again later"})
+	if s.pa == nil || s.pa.Runtime == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "rate limiter unavailable"})
 		return true
 	}
-	return false
+	allowed, err := s.pa.Runtime.Allow("auth", ip, appCfg.Runtime.AuthRateLimitWindow, appCfg.Runtime.AuthRateLimitMax)
+	if err != nil {
+		log.Printf("[AUTH] Redis rate limit check failed for IP %s: %v", ip, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "rate limiter unavailable"})
+		return true
+	}
+	if allowed {
+		return false
+	}
+	writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests, try again later"})
+	return true
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -57,12 +57,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	user, ok := s.authenticatePrimaryLogin(w, r, req)
 	if !ok {
-		return
-	}
-
-	requireMFA := s.appConfig().AdminMFARequired() || purpose == paauth.PasskeyEnrollmentPurpose
-	if !requireMFA {
-		s.issueAdminLoginToken(w, r, user, purpose)
 		return
 	}
 
@@ -132,29 +126,6 @@ func adminLoginPurpose(raw string) (string, bool) {
 	}
 }
 
-func (s *Server) issueAdminLoginToken(w http.ResponseWriter, r *http.Request, user *models.User, purpose string) {
-	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, purpose)
-	if err != nil {
-		log.Printf("[AUTH] JWT issue after password login failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
-		return
-	}
-	if s.pa.Audit != nil {
-		details := "Dashboard password login completed; MFA disabled by configuration"
-		if purpose == paauth.PasskeyEnrollmentPurpose {
-			details = "Passkey enrollment authentication completed; MFA disabled by configuration"
-		}
-		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", details, true)
-	}
-	writeJSON(w, http.StatusOK, models.LoginResponse{
-		Status:    "authenticated",
-		Message:   "Authentication successful",
-		AuthToken: authToken,
-		UserID:    user.ID,
-		Purpose:   purpose,
-	})
-}
-
 func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -170,58 +141,6 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 			"role":     r.Header.Get("X-User-Role"),
 		},
 	})
-}
-
-func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	if s.checkAuthRateLimit(w, r) {
-		return
-	}
-
-	if s.hasLocalPlatformAdmin() {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "administrator registration is disabled"})
-		return
-	}
-
-	var req models.RegisterRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
-		return
-	}
-
-	user, err := s.pa.Auth.Users.Register(req)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "registration failed", err)
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, models.APIResponse{
-		Success: true,
-		Message: "User registered successfully",
-		Data: map[string]string{
-			"user_id":  user.ID,
-			"username": user.Username,
-		},
-	})
-}
-
-func (s *Server) hasLocalPlatformAdmin() bool {
-	for _, user := range s.pa.Auth.Users.ListUsers() {
-		if user == nil {
-			continue
-		}
-		if strings.TrimSpace(user.PasswordHash) == "" || strings.TrimSpace(user.AuthSource) != "" {
-			continue
-		}
-		if user.Role == "platform_admin" {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +178,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	if verifyErr != nil {
 		log.Printf("[AUTH] MFA verification failed for user=%s: %v", user.Username, verifyErr)
 		if retry := s.adminMFA.recordFailure(challenge.ID, s.appConfig().MaxLoginAttempts); !retry {
-			s.pa.Store.RecordFailedLogin(user.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+			_ = s.pa.Runtime.RecordFailedLogin(user.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "too many failed MFA attempts"})
 			return
 		}
@@ -268,7 +187,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.adminMFA.consume(challenge.ID)
-	s.pa.Store.ResetLoginAttempts(user.Username)
+	_ = s.pa.Runtime.ResetLoginAttempts(user.Username)
 	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, challenge.Purpose)
 	if err != nil {
 		log.Printf("[AUTH] JWT issue after MFA failed: %v", err)
@@ -303,7 +222,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	}
 
 	if strings.EqualFold(identifier, "admin") && req.Password == "admin" {
-		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		_ = s.pa.Runtime.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
 			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Default admin/admin credentials rejected", false)
 		}
@@ -314,7 +233,13 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 		return nil, false
 	}
 
-	if locked, until := s.pa.Store.IsLockedOut(identifier); locked {
+	locked, until, err := s.pa.Runtime.IsLockedOut(identifier)
+	if err != nil {
+		log.Printf("[AUTH] Redis lockout check failed for %s: %v", identifier, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication state unavailable"})
+		return nil, false
+	}
+	if locked {
 		if s.pa.Audit != nil {
 			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Account locked until "+until.Format(time.RFC3339), false)
 		}
@@ -326,7 +251,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	}
 	user, err := s.pa.Auth.Users.AuthenticateByEmail(identifier, req.Password)
 	if err != nil {
-		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		_ = s.pa.Runtime.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
 			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Invalid credentials", false)
 		}
@@ -337,11 +262,11 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 		return nil, false
 	}
 	if user.Role != "platform_admin" {
-		s.pa.Store.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+		_ = s.pa.Runtime.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "platform administrator access required"})
 		return nil, false
 	}
-	s.pa.Store.ResetLoginAttempts(identifier)
+	_ = s.pa.Runtime.ResetLoginAttempts(identifier)
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Primary authentication completed", true)
 	}

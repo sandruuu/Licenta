@@ -93,12 +93,12 @@ func (stream *testGatewayControlStream) nextSent(t *testing.T) *structpb.Struct 
 func newGatewayControlTestServer(t *testing.T, gatewayID, fqdn string) (*Server, *x509.Certificate) {
 	t.Helper()
 	server, dataStore := newDeviceAPITestServer(t)
-	certPEM, cert := newGatewayControlCertificate(t, transportTestTenantID, gatewayID, fqdn, time.Now().Add(time.Hour))
-	server.gatewayControl = NewGatewayControlRegistry()
+	certPEM, cert := newGatewayControlCertificate(t, transportTestOrganizationID, gatewayID, fqdn, time.Now().Add(time.Hour))
+	server.gatewayControl = NewGatewayControlRegistry(server.pa.Runtime)
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              gatewayID,
-		TenantID:        transportTestTenantID,
-		TenantIDs:       []string{transportTestTenantID},
+		OrganizationID:  transportTestOrganizationID,
+		OrganizationIDs: []string{transportTestOrganizationID},
 		Name:            "Test Gateway",
 		FQDN:            fqdn,
 		Status:          "enrolled",
@@ -110,13 +110,13 @@ func newGatewayControlTestServer(t *testing.T, gatewayID, fqdn string) (*Server,
 	return server, cert
 }
 
-func newGatewayControlCertificate(t *testing.T, tenantID, gatewayID, fqdn string, notAfter time.Time) ([]byte, *x509.Certificate) {
+func newGatewayControlCertificate(t *testing.T, organizationID, gatewayID, fqdn string, notAfter time.Time) ([]byte, *x509.Certificate) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate gateway key: %v", err)
 	}
-	identityURI, err := url.Parse(pagateway.GatewayIdentityURI(tenantID, gatewayID))
+	identityURI, err := url.Parse(pagateway.GatewayIdentityURI(organizationID, gatewayID))
 	if err != nil {
 		t.Fatalf("parse gateway identity URI: %v", err)
 	}

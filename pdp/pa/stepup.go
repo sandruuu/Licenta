@@ -1,9 +1,9 @@
 package pa
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"pdp/models"
@@ -18,19 +18,27 @@ const (
 	StepUpStatusExpired   = "expired"
 
 	defaultStepUpChallengeTTL = 5 * time.Minute
+	stepUpExpiredStateGrace   = 2 * time.Minute
 	maxStepUpFailedAttempts   = 5
+	stepUpStateKind           = "step_up_challenge"
 )
 
 type StepUpManager struct {
-	mu         sync.RWMutex
-	challenges map[string]*StepUpChallenge
+	state RuntimeStateStore
+}
+
+type RuntimeStateStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	DeleteEphemeralState(kind, key string) error
+	ListEphemeralState(kind string) (map[string][]byte, error)
 }
 
 type StepUpChallengeRequest struct {
 	AgentSessionID string
 	UserID         string
 	Username       string
-	TenantID       string
+	OrganizationID string
 	DeviceID       string
 	ResourceID     string
 	PolicyID       string
@@ -43,7 +51,7 @@ type StepUpChallenge struct {
 	AgentSessionID     string
 	UserID             string
 	Username           string
-	TenantID           string
+	OrganizationID     string
 	DeviceID           string
 	ResourceID         string
 	PolicyID           string
@@ -77,12 +85,12 @@ type StepUpCompletion struct {
 	Attachment string
 }
 
-func NewStepUpManager() *StepUpManager {
-	return &StepUpManager{challenges: make(map[string]*StepUpChallenge)}
+func NewStepUpManager(state RuntimeStateStore) *StepUpManager {
+	return &StepUpManager{state: state}
 }
 
 func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*StepUpChallenge, error) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return nil, fmt.Errorf("step-up manager is unavailable")
 	}
 	if strings.TrimSpace(req.AgentSessionID) == "" {
@@ -103,11 +111,8 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 	}
 
 	now := time.Now().UTC()
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked(now)
-
-	if existing := manager.findActiveLocked(req.AgentSessionID, req.UserID, req.DeviceID, req.ResourceID, req.PolicyID, now); existing != nil {
+	manager.expire(now)
+	if existing := manager.findActive(req.AgentSessionID, req.UserID, req.DeviceID, req.ResourceID, req.PolicyID, now); existing != nil {
 		return cloneStepUpChallenge(existing), nil
 	}
 
@@ -122,7 +127,7 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 		AgentSessionID:     strings.TrimSpace(req.AgentSessionID),
 		UserID:             strings.TrimSpace(req.UserID),
 		Username:           strings.TrimSpace(req.Username),
-		TenantID:           strings.TrimSpace(req.TenantID),
+		OrganizationID:     strings.TrimSpace(req.OrganizationID),
 		DeviceID:           strings.TrimSpace(req.DeviceID),
 		ResourceID:         strings.TrimSpace(req.ResourceID),
 		PolicyID:           firstNonEmptyString(req.PolicyID, requirement.PolicyID),
@@ -138,22 +143,22 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(defaultStepUpChallengeTTL),
 	}
-	manager.challenges[challenge.ID] = challenge
+	if err := manager.save(challenge); err != nil {
+		return nil, err
+	}
 	return cloneStepUpChallenge(challenge), nil
 }
 
 func (manager *StepUpManager) AuthContext(agentSessionID, userID, deviceID, resourceID string, now time.Time) models.AuthContext {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return models.AuthContext{}
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked(now)
+	manager.expire(now)
 	var selected *StepUpChallenge
-	for _, challenge := range manager.challenges {
+	for _, challenge := range manager.list() {
 		if challenge == nil || challenge.Status != StepUpStatusCompleted {
 			continue
 		}
@@ -186,13 +191,11 @@ func (manager *StepUpManager) AuthContext(agentSessionID, userID, deviceID, reso
 }
 
 func (manager *StepUpManager) Get(id string) (*StepUpChallenge, bool) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return nil, false
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	manager.expireLocked(time.Now().UTC())
-	challenge, ok := manager.challenges[strings.TrimSpace(id)]
+	manager.expire(time.Now().UTC())
+	challenge, ok := manager.load(strings.TrimSpace(id))
 	if !ok || challenge == nil {
 		return nil, false
 	}
@@ -200,17 +203,16 @@ func (manager *StepUpManager) Get(id string) (*StepUpChallenge, bool) {
 }
 
 func (manager *StepUpManager) EnsurePendingTOTPSecret(challengeID string, generate func() (string, error)) (string, error) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return "", fmt.Errorf("step-up manager is unavailable")
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	challenge, ok := manager.challenges[strings.TrimSpace(challengeID)]
+	challenge, ok := manager.load(strings.TrimSpace(challengeID))
 	if !ok || challenge == nil {
 		return "", fmt.Errorf("step-up challenge not found")
 	}
 	now := time.Now().UTC()
-	if manager.expirePendingChallengeLocked(challenge, now) {
+	if manager.expirePendingChallenge(challenge, now) {
+		_ = manager.save(challenge)
 		return "", fmt.Errorf("step-up challenge expired")
 	}
 	if !isPendingStepUpStatus(challenge.Status) {
@@ -228,17 +230,25 @@ func (manager *StepUpManager) EnsurePendingTOTPSecret(challengeID string, genera
 	}
 	challenge.PendingTOTPSecret = strings.TrimSpace(secret)
 	challenge.Status = StepUpStatusAwaiting
+	if err := manager.save(challenge); err != nil {
+		return "", err
+	}
 	return challenge.PendingTOTPSecret, nil
 }
 
 func (manager *StepUpManager) PendingTOTPSecret(challengeID string) (string, bool) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return "", false
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	challenge := manager.challenges[strings.TrimSpace(challengeID)]
-	if challenge == nil || manager.expirePendingChallengeLocked(challenge, time.Now().UTC()) || !isPendingStepUpStatus(challenge.Status) || strings.TrimSpace(challenge.PendingTOTPSecret) == "" {
+	challenge, ok := manager.load(strings.TrimSpace(challengeID))
+	if !ok || challenge == nil {
+		return "", false
+	}
+	if manager.expirePendingChallenge(challenge, time.Now().UTC()) {
+		_ = manager.save(challenge)
+		return "", false
+	}
+	if !isPendingStepUpStatus(challenge.Status) || strings.TrimSpace(challenge.PendingTOTPSecret) == "" {
 		return "", false
 	}
 	return challenge.PendingTOTPSecret, true
@@ -249,12 +259,10 @@ func (manager *StepUpManager) Complete(challengeID, method string, completedAt t
 }
 
 func (manager *StepUpManager) CompleteWithAssurance(challengeID string, completion StepUpCompletion, completedAt time.Time) (*StepUpChallenge, error) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return nil, fmt.Errorf("step-up manager is unavailable")
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	challenge, ok := manager.challenges[strings.TrimSpace(challengeID)]
+	challenge, ok := manager.load(strings.TrimSpace(challengeID))
 	if !ok || challenge == nil {
 		return nil, fmt.Errorf("step-up challenge not found")
 	}
@@ -262,7 +270,8 @@ func (manager *StepUpManager) CompleteWithAssurance(challengeID string, completi
 		completedAt = time.Now().UTC()
 	}
 	completedAt = completedAt.UTC()
-	if manager.expirePendingChallengeLocked(challenge, completedAt) {
+	if manager.expirePendingChallenge(challenge, completedAt) {
+		_ = manager.save(challenge)
 		return nil, fmt.Errorf("step-up challenge expired")
 	}
 	if !isPendingStepUpStatus(challenge.Status) {
@@ -282,6 +291,9 @@ func (manager *StepUpManager) CompleteWithAssurance(challengeID string, completi
 	challenge.CompletedAAGUID = strings.TrimSpace(completion.AAGUID)
 	challenge.CompletedAttachment = strings.TrimSpace(completion.Attachment)
 	challenge.ExpiresAt = challenge.CompletedAt.Add(time.Duration(models.StepUpMaxAgeSeconds(challenge.MaxAgeSeconds)) * time.Second)
+	if err := manager.save(challenge); err != nil {
+		return nil, err
+	}
 	return cloneStepUpChallenge(challenge), nil
 }
 
@@ -297,17 +309,16 @@ func stepUpStrengthForMethod(method string) string {
 }
 
 func (manager *StepUpManager) RecordFailedAttempt(challengeID, reason string) (*StepUpChallenge, bool) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return nil, false
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	challenge, ok := manager.challenges[strings.TrimSpace(challengeID)]
+	challenge, ok := manager.load(strings.TrimSpace(challengeID))
 	if !ok || challenge == nil {
 		return nil, false
 	}
 	now := time.Now().UTC()
-	if manager.expirePendingChallengeLocked(challenge, now) || !isPendingStepUpStatus(challenge.Status) {
+	if manager.expirePendingChallenge(challenge, now) || !isPendingStepUpStatus(challenge.Status) {
+		_ = manager.save(challenge)
 		return cloneStepUpChallenge(challenge), false
 	}
 	challenge.FailedAttempts++
@@ -319,26 +330,29 @@ func (manager *StepUpManager) RecordFailedAttempt(challengeID, reason string) (*
 		if challenge.Reason == "" {
 			challenge.Reason = "too many failed verification attempts"
 		}
+		_ = manager.save(challenge)
 		return cloneStepUpChallenge(challenge), false
 	}
+	_ = manager.save(challenge)
 	return cloneStepUpChallenge(challenge), true
 }
 
 func (manager *StepUpManager) Deny(challengeID, reason string) {
-	if manager == nil {
+	if manager == nil || manager.state == nil {
 		return
 	}
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	if challenge := manager.challenges[strings.TrimSpace(challengeID)]; challenge != nil {
-		challenge.Status = StepUpStatusDenied
-		challenge.Reason = strings.TrimSpace(reason)
-		challenge.PendingTOTPSecret = ""
+	challenge, ok := manager.load(strings.TrimSpace(challengeID))
+	if !ok || challenge == nil {
+		return
 	}
+	challenge.Status = StepUpStatusDenied
+	challenge.Reason = strings.TrimSpace(reason)
+	challenge.PendingTOTPSecret = ""
+	_ = manager.save(challenge)
 }
 
-func (manager *StepUpManager) findActiveLocked(agentSessionID, userID, deviceID, resourceID, policyID string, now time.Time) *StepUpChallenge {
-	for _, challenge := range manager.challenges {
+func (manager *StepUpManager) findActive(agentSessionID, userID, deviceID, resourceID, policyID string, now time.Time) *StepUpChallenge {
+	for _, challenge := range manager.list() {
 		if challenge == nil {
 			continue
 		}
@@ -362,8 +376,8 @@ func (manager *StepUpManager) findActiveLocked(agentSessionID, userID, deviceID,
 	return nil
 }
 
-func (manager *StepUpManager) expireLocked(now time.Time) {
-	for id, challenge := range manager.challenges {
+func (manager *StepUpManager) expire(now time.Time) {
+	for _, challenge := range manager.list() {
 		if challenge == nil || !stepUpExpiresAtOrBefore(challenge.ExpiresAt, now) {
 			continue
 		}
@@ -371,19 +385,77 @@ func (manager *StepUpManager) expireLocked(now time.Time) {
 		case StepUpStatusPending, StepUpStatusAwaiting:
 			challenge.Status = StepUpStatusExpired
 			challenge.PendingTOTPSecret = ""
+			challenge.ExpiresAt = now.UTC().Add(time.Minute)
+			_ = manager.save(challenge)
 		case StepUpStatusCompleted, StepUpStatusDenied, StepUpStatusExpired:
-			delete(manager.challenges, id)
+			_ = manager.state.DeleteEphemeralState(stepUpStateKind, challenge.ID)
 		}
 	}
 }
 
-func (manager *StepUpManager) expirePendingChallengeLocked(challenge *StepUpChallenge, now time.Time) bool {
+func (manager *StepUpManager) expirePendingChallenge(challenge *StepUpChallenge, now time.Time) bool {
 	if challenge == nil || !isPendingStepUpStatus(challenge.Status) || !stepUpExpiresAtOrBefore(challenge.ExpiresAt, now) {
 		return false
 	}
 	challenge.Status = StepUpStatusExpired
 	challenge.PendingTOTPSecret = ""
+	challenge.ExpiresAt = now.UTC().Add(time.Minute)
 	return true
+}
+
+func (manager *StepUpManager) save(challenge *StepUpChallenge) error {
+	if manager == nil || manager.state == nil || challenge == nil {
+		return fmt.Errorf("step-up manager is unavailable")
+	}
+	raw, err := json.Marshal(challenge)
+	if err != nil {
+		return err
+	}
+	expiresAt := challenge.ExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(defaultStepUpChallengeTTL)
+	}
+	storageExpiresAt := expiresAt
+	if isPendingStepUpStatus(challenge.Status) || challenge.Status == StepUpStatusExpired {
+		storageExpiresAt = expiresAt.Add(stepUpExpiredStateGrace)
+	}
+	return manager.state.SaveEphemeralState(stepUpStateKind, challenge.ID, raw, storageExpiresAt)
+}
+
+func (manager *StepUpManager) load(id string) (*StepUpChallenge, bool) {
+	if manager == nil || manager.state == nil {
+		return nil, false
+	}
+	raw, ok := manager.state.GetEphemeralState(stepUpStateKind, strings.TrimSpace(id))
+	if !ok {
+		return nil, false
+	}
+	var challenge StepUpChallenge
+	if err := json.Unmarshal(raw, &challenge); err != nil {
+		_ = manager.state.DeleteEphemeralState(stepUpStateKind, id)
+		return nil, false
+	}
+	return &challenge, true
+}
+
+func (manager *StepUpManager) list() []*StepUpChallenge {
+	if manager == nil || manager.state == nil {
+		return nil
+	}
+	values, err := manager.state.ListEphemeralState(stepUpStateKind)
+	if err != nil {
+		return nil
+	}
+	out := make([]*StepUpChallenge, 0, len(values))
+	for key, raw := range values {
+		var challenge StepUpChallenge
+		if err := json.Unmarshal(raw, &challenge); err != nil {
+			_ = manager.state.DeleteEphemeralState(stepUpStateKind, key)
+			continue
+		}
+		out = append(out, &challenge)
+	}
+	return out
 }
 
 func isPendingStepUpStatus(status string) bool {
@@ -406,6 +478,7 @@ func cloneStepUpChallenge(challenge *StepUpChallenge) *StepUpChallenge {
 	}
 	copy := *challenge
 	copy.Methods = append([]string(nil), challenge.Methods...)
+	copy.AllowedAAGUIDs = append([]string(nil), challenge.AllowedAAGUIDs...)
 	return &copy
 }
 

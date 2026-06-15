@@ -22,36 +22,36 @@ import (
 // GET  — list IdP configs for an organization
 // POST — create a new IdP config
 func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Request) {
-	tenantID := organizationIDFromQuery(r)
-	if tenantID == "" {
+	organizationID := organizationIDFromQuery(r)
+	if organizationID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "organization_id query parameter is required"})
 		return
 	}
-	if !s.requireOrganizationAccess(w, r, tenantID) {
+	if !s.requireOrganizationAccess(w, r, organizationID) {
 		return
 	}
-	tenant, found := s.pa.Store.GetTenant(tenantID)
-	if !found || tenant == nil {
+	organization, found := s.pa.Store.GetOrganization(organizationID)
+	if !found || organization == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "organization not found"})
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		cfgs := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID)
+		cfgs := s.pa.Store.ListIdentityProviderConfigsForOrganization(organizationID)
 		if cfgs == nil {
 			cfgs = []*models.IdentityProviderConfig{}
 		}
 		// Strip secrets from response
 		safe := make([]map[string]interface{}, 0, len(cfgs))
 		for _, cfg := range cfgs {
-			safe = append(safe, s.sanitizeIdPConfigForTenant(cfg, tenantID))
+			safe = append(safe, s.sanitizeIdPConfigForOrganization(cfg, organizationID))
 		}
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: safe})
 
 	case http.MethodPost:
 		appCfg := s.appConfig()
-		existingConfigs := s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID)
+		existingConfigs := s.pa.Store.ListIdentityProviderConfigsForOrganization(organizationID)
 		if len(existingConfigs) > 0 {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "organization already has an identity provider"})
 			return
@@ -71,7 +71,7 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		_ = json.Unmarshal(body, &raw)
 		makeDefault := idpMakeDefaultRequested(raw)
 
-		cfg.TenantID = tenantID
+		cfg.OrganizationID = organizationID
 		if cfg.ID == "" {
 			var err error
 			cfg.ID, err = util.GenerateID("idp")
@@ -108,19 +108,19 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 
 		s.pa.Store.SaveIdentityProviderConfig(&cfg)
 		if makeDefault {
-			if err := s.setTenantDefaultIdP(tenantID, cfg.ID); err != nil {
+			if err := s.setOrganizationDefaultIdP(organizationID, cfg.ID); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
 		} else {
-			s.reconcileTenantDefaultIdP(tenantID)
+			s.reconcileOrganizationDefaultIdP(organizationID)
 		}
-		log.Printf("[ADMIN] IdP config created: %s (%s) tenant=%s", cfg.ID, cfg.Name, tenantID)
+		log.Printf("[ADMIN] IdP config created: %s (%s) organization=%s", cfg.ID, cfg.Name, organizationID)
 
 		writeJSON(w, http.StatusCreated, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration created",
-			Data:    s.sanitizeIdPConfigForTenant(&cfg, tenantID),
+			Data:    s.sanitizeIdPConfigForOrganization(&cfg, organizationID),
 		})
 
 	default:
@@ -144,10 +144,10 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, cfg.TenantID) {
+		if !s.requireOrganizationAccess(w, r, cfg.OrganizationID) {
 			return
 		}
-		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: s.sanitizeIdPConfigForTenant(cfg, cfg.TenantID)})
+		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: s.sanitizeIdPConfigForOrganization(cfg, cfg.OrganizationID)})
 
 	case http.MethodPut:
 		existing, found := s.pa.Store.GetIdentityProviderConfig(id)
@@ -155,7 +155,7 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 
@@ -210,19 +210,19 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 
 		s.pa.Store.SaveIdentityProviderConfig(existing)
 		if makeDefault {
-			if err := s.setTenantDefaultIdP(existing.TenantID, existing.ID); err != nil {
+			if err := s.setOrganizationDefaultIdP(existing.OrganizationID, existing.ID); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 				return
 			}
 		} else {
-			s.reconcileTenantDefaultIdP(existing.TenantID)
+			s.reconcileOrganizationDefaultIdP(existing.OrganizationID)
 		}
 		log.Printf("[ADMIN] IdP config updated: %s (%s)", existing.ID, existing.Name)
 
 		writeJSON(w, http.StatusOK, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration updated",
-			Data:    s.sanitizeIdPConfigForTenant(existing, existing.TenantID),
+			Data:    s.sanitizeIdPConfigForOrganization(existing, existing.OrganizationID),
 		})
 
 	case http.MethodDelete:
@@ -231,15 +231,15 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "IdP config not found"})
 			return
 		}
-		if !s.requireOrganizationAccess(w, r, existing.TenantID) {
+		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
 		if !s.pa.Store.DeleteIdentityProviderConfig(id) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete IdP config"})
 			return
 		}
-		s.reconcileTenantDefaultIdP(existing.TenantID)
-		log.Printf("[ADMIN] IdP config deleted: %s (%s) tenant=%s", id, existing.Name, existing.TenantID)
+		s.reconcileOrganizationDefaultIdP(existing.OrganizationID)
+		log.Printf("[ADMIN] IdP config deleted: %s (%s) organization=%s", id, existing.Name, existing.OrganizationID)
 
 		writeJSON(w, http.StatusOK, models.APIResponse{Success: true, Message: "Identity Provider configuration deleted"})
 
@@ -248,43 +248,43 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 	}
 }
 
-func (s *Server) reconcileTenantDefaultIdP(tenantID string) {
-	tenant, found := s.pa.Store.GetTenant(tenantID)
-	if !found || tenant == nil {
+func (s *Server) reconcileOrganizationDefaultIdP(organizationID string) {
+	organization, found := s.pa.Store.GetOrganization(organizationID)
+	if !found || organization == nil {
 		return
 	}
-	if tenant.DefaultIdPID != "" {
-		if cfg, ok := s.pa.Store.GetIdentityProviderConfig(tenant.DefaultIdPID); ok && cfg != nil && cfg.Enabled && strings.EqualFold(cfg.TenantID, tenantID) {
+	if organization.DefaultIdPID != "" {
+		if cfg, ok := s.pa.Store.GetIdentityProviderConfig(organization.DefaultIdPID); ok && cfg != nil && cfg.Enabled && strings.EqualFold(cfg.OrganizationID, organizationID) {
 			return
 		}
 	}
 
-	tenant.DefaultIdPID = ""
-	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID) {
+	organization.DefaultIdPID = ""
+	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForOrganization(organizationID) {
 		if cfg != nil && cfg.Enabled {
-			tenant.DefaultIdPID = cfg.ID
+			organization.DefaultIdPID = cfg.ID
 			break
 		}
 	}
-	tenant.UpdatedAt = time.Now()
-	s.pa.Store.SaveTenant(tenant)
+	organization.UpdatedAt = time.Now()
+	s.pa.Store.SaveOrganization(organization)
 }
 
-func (s *Server) setTenantDefaultIdP(tenantID, idpID string) error {
-	tenant, found := s.pa.Store.GetTenant(tenantID)
-	if !found || tenant == nil {
+func (s *Server) setOrganizationDefaultIdP(organizationID, idpID string) error {
+	organization, found := s.pa.Store.GetOrganization(organizationID)
+	if !found || organization == nil {
 		return fmt.Errorf("organization not found")
 	}
 	cfg, found := s.pa.Store.GetIdentityProviderConfig(idpID)
-	if !found || cfg == nil || !strings.EqualFold(cfg.TenantID, tenantID) {
+	if !found || cfg == nil || !strings.EqualFold(cfg.OrganizationID, organizationID) {
 		return fmt.Errorf("identity provider not found for organization")
 	}
 	if !cfg.Enabled {
 		return fmt.Errorf("disabled identity provider cannot be default")
 	}
-	tenant.DefaultIdPID = cfg.ID
-	tenant.UpdatedAt = time.Now()
-	s.pa.Store.SaveTenant(tenant)
+	organization.DefaultIdPID = cfg.ID
+	organization.UpdatedAt = time.Now()
+	s.pa.Store.SaveOrganization(organization)
 	return nil
 }
 
@@ -302,13 +302,13 @@ func idpMakeDefaultRequested(raw map[string]json.RawMessage) bool {
 	return false
 }
 
-func (s *Server) sanitizeIdPConfigForTenant(cfg *models.IdentityProviderConfig, tenantID string) map[string]interface{} {
+func (s *Server) sanitizeIdPConfigForOrganization(cfg *models.IdentityProviderConfig, organizationID string) map[string]interface{} {
 	safe := sanitizeIdPConfig(cfg)
 	if safe == nil {
 		return nil
 	}
-	tenant, found := s.pa.Store.GetTenant(tenantID)
-	safe["is_default"] = found && tenant != nil && tenant.DefaultIdPID == cfg.ID
+	organization, found := s.pa.Store.GetOrganization(organizationID)
+	safe["is_default"] = found && organization != nil && organization.DefaultIdPID == cfg.ID
 	return safe
 }
 
@@ -319,7 +319,7 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 	}
 	return map[string]interface{}{
 		"id":                 cfg.ID,
-		"organization_id":    cfg.TenantID,
+		"organization_id":    cfg.OrganizationID,
 		"name":               cfg.Name,
 		"type":               cfg.Type,
 		"enabled":            cfg.Enabled,

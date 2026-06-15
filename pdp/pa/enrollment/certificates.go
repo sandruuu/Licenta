@@ -89,10 +89,10 @@ func (s *Service) RevokeDeviceEnrollment(enrollmentID string) (*models.DeviceEnr
 	s.store.SaveDeviceEnrollment(enrollment)
 	if s.publisher != nil {
 		s.publisher.PublishCAEPEvent(events.TopicDeviceRevoked, map[string]string{
-			"device_id":     enrollment.DeviceID,
-			"tenant_id":     enrollment.TenantID,
-			"enrollment_id": enrollment.ID,
-			"reason":        "device_enrollment_revoked",
+			"device_id":       enrollment.DeviceID,
+			"organization_id": enrollment.OrganizationID,
+			"enrollment_id":   enrollment.ID,
+			"reason":          "device_enrollment_revoked",
 		})
 	}
 	return enrollment, nil

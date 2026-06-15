@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"pdp/models"
@@ -27,8 +26,7 @@ import (
 // It caches OIDC discovery metadata per issuer and provides
 // methods to generate authorization URLs and exchange codes.
 type FederationProvider struct {
-	mu                  sync.RWMutex
-	cache               map[string]*discoveryCache
+	state               FederationCacheStore
 	defaultScopes       string
 	defaultClaimMapping map[string]string
 	cacheTTL            time.Duration
@@ -36,9 +34,17 @@ type FederationProvider struct {
 }
 
 type discoveryCache struct {
-	metadata  *OIDCDiscovery
-	fetchedAt time.Time
+	Metadata  *OIDCDiscovery `json:"metadata"`
+	FetchedAt time.Time      `json:"fetched_at"`
 }
+
+type FederationCacheStore interface {
+	SaveEphemeralState(kind, key string, value []byte, expiresAt time.Time) error
+	GetEphemeralState(kind, key string) ([]byte, bool)
+	DeleteEphemeralState(kind, key string) error
+}
+
+const federationDiscoveryStateKind = "federation_discovery"
 
 // OIDCDiscovery represents the relevant fields from .well-known/openid-configuration.
 type OIDCDiscovery struct {
@@ -51,17 +57,17 @@ type OIDCDiscovery struct {
 
 // FederationSession tracks an in-flight federated authentication.
 type FederationSession struct {
-	ID            string    `json:"id"`
-	OIDCSessionID string    `json:"oidc_session_id"` // the PDP OIDC session this federation belongs to
-	GatewayID     string    `json:"gateway_id"`
-	TenantID      string    `json:"tenant_id"`     // which tenant's IdP is being used
-	IdPID         string    `json:"idp_config_id"` // which IdentityProviderConfig
-	Issuer        string    `json:"issuer"`
-	PKCEVerifier  string    `json:"pkce_verifier"`
-	Nonce         string    `json:"nonce"`
-	State         string    `json:"state"`
-	CreatedAt     time.Time `json:"created_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
+	ID             string    `json:"id"`
+	OIDCSessionID  string    `json:"oidc_session_id"` // the PDP OIDC session this federation belongs to
+	GatewayID      string    `json:"gateway_id"`
+	OrganizationID string    `json:"organization_id"` // which organization's IdP is being used
+	IdPID          string    `json:"idp_config_id"`   // which IdentityProviderConfig
+	Issuer         string    `json:"issuer"`
+	PKCEVerifier   string    `json:"pkce_verifier"`
+	Nonce          string    `json:"nonce"`
+	State          string    `json:"state"`
+	CreatedAt      time.Time `json:"created_at"`
+	ExpiresAt      time.Time `json:"expires_at"`
 }
 
 // FederatedTokenResponse is the external IdP's token endpoint response.
@@ -81,8 +87,8 @@ type FederatedClaims struct {
 	Groups   []string `json:"groups"` // external IdP group memberships
 }
 
-// NewFederationProvider creates a new provider with an empty discovery cache.
-func NewFederationProvider(defaultScopes string, defaultClaimMapping map[string]string, durations ...time.Duration) *FederationProvider {
+// NewFederationProvider creates a provider that stores discovery cache in runtime state.
+func NewFederationProvider(state FederationCacheStore, defaultScopes string, defaultClaimMapping map[string]string, durations ...time.Duration) *FederationProvider {
 	cacheTTL := 6 * time.Hour
 	httpTimeout := 10 * time.Second
 	if len(durations) > 0 && durations[0] > 0 {
@@ -92,7 +98,7 @@ func NewFederationProvider(defaultScopes string, defaultClaimMapping map[string]
 		httpTimeout = durations[1]
 	}
 	return &FederationProvider{
-		cache:               make(map[string]*discoveryCache),
+		state:               state,
 		defaultScopes:       strings.TrimSpace(defaultScopes),
 		defaultClaimMapping: copyClaimMapping(defaultClaimMapping),
 		cacheTTL:            cacheTTL,
@@ -103,12 +109,16 @@ func NewFederationProvider(defaultScopes string, defaultClaimMapping map[string]
 // Discover fetches and caches the OIDC discovery document for an issuer.
 // Results are cached for 6 hours.
 func (fp *FederationProvider) Discover(issuer string) (*OIDCDiscovery, error) {
-	fp.mu.RLock()
-	if cached, ok := fp.cache[issuer]; ok && time.Since(cached.fetchedAt) < fp.cacheTTL {
-		fp.mu.RUnlock()
-		return cached.metadata, nil
+	if fp == nil || fp.state == nil {
+		return nil, fmt.Errorf("federation runtime state is unavailable")
 	}
-	fp.mu.RUnlock()
+	issuer = strings.TrimSpace(issuer)
+	if issuer == "" {
+		return nil, fmt.Errorf("issuer is required")
+	}
+	if cached, ok := fp.cachedDiscovery(issuer); ok {
+		return cached, nil
+	}
 
 	discoveryURL := strings.TrimRight(issuer, "/") + "/.well-known/openid-configuration"
 	client := &http.Client{Timeout: fp.httpTimeout}
@@ -141,16 +151,49 @@ func (fp *FederationProvider) Discover(issuer string) (*OIDCDiscovery, error) {
 		return nil, fmt.Errorf("discovery issuer mismatch: expected %q, got %q", expectedIssuer, actualIssuer)
 	}
 
-	fp.mu.Lock()
-	fp.cache[issuer] = &discoveryCache{
-		metadata:  &disc,
-		fetchedAt: time.Now(),
-	}
-	fp.mu.Unlock()
+	fp.cacheDiscovery(issuer, &disc)
 
 	log.Printf("[FEDERATION] Discovered OIDC endpoints for %s (auth=%s, token=%s)",
 		issuer, disc.AuthorizationEndpoint, disc.TokenEndpoint)
 	return &disc, nil
+}
+
+func (fp *FederationProvider) cachedDiscovery(issuer string) (*OIDCDiscovery, bool) {
+	raw, ok := fp.state.GetEphemeralState(federationDiscoveryStateKind, discoveryCacheKey(issuer))
+	if !ok {
+		return nil, false
+	}
+	var cached discoveryCache
+	if err := json.Unmarshal(raw, &cached); err != nil || cached.Metadata == nil {
+		_ = fp.state.DeleteEphemeralState(federationDiscoveryStateKind, discoveryCacheKey(issuer))
+		return nil, false
+	}
+	if time.Since(cached.FetchedAt) >= fp.cacheTTL {
+		_ = fp.state.DeleteEphemeralState(federationDiscoveryStateKind, discoveryCacheKey(issuer))
+		return nil, false
+	}
+	return cached.Metadata, true
+}
+
+func (fp *FederationProvider) cacheDiscovery(issuer string, discovery *OIDCDiscovery) {
+	if fp == nil || fp.state == nil || discovery == nil {
+		return
+	}
+	now := time.Now().UTC()
+	ttl := fp.cacheTTL
+	if ttl <= 0 {
+		ttl = 6 * time.Hour
+	}
+	raw, err := json.Marshal(discoveryCache{Metadata: discovery, FetchedAt: now})
+	if err != nil {
+		return
+	}
+	_ = fp.state.SaveEphemeralState(federationDiscoveryStateKind, discoveryCacheKey(issuer), raw, now.Add(ttl))
+}
+
+func discoveryCacheKey(issuer string) string {
+	sum := sha256.Sum256([]byte(strings.TrimRight(strings.TrimSpace(issuer), "/")))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // GeneratePKCE generates a PKCE code_verifier and S256 code_challenge.

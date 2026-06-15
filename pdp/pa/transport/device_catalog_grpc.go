@@ -112,7 +112,7 @@ func catalogBearerTokenFromGRPC(ctx context.Context, request *structpb.Struct) (
 
 func (s *Server) initDeviceCatalogGRPC() {
 	if s.gatewayControl == nil {
-		s.gatewayControl = NewGatewayControlRegistry()
+		s.gatewayControl = NewGatewayControlRegistry(s.pa.Runtime)
 	}
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.deviceCatalogGRPCAuthInterceptor()))
 	grpcServer.RegisterService(&agentEnrollmentGRPCServiceDesc, &agentEnrollmentGRPCService{server: s})

@@ -58,26 +58,9 @@ async function apiFetch(path, options = {}) {
 
   // Unwrap APIResponse envelope: { success, data, message } -> data
   if (json !== null && typeof json === 'object' && 'data' in json) {
-    return normalizeOrganizationFields(json.data);
+    return json.data;
   }
-  return normalizeOrganizationFields(json);
-}
-
-function normalizeOrganizationFields(value) {
-  if (Array.isArray(value)) {
-    return value.map(normalizeOrganizationFields);
-  }
-  if (!value || typeof value !== 'object') {
-    return value;
-  }
-  const copy = { ...value };
-  if (copy.organization_id && !copy.tenant_id) {
-    copy.tenant_id = copy.organization_id;
-  }
-  if (copy.tenant_id && !copy.organization_id) {
-    copy.organization_id = copy.tenant_id;
-  }
-  return copy;
+  return json;
 }
 
 export async function getOrganizations() {
@@ -344,13 +327,6 @@ export async function regenerateGatewayToken(id) {
 export async function revokeGateway(id) {
   return apiFetch(`/admin/gateways/${id}/revoke`, {
     method: 'POST',
-  });
-}
-
-export async function testGatewayFederation(id, issuer) {
-  return apiFetch(`/admin/gateways/${id}/test-federation`, {
-    method: 'POST',
-    body: JSON.stringify({ issuer: issuer || '' }),
   });
 }
 

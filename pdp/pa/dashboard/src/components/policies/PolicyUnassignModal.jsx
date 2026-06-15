@@ -9,8 +9,8 @@ const unassignAssignmentCardClass = 'block w-full rounded-md border border-[rgba
 function assignmentLocationLabel(assignment, maps) {
   const resource = maps.resources?.get(assignment.resource_id);
   const gateway = maps.gateways?.get(resource?.gateway_id || assignment.gateway_id);
-  const organization = maps.organizations?.get(assignment.tenant_id);
-  return [gateway?.name || resource?.gateway_id, organization?.name || assignment.tenant_id].filter(Boolean).join(' / ');
+  const organization = maps.organizations?.get(assignment.organization_id);
+  return [gateway?.name || resource?.gateway_id, organization?.name || assignment.organization_id].filter(Boolean).join(' / ');
 }
 
 export default function PolicyUnassignModal({

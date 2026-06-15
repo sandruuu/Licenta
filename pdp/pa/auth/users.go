@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// UserManager handles user registration, authentication, and MFA enrollment.
+// UserManager handles local user authentication and MFA enrollment.
 type UserManager struct {
 	store     *store.Store
 	protector *SecretProtector
@@ -26,50 +26,6 @@ func NewUserManager(s *store.Store, protectors ...*SecretProtector) *UserManager
 		protector = protectors[0]
 	}
 	return &UserManager{store: s, protector: protector}
-}
-
-// Register creates a new user with a hashed password.
-func (um *UserManager) Register(req models.RegisterRequest) (*models.User, error) {
-	if strings.TrimSpace(req.Username) == "" {
-		return nil, fmt.Errorf("username is required")
-	}
-	if len(req.Password) < 1 {
-		return nil, fmt.Errorf("password is required")
-	}
-	if strings.TrimSpace(req.Email) == "" {
-		return nil, fmt.Errorf("email is required")
-	}
-
-	if _, exists := um.store.GetUserByUsername(req.Username); exists {
-		return nil, fmt.Errorf("username already exists")
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
-	}
-
-	userID, err := util.GenerateID("usr")
-	if err != nil {
-		return nil, fmt.Errorf("generate user ID: %w", err)
-	}
-
-	now := time.Now()
-	user := &models.User{
-		ID:              userID,
-		Username:        req.Username,
-		Email:           req.Email,
-		PasswordHash:    string(hashedPassword),
-		MFAMethods:      []string{},
-		Role:            "platform_admin",
-		LastTOTPCounter: -1,
-		CreatedAt:       now,
-		UpdatedAt:       now,
-	}
-
-	um.store.SaveUser(user)
-	log.Printf("[AUTH] User registered: %s (%s)", user.Username, user.ID)
-	return user, nil
 }
 
 // Authenticate validates the user's password.
@@ -103,8 +59,8 @@ func (um *UserManager) authenticateUser(user *models.User, exists bool, password
 	return user, nil
 }
 
-// EnrollMFA generates a TOTP secret for legacy callers. Browser step-up keeps
-// pending enrollment secrets in the step-up challenge instead.
+// EnrollMFA generates a TOTP secret for direct admin MFA enrollment. Browser
+// step-up keeps pending enrollment secrets in the step-up challenge instead.
 func (um *UserManager) EnrollMFA(userID, issuer string) (*models.MFAEnrollResponse, error) {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -307,15 +263,15 @@ func (um *UserManager) unprotectMFAValue(value string) (string, error) {
 }
 
 // FindOrCreateFederatedUser looks up a user by external subject and auth source.
-func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, username, email, role, tenantID string) (*models.User, error) {
+func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, username, email, role, organizationID string) (*models.User, error) {
 	if role == "" {
 		role = "platform_admin"
 	}
 
-	user, exists := um.store.GetUserByExternalSubjectForTenant(externalSubject, authSource, tenantID)
+	user, exists := um.store.GetUserByExternalSubjectForOrganization(externalSubject, authSource, organizationID)
 	if exists {
-		if user.TenantID == "" {
-			user.TenantID = tenantID
+		if user.OrganizationID == "" {
+			user.OrganizationID = organizationID
 		}
 		user.LastLoginAt = time.Now()
 		if username != "" && user.Username != username {
@@ -360,7 +316,7 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 		PasswordHash:    "",
 		MFAMethods:      []string{},
 		Role:            role,
-		TenantID:        tenantID,
+		OrganizationID:  organizationID,
 		ExternalSubject: externalSubject,
 		AuthSource:      authSource,
 		LastTOTPCounter: -1,

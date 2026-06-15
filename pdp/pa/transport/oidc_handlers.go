@@ -4,8 +4,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-
-	"pdp/pa/auth"
 )
 
 // ─────────────────────────────────────────────
@@ -15,12 +13,12 @@ import (
 // handleOIDCAuthorize is the OIDC Authorization Endpoint.
 // Native endpoint clients redirect the user's browser here to start authentication.
 //
-// GET /auth/authorize?client_id=connect-app&response_type=code&redirect_uri=http://127.0.0.1/callback&state=xyz&scope=openid
+// GET /auth/authorize?client_id=<registered-client>&response_type=code&redirect_uri=<registered-callback>&state=xyz&scope=openid
 //
 // Flow:
 //  1. Validates client_id and redirect_uri
 //  2. Creates an OIDC authorize session
-//  3. Resolves a tenant-level external IdP
+//  3. Resolves an organization-level external IdP
 //  4. Redirects to the external IdP and handles the federation callback
 //  5. PA generates an authorization code and redirects to the OIDC client callback
 func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +71,7 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if auth.IsNativeEndpointClientID(client.ClientID) && strings.TrimSpace(deviceID) == "" {
+	if client.RequireDeviceID && strings.TrimSpace(deviceID) == "" {
 		http.Error(w, "device_id is required for endpoint authorization", http.StatusBadRequest)
 		return
 	}
@@ -89,17 +87,17 @@ func (s *Server) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[OIDC] Authorize request: client=%s redirect=%s state=%s session=%s",
 		clientID, redirectURI, state, oidcSession.ID)
 
-	// ── Identity Broker: resolve the correct tenant-level IdP via HRD ──
-	idpCfg, tenant, err := s.resolveIdentityProvider(r, clientID)
+	// ── Identity Broker: resolve the correct organization-level IdP via HRD ──
+	idpCfg, organization, err := s.resolveIdentityProvider(r, clientID)
 	if err != nil {
 		log.Printf("[HRD] Identity provider resolution failed: %v", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	if idpCfg != nil {
-		s.redirectToExternalIdP(w, r, oidcSession, tenant, idpCfg, nonce)
+		s.redirectToExternalIdP(w, r, oidcSession, organization, idpCfg, nonce)
 		return
 	}
 
-	http.Error(w, "No external identity provider configured for this tenant", http.StatusForbidden)
+	http.Error(w, "No external identity provider configured for this organization", http.StatusForbidden)
 }

@@ -76,7 +76,7 @@ func (service *Service) handleHealthChanged(evt events.Event) int {
 	if deviceID == "" {
 		return 0
 	}
-	tenantID := eventField(evt, "tenant_id")
+	organizationID := eventField(evt, "organization_id")
 	return service.pa.Sessions.RevokeSessionsMatching("device_posture_changed", func(session *models.Session) bool {
 		if session == nil {
 			return false
@@ -84,7 +84,7 @@ func (service *Service) handleHealthChanged(evt events.Event) int {
 		if strings.TrimSpace(session.DeviceID) != deviceID {
 			return false
 		}
-		if tenantID != "" && strings.TrimSpace(session.TenantID) != tenantID {
+		if organizationID != "" && strings.TrimSpace(session.OrganizationID) != organizationID {
 			return false
 		}
 		if session.RevokeOnPostureChange {
@@ -101,13 +101,13 @@ func (service *Service) handleHealthChanged(evt events.Event) int {
 }
 
 func (service *Service) handlePolicyUpdated(evt events.Event) int {
-	tenantID := eventField(evt, "tenant_id")
+	organizationID := eventField(evt, "organization_id")
 	resourceID := eventField(evt, "resource_id")
 	return service.revokeSessionsNoLongerAllowed("policy_updated", func(session *models.Session) bool {
 		if resourceID != "" && strings.TrimSpace(session.Resource) != resourceID {
 			return false
 		}
-		return tenantID == "" || strings.TrimSpace(session.TenantID) == tenantID
+		return organizationID == "" || strings.TrimSpace(session.OrganizationID) == organizationID
 	})
 }
 
@@ -118,20 +118,20 @@ func (service *Service) handleResourceUpdated(evt events.Event) int {
 	}
 	action := eventField(evt, "action")
 	reason := resourceRevokeReason(action)
-	tenantID := eventField(evt, "tenant_id")
+	organizationID := eventField(evt, "organization_id")
 
 	switch action {
 	case "created":
 		return 0
 	case "deleted":
-		return service.pa.Sessions.RevokeSessionsForResource(resourceID, tenantID, reason)
+		return service.pa.Sessions.RevokeSessionsForResource(resourceID, organizationID, reason)
 	}
 
 	if eventBool(evt, "revokes_sessions") {
-		return service.pa.Sessions.RevokeSessionsForResource(resourceID, tenantID, reason)
+		return service.pa.Sessions.RevokeSessionsForResource(resourceID, organizationID, reason)
 	}
 	if service.resourceUnavailable(resourceID) {
-		return service.pa.Sessions.RevokeSessionsForResource(resourceID, tenantID, reason)
+		return service.pa.Sessions.RevokeSessionsForResource(resourceID, organizationID, reason)
 	}
 	return 0
 }
@@ -141,7 +141,7 @@ func (service *Service) handleDeviceRevoked(evt events.Event) int {
 	if deviceID == "" {
 		return 0
 	}
-	return service.pa.Sessions.RevokeSessionsForDevice(deviceID, eventField(evt, "tenant_id"), "device_revoked")
+	return service.pa.Sessions.RevokeSessionsForDevice(deviceID, eventField(evt, "organization_id"), "device_revoked")
 }
 
 func (service *Service) handleGatewayRevoked(evt events.Event) int {
@@ -149,7 +149,7 @@ func (service *Service) handleGatewayRevoked(evt events.Event) int {
 	if gatewayID == "" {
 		return 0
 	}
-	return service.pa.Sessions.RevokeSessionsForGateway(gatewayID, eventField(evt, "tenant_id"), "gateway_revoked")
+	return service.pa.Sessions.RevokeSessionsForGateway(gatewayID, eventField(evt, "organization_id"), "gateway_revoked")
 }
 
 func (service *Service) revokeSessionsNoLongerAllowed(reason string, match func(*models.Session) bool) int {
@@ -178,15 +178,15 @@ func (service *Service) sessionStillAllowed(session *models.Session) (bool, stri
 	if !ok || resource == nil || !resource.Enabled {
 		return false, "resource is missing or disabled"
 	}
-	tenantID := firstNonEmpty(session.TenantID, resource.TenantID, user.TenantID)
-	if tenantID == "" {
-		return false, "tenant context is missing"
+	organizationID := firstNonEmpty(session.OrganizationID, resource.OrganizationID, user.OrganizationID)
+	if organizationID == "" {
+		return false, "organization context is missing"
 	}
-	if user.TenantID != "" && !strings.EqualFold(user.TenantID, tenantID) {
-		return false, "user tenant does not match session tenant"
+	if user.OrganizationID != "" && !strings.EqualFold(user.OrganizationID, organizationID) {
+		return false, "user organization does not match session organization"
 	}
-	if resource.TenantID != "" && !strings.EqualFold(resource.TenantID, tenantID) {
-		return false, "resource tenant does not match session tenant"
+	if resource.OrganizationID != "" && !strings.EqualFold(resource.OrganizationID, organizationID) {
+		return false, "resource organization does not match session organization"
 	}
 
 	gatewayID := firstNonEmpty(session.GatewayID, resource.GatewayID)
@@ -194,28 +194,26 @@ func (service *Service) sessionStillAllowed(session *models.Session) (bool, stri
 	if gatewayID == "" || !ok || gateway == nil || gateway.Status != "enrolled" {
 		return false, "gateway is not enrolled"
 	}
-	if gateway.TenantID != "" && !strings.EqualFold(gateway.TenantID, tenantID) {
-		return false, "gateway tenant does not match session tenant"
+	if gateway.OrganizationID != "" && !strings.EqualFold(gateway.OrganizationID, organizationID) {
+		return false, "gateway organization does not match session organization"
 	}
 
 	protocol := firstNonEmpty(session.Protocol, paadmin.ResourceProtocol(resource))
 	port := paadmin.ResourcePort(resource, protocol)
 	req := models.AccessRequest{
-		UserID:       session.UserID,
-		Username:     session.Username,
-		DeviceID:     session.DeviceID,
-		SourceIP:     session.SourceIP,
-		Resource:     resource.ID,
-		TenantID:     tenantID,
-		GatewayID:    gateway.ID,
-		ResourcePort: port,
-		Protocol:     protocol,
-		AppID:        resource.ID,
+		UserID:         session.UserID,
+		Username:       session.Username,
+		DeviceID:       session.DeviceID,
+		SourceIP:       session.SourceIP,
+		Resource:       resource.ID,
+		OrganizationID: organizationID,
+		GatewayID:      gateway.ID,
+		ResourcePort:   port,
+		Protocol:       protocol,
+		AppID:          resource.ID,
 	}
 	if deviceData, ok := service.pa.Store.GetDeviceData(session.DeviceID); ok {
 		req.DeviceHealth = paadmin.DeviceHealthFromData(deviceData)
-	} else if health, ok := service.pa.Store.GetDeviceHealth(session.DeviceID); ok {
-		req.DeviceHealth = health
 	}
 
 	decision := service.pa.EvaluateAccess(req)

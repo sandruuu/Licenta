@@ -20,7 +20,7 @@ function normalizedAssignmentGroupName(assignment, maps) {
 }
 
 function assignmentMatchesScope(assignment, form) {
-  return assignment.policy_id === form.policy_id && assignment.tenant_id === form.tenant_id;
+  return assignment.policy_id === form.policy_id && assignment.organization_id === form.organization_id;
 }
 
 function repeatedGroupNames(groups) {
@@ -259,7 +259,7 @@ export default function PolicyApplyModal({
       selectedGroupIDs.some((groupID) => isResourceGroupAssigned(resourceID, groupID)) ||
       (!selectedGroupIDs.length && isManualResourceGroupAssigned(resourceID, form.group_name))
     )));
-  const applyDisabled = saving || !selectedPolicyID || !form.tenant_id || selectedCountForLayer(form) === 0 || selectionBlocked;
+  const applyDisabled = saving || !selectedPolicyID || !form.organization_id || selectedCountForLayer(form) === 0 || selectionBlocked;
 
   useEffect(() => {
     if (open && !form.policy_id && selectedPolicyID) {
@@ -303,10 +303,10 @@ export default function PolicyApplyModal({
         </FormField>
         <FormField label="Organization">
           <FormSelect
-            value={form.tenant_id}
+            value={form.organization_id}
             onChange={(event) => setForm({
               ...form,
-              tenant_id: event.target.value,
+              organization_id: event.target.value,
               resource_id: '',
               resource_ids: [],
               group_id: '',
@@ -362,7 +362,7 @@ export default function PolicyApplyModal({
             const nextIDs = toggleListValue(form.resource_ids, resourceID);
             setForm({ ...form, resource_ids: nextIDs, resource_id: nextIDs[0] || '' });
           }}
-          emptyMessage={form.tenant_id ? 'No applications in this organization.' : 'Select an organization to list applications.'}
+          emptyMessage={form.organization_id ? 'No applications in this organization.' : 'Select an organization to list applications.'}
           columns={[
             {
               key: 'name',
@@ -411,7 +411,7 @@ export default function PolicyApplyModal({
                 group_name: nextIDs.length ? firstSelectedGroup?.display_name || form.group_name : '',
               });
             }}
-            emptyMessage={form.tenant_id ? 'No synchronized groups in this organization.' : 'Select an organization to list groups.'}
+            emptyMessage={form.organization_id ? 'No synchronized groups in this organization.' : 'Select an organization to list groups.'}
             columns={[
               {
                 key: 'name',

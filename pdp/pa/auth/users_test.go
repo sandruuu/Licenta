@@ -2,27 +2,34 @@ package auth
 
 import (
 	"testing"
+	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
-	"pdp/store"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestAuthenticateByEmail(t *testing.T) {
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("InitDB() error = %v", err)
-	}
-	defer dataStore.Close()
+	dataStore := testdb.NewStore(t)
 
 	users := NewUserManager(dataStore)
-	created, err := users.Register(models.RegisterRequest{
-		Username: "pdp_test_admin",
-		Email:    "PDP-Admin@Demo.TrustCloud.Test",
-		Password: "correct-password",
-	})
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.DefaultCost)
 	if err != nil {
-		t.Fatalf("Register() error = %v", err)
+		t.Fatalf("GenerateFromPassword() error = %v", err)
 	}
+	created := &models.User{
+		ID:              "usr_test_admin",
+		Username:        "pdp_test_admin",
+		Email:           "PDP-Admin@Demo.TrustCloud.Test",
+		PasswordHash:    string(passwordHash),
+		MFAMethods:      []string{},
+		Role:            "platform_admin",
+		LastTOTPCounter: -1,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	}
+	dataStore.SaveUser(created)
 
 	authenticated, err := users.AuthenticateByEmail("pdp-admin@demo.trustcloud.test", "correct-password")
 	if err != nil {

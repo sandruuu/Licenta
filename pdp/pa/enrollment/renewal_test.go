@@ -9,7 +9,7 @@ import (
 
 func TestServiceRenewDeviceCertificateUpdatesCertificateAndRejectsKeyMismatch(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		return "device-role"

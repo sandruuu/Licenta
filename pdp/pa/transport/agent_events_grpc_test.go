@@ -10,20 +10,20 @@ import (
 func TestAgentEventStreamFiltersSessionRevocationsToMatchingDeviceUser(t *testing.T) {
 	service := &agentEventsGRPCService{}
 	claims := &auth.CustomClaims{
-		UserID:    "user-1",
-		DeviceID:  "device-1",
-		TenantID:  "tenant-1",
-		SessionID: "agent-session-1",
+		UserID:         "user-1",
+		DeviceID:       "device-1",
+		OrganizationID: "organization-1",
+		SessionID:      "agent-session-1",
 	}
 
 	payload, ok := service.agentEventForClaims(events.Event{
 		Type: events.TopicSessionDeleted,
 		Payload: map[string]string{
-			"user_id":    "user-1",
-			"device_id":  "device-1",
-			"tenant_id":  "tenant-1",
-			"session_id": "resource-session-1",
-			"reason":     "device_posture_changed",
+			"user_id":         "user-1",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
+			"session_id":      "resource-session-1",
+			"reason":          "device_posture_changed",
 		},
 	}, claims)
 	if !ok {
@@ -36,35 +36,35 @@ func TestAgentEventStreamFiltersSessionRevocationsToMatchingDeviceUser(t *testin
 	if _, ok := service.agentEventForClaims(events.Event{
 		Type: events.TopicSessionDeleted,
 		Payload: map[string]string{
-			"user_id":   "user-2",
-			"device_id": "device-1",
-			"tenant_id": "tenant-1",
+			"user_id":         "user-2",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
 		},
 	}, claims); ok {
 		t.Fatal("revocation for a different user was delivered")
 	}
 }
 
-func TestAgentEventStreamPublishesCatalogInvalidationForTenantChanges(t *testing.T) {
+func TestAgentEventStreamPublishesCatalogInvalidationForOrganizationChanges(t *testing.T) {
 	service := &agentEventsGRPCService{}
 	claims := &auth.CustomClaims{
-		UserID:    "user-1",
-		DeviceID:  "device-1",
-		TenantID:  "tenant-1",
-		SessionID: "agent-session-1",
+		UserID:         "user-1",
+		DeviceID:       "device-1",
+		OrganizationID: "organization-1",
+		SessionID:      "agent-session-1",
 	}
 
 	payload, ok := service.agentEventForClaims(events.Event{
 		Type: events.TopicResourcesUpdated,
 		Payload: map[string]string{
-			"tenant_id":   "tenant-1",
-			"resource_id": "res-1",
-			"action":      "updated",
-			"reason":      "resource_updated",
+			"organization_id": "organization-1",
+			"resource_id":     "res-1",
+			"action":          "updated",
+			"reason":          "resource_updated",
 		},
 	}, claims)
 	if !ok {
-		t.Fatal("tenant resource update was not delivered")
+		t.Fatal("organization resource update was not delivered")
 	}
 	if payload["type"] != agentEventCatalogInvalidated || payload["resource_id"] != "res-1" {
 		t.Fatalf("payload = %+v", payload)
@@ -73,9 +73,9 @@ func TestAgentEventStreamPublishesCatalogInvalidationForTenantChanges(t *testing
 	if _, ok := service.agentEventForClaims(events.Event{
 		Type: events.TopicResourcesUpdated,
 		Payload: map[string]string{
-			"tenant_id": "tenant-2",
+			"organization_id": "organization-2",
 		},
 	}, claims); ok {
-		t.Fatal("catalog invalidation for a different tenant was delivered")
+		t.Fatal("catalog invalidation for a different organization was delivered")
 	}
 }

@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testredis"
 	"pdp/models"
 )
 
 func TestStepUpManagerRejectsExpiredCompletion(t *testing.T) {
-	manager := NewStepUpManager()
+	manager := NewStepUpManager(testredis.NewClient(t))
 	challenge := newStepUpManagerTestChallenge(t, manager)
 	expireStepUpChallengeForTest(t, manager, challenge.ID)
 
@@ -20,23 +21,29 @@ func TestStepUpManagerRejectsExpiredCompletion(t *testing.T) {
 	if completed != nil {
 		t.Fatalf("Complete returned challenge after expiry: %+v", completed)
 	}
-	manager.mu.Lock()
-	status := manager.challenges[challenge.ID].Status
-	manager.mu.Unlock()
+	stored, ok := manager.Get(challenge.ID)
+	if !ok {
+		t.Fatalf("challenge %q not found", challenge.ID)
+	}
+	status := stored.Status
 	if status != StepUpStatusExpired {
 		t.Fatalf("challenge status = %q, want expired", status)
 	}
 }
 
 func TestStepUpManagerRejectsExpiredPendingTOTPAndFailedAttempt(t *testing.T) {
-	manager := NewStepUpManager()
+	manager := NewStepUpManager(testredis.NewClient(t))
 	challenge := newStepUpManagerTestChallenge(t, manager)
-	manager.mu.Lock()
-	stored := manager.challenges[challenge.ID]
+	stored, ok := manager.load(challenge.ID)
+	if !ok {
+		t.Fatalf("challenge %q not found", challenge.ID)
+	}
 	stored.Status = StepUpStatusAwaiting
 	stored.PendingTOTPSecret = "secret"
 	stored.ExpiresAt = time.Now().UTC().Add(-time.Second)
-	manager.mu.Unlock()
+	if err := manager.save(stored); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
 
 	if secret, ok := manager.PendingTOTPSecret(challenge.ID); ok || secret != "" {
 		t.Fatalf("PendingTOTPSecret = %q ok=%v, want none after expiry", secret, ok)
@@ -56,7 +63,7 @@ func newStepUpManagerTestChallenge(t *testing.T, manager *StepUpManager) *StepUp
 		AgentSessionID: "agent-session-1",
 		UserID:         "user-1",
 		Username:       "alice@example.test",
-		TenantID:       "tenant-1",
+		OrganizationID: "organization-1",
 		DeviceID:       "device-1",
 		ResourceID:     "resource-1",
 		PublicOrigin:   "https://pdp.example.test",
@@ -72,11 +79,12 @@ func newStepUpManagerTestChallenge(t *testing.T, manager *StepUpManager) *StepUp
 
 func expireStepUpChallengeForTest(t *testing.T, manager *StepUpManager, challengeID string) {
 	t.Helper()
-	manager.mu.Lock()
-	defer manager.mu.Unlock()
-	challenge := manager.challenges[challengeID]
-	if challenge == nil {
+	challenge, ok := manager.load(challengeID)
+	if !ok || challenge == nil {
 		t.Fatalf("challenge %q not found", challengeID)
 	}
 	challenge.ExpiresAt = time.Now().UTC().Add(-time.Second)
+	if err := manager.save(challenge); err != nil {
+		t.Fatalf("save challenge: %v", err)
+	}
 }

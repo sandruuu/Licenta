@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -16,11 +14,27 @@ import (
 
 // SaveDeviceEnrollment creates or updates a device enrollment record
 func (s *Store) SaveDeviceEnrollment(e *models.DeviceEnrollment) {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO device_enrollments
-		(id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial, status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO device_enrollments
+		(id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial, status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, organization_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			device_id = EXCLUDED.device_id,
+			component = EXCLUDED.component,
+			hostname = EXCLUDED.hostname,
+			public_key_fingerprint = EXCLUDED.public_key_fingerprint,
+			cert_fingerprint = EXCLUDED.cert_fingerprint,
+			cert_serial = EXCLUDED.cert_serial,
+			status = EXCLUDED.status,
+			csr_pem = EXCLUDED.csr_pem,
+			cert_pem = EXCLUDED.cert_pem,
+			enrolled_at = EXCLUDED.enrolled_at,
+			expires_at = EXCLUDED.expires_at,
+			approved_by = EXCLUDED.approved_by,
+			user_id = EXCLUDED.user_id,
+			username = EXCLUDED.username,
+			organization_id = EXCLUDED.organization_id`,
 		e.ID, e.DeviceID, e.Component, e.Hostname, e.PublicKeyFingerprint, e.CertFingerprint, e.CertSerial,
-		e.Status, e.CSRPEM, e.CertPEM, fmtTime(e.EnrolledAt), fmtTime(e.ExpiresAt), e.ApprovedBy, e.UserID, e.Username, e.TenantID)
+		e.Status, e.CSRPEM, e.CertPEM, fmtTime(e.EnrolledAt), fmtTime(e.ExpiresAt), e.ApprovedBy, e.UserID, e.Username, e.OrganizationID)
 	if err != nil {
 		log.Printf("[STORE] Failed to save device enrollment %s: %v", e.ID, err)
 	}
@@ -29,7 +43,7 @@ func (s *Store) SaveDeviceEnrollment(e *models.DeviceEnrollment) {
 // GetDeviceEnrollment retrieves an enrollment by ID
 func (s *Store) GetDeviceEnrollment(id string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, organization_id
 		FROM device_enrollments WHERE id = ?`, id)
 	return s.scanEnrollment(row)
 }
@@ -37,7 +51,7 @@ func (s *Store) GetDeviceEnrollment(id string) (*models.DeviceEnrollment, bool) 
 // GetDeviceEnrollmentByDeviceID retrieves an enrollment by device_id
 func (s *Store) GetDeviceEnrollmentByDeviceID(deviceID string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, organization_id
 		FROM device_enrollments WHERE device_id = ? ORDER BY enrolled_at DESC LIMIT 1`, deviceID)
 	return s.scanEnrollment(row)
 }
@@ -45,7 +59,7 @@ func (s *Store) GetDeviceEnrollmentByDeviceID(deviceID string) (*models.DeviceEn
 // GetDeviceEnrollmentByComponent retrieves an enrollment by device_id and component
 func (s *Store) GetDeviceEnrollmentByComponent(deviceID, component string) (*models.DeviceEnrollment, bool) {
 	row := s.db.QueryRow(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, organization_id
 		FROM device_enrollments WHERE device_id = ? AND component = ? ORDER BY enrolled_at DESC LIMIT 1`, deviceID, component)
 	return s.scanEnrollment(row)
 }
@@ -53,7 +67,7 @@ func (s *Store) GetDeviceEnrollmentByComponent(deviceID, component string) (*mod
 // ListDeviceEnrollments returns all enrollments
 func (s *Store) ListDeviceEnrollments() []*models.DeviceEnrollment {
 	rows, err := s.db.Query(`SELECT id, device_id, component, hostname, public_key_fingerprint, cert_fingerprint, cert_serial,
-		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, tenant_id
+		status, csr_pem, cert_pem, enrolled_at, expires_at, approved_by, user_id, username, organization_id
 		FROM device_enrollments ORDER BY enrolled_at DESC`)
 	if err != nil {
 		log.Printf("[STORE] Failed to list enrollments: %v", err)
@@ -66,7 +80,7 @@ func (s *Store) ListDeviceEnrollments() []*models.DeviceEnrollment {
 		e := &models.DeviceEnrollment{}
 		var enrolledAt, expiresAt string
 		if err := rows.Scan(&e.ID, &e.DeviceID, &e.Component, &e.Hostname, &e.PublicKeyFingerprint, &e.CertFingerprint, &e.CertSerial,
-			&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.TenantID); err != nil {
+			&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.OrganizationID); err != nil {
 			continue
 		}
 		e.EnrolledAt = parseTime(enrolledAt)
@@ -80,7 +94,7 @@ func (s *Store) scanEnrollment(row *sql.Row) (*models.DeviceEnrollment, bool) {
 	e := &models.DeviceEnrollment{}
 	var enrolledAt, expiresAt string
 	err := row.Scan(&e.ID, &e.DeviceID, &e.Component, &e.Hostname, &e.PublicKeyFingerprint, &e.CertFingerprint, &e.CertSerial,
-		&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.TenantID)
+		&e.Status, &e.CSRPEM, &e.CertPEM, &enrolledAt, &expiresAt, &e.ApprovedBy, &e.UserID, &e.Username, &e.OrganizationID)
 	if err != nil {
 		return nil, false
 	}
@@ -95,8 +109,12 @@ func (s *Store) scanEnrollment(row *sql.Row) (*models.DeviceEnrollment, bool) {
 
 // RevokeCertSerial records a revoked certificate serial for gateway cache sync
 func (s *Store) RevokeCertSerial(serial, deviceID string, expiresOn time.Time) {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO revoked_certs (cert_serial, device_id, revoked_at, expires_on)
-		VALUES (?, ?, ?, ?)`, serial, deviceID, fmtTime(time.Now()), fmtTime(expiresOn))
+	_, err := s.db.Exec(`INSERT INTO revoked_certs (cert_serial, device_id, revoked_at, expires_on)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (cert_serial) DO UPDATE SET
+			device_id = EXCLUDED.device_id,
+			revoked_at = EXCLUDED.revoked_at,
+			expires_on = EXCLUDED.expires_on`, serial, deviceID, fmtTime(time.Now()), fmtTime(expiresOn))
 	if err != nil {
 		log.Printf("[STORE] Failed to revoke cert serial %s: %v", serial, err)
 	}
@@ -127,8 +145,11 @@ func (s *Store) GetRevokedSerials() []string {
 
 // SaveDeviceUser creates or updates a device-user binding
 func (s *Store) SaveDeviceUser(du *models.DeviceUser) {
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO device_users (device_id, user_id, username, role, bound_at)
-		VALUES (?, ?, ?, ?, ?)`,
+	_, err := s.db.Exec(`INSERT INTO device_users (device_id, user_id, username, role, bound_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (device_id, user_id, role) DO UPDATE SET
+			username = EXCLUDED.username,
+			bound_at = EXCLUDED.bound_at`,
 		du.DeviceID, du.UserID, du.Username, du.Role, fmtTime(du.BoundAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save device-user binding %s/%s: %v", du.DeviceID, du.UserID, err)

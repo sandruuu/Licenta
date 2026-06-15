@@ -74,24 +74,22 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	}
 
 	accessReq := models.AccessRequest{
-		UserID:       claims.UserID,
-		Username:     claims.Username,
-		DeviceID:     deviceID,
-		SourceIP:     strings.TrimSpace(req.SourceIP),
-		Resource:     resolved.resource.ID,
-		TenantID:     resolved.resource.TenantID,
-		GatewayID:    resolved.gateway.ID,
-		ResourcePort: resolved.port,
-		Protocol:     resolved.protocol,
-		AuthToken:    strings.TrimSpace(req.UserToken),
-		AppID:        resolved.resource.ID,
-		Process:      req.Process,
+		UserID:         claims.UserID,
+		Username:       claims.Username,
+		DeviceID:       deviceID,
+		SourceIP:       strings.TrimSpace(req.SourceIP),
+		Resource:       resolved.resource.ID,
+		OrganizationID: resolved.resource.OrganizationID,
+		GatewayID:      resolved.gateway.ID,
+		ResourcePort:   resolved.port,
+		Protocol:       resolved.protocol,
+		AuthToken:      strings.TrimSpace(req.UserToken),
+		AppID:          resolved.resource.ID,
+		Process:        req.Process,
 	}
 	if pa != nil && pa.Store != nil {
 		if deviceData, ok := pa.Store.GetDeviceData(deviceID); ok {
 			accessReq.DeviceHealth = DeviceHealthFromData(deviceData)
-		} else if health, ok := pa.Store.GetDeviceHealth(deviceID); ok {
-			accessReq.DeviceHealth = health
 		}
 	}
 
@@ -189,7 +187,7 @@ func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDeci
 		AgentSessionID: strings.TrimSpace(claims.SessionID),
 		UserID:         strings.TrimSpace(claims.UserID),
 		Username:       strings.TrimSpace(claims.Username),
-		TenantID:       strings.TrimSpace(resource.TenantID),
+		OrganizationID: strings.TrimSpace(resource.OrganizationID),
 		DeviceID:       strings.TrimSpace(req.DeviceID),
 		ResourceID:     strings.TrimSpace(resource.ID),
 		PolicyID:       strings.TrimSpace(decision.MatchedRule),
@@ -222,40 +220,29 @@ func (pa *PolicyAdministrator) ValidateDeviceUserToken(token, deviceID string) (
 	return pa.ValidateDeviceUserTokenBoundForScope(token, deviceID, "", "flow:authorize")
 }
 
-func (pa *PolicyAdministrator) ValidateDeviceUserTokenBound(token, deviceID, certificateThumbprint string) (*auth.CustomClaims, error) {
-	return pa.validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, "", true)
-}
-
 func (pa *PolicyAdministrator) ValidateDeviceUserTokenBoundForScope(token, deviceID, certificateThumbprint, requiredScope string) (*auth.CustomClaims, error) {
-	return pa.validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope, false)
+	return pa.validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope)
 }
 
-func (pa *PolicyAdministrator) validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope string, allowLegacyAgentToken bool) (*auth.CustomClaims, error) {
+func (pa *PolicyAdministrator) validateDeviceUserTokenBound(token, deviceID, certificateThumbprint, requiredScope string) (*auth.CustomClaims, error) {
 	if pa == nil || pa.Auth == nil || pa.Auth.JWT == nil || pa.Store == nil {
 		return nil, newAccessError(AccessErrorServiceUnavailable, "identity services are not available", nil)
 	}
 	trimmedToken := strings.TrimSpace(token)
 	claims, err := pa.Auth.JWT.ParseAuthTokenForAudience(trimmedToken, auth.AgentSessionAudience)
-	if err == nil && claims != nil {
-		if claims.Purpose != auth.AgentSessionPurpose {
-			return nil, newAccessError(AccessErrorUnauthenticated, "invalid agent session token purpose", nil)
+	if err != nil || claims == nil {
+		return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired agent session token", err)
+	}
+	if claims.Purpose != auth.AgentSessionPurpose {
+		return nil, newAccessError(AccessErrorUnauthenticated, "invalid agent session token purpose", nil)
+	}
+	if expected := strings.ToLower(strings.TrimSpace(certificateThumbprint)); expected != "" {
+		if agentSessionCertificateThumbprint(claims) != expected {
+			return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is not bound to the mTLS device certificate", nil)
 		}
-		if expected := strings.ToLower(strings.TrimSpace(certificateThumbprint)); expected != "" {
-			if agentSessionCertificateThumbprint(claims) != expected {
-				return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is not bound to the mTLS device certificate", nil)
-			}
-		}
-		if scope := strings.TrimSpace(requiredScope); scope != "" && !agentSessionHasScope(claims, scope) {
-			return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is missing required scope "+scope, nil)
-		}
-	} else {
-		if !allowLegacyAgentToken || strings.TrimSpace(requiredScope) != "" {
-			return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired agent session token", err)
-		}
-		claims, err = pa.Auth.JWT.ParseAuthTokenForAudience(trimmedToken, auth.AgentTokenAudience)
-		if err != nil || claims == nil || claims.Purpose != "" {
-			return nil, newAccessError(AccessErrorUnauthenticated, "invalid or expired user token", err)
-		}
+	}
+	if scope := strings.TrimSpace(requiredScope); scope != "" && !agentSessionHasScope(claims, scope) {
+		return nil, newAccessError(AccessErrorPermissionDenied, "agent session token is missing required scope "+scope, nil)
 	}
 	if claims.ID != "" && pa.Store.IsTokenRevoked(claims.ID) {
 		return nil, newAccessError(AccessErrorUnauthenticated, "token has been revoked", nil)
@@ -317,8 +304,8 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if !ok || resource == nil || !resource.Enabled {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorNotFound, "resource not found or disabled", nil)
 	}
-	if strings.TrimSpace(resource.TenantID) == "" {
-		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource has no tenant assignment", nil)
+	if strings.TrimSpace(resource.OrganizationID) == "" {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource has no organization assignment", nil)
 	}
 	if strings.TrimSpace(resource.GatewayID) == "" {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource has no gateway assignment", nil)
@@ -327,15 +314,15 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if !ok || gateway == nil {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource gateway not found", nil)
 	}
-	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, resource.TenantID) {
-		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource gateway belongs to a different tenant", nil)
+	if strings.TrimSpace(gateway.OrganizationID) == "" || !strings.EqualFold(gateway.OrganizationID, resource.OrganizationID) {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource gateway belongs to a different organization", nil)
 	}
 	user, ok := pa.Store.GetUser(claims.UserID)
 	if !ok || user == nil || user.Disabled {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "user is not allowed to access resources", nil)
 	}
-	if strings.TrimSpace(user.TenantID) == "" || !strings.EqualFold(user.TenantID, resource.TenantID) {
-		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is outside the user's tenant", nil)
+	if strings.TrimSpace(user.OrganizationID) == "" || !strings.EqualFold(user.OrganizationID, resource.OrganizationID) {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorPermissionDenied, "resource is outside the user's organization", nil)
 	}
 	protocol := strings.ToLower(strings.TrimSpace(req.Protocol))
 	if protocol == "" {
@@ -371,8 +358,8 @@ func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Reso
 	if !found || gateway == nil || gateway.Status != "enrolled" {
 		return nil, "", newAccessError(AccessErrorConflict, "resource gateway is not enrolled", nil)
 	}
-	if strings.TrimSpace(gateway.TenantID) == "" || !strings.EqualFold(gateway.TenantID, resource.TenantID) {
-		return nil, "", newAccessError(AccessErrorConflict, "resource gateway tenant mismatch", nil)
+	if strings.TrimSpace(gateway.OrganizationID) == "" || !strings.EqualFold(gateway.OrganizationID, resource.OrganizationID) {
+		return nil, "", newAccessError(AccessErrorConflict, "resource gateway organization mismatch", nil)
 	}
 	if _, ok := connected[gateway.ID]; !ok {
 		return nil, "", newAccessError(AccessErrorConflict, "assigned gateway is not connected", nil)
@@ -406,13 +393,13 @@ func DeviceHealthFromData(report *models.DeviceDataReport) *models.DeviceHealthR
 		score = points / len(report.Checks)
 	}
 	return &models.DeviceHealthReport{
-		DeviceID:     report.DeviceID,
-		Hostname:     report.Hostname,
-		OS:           report.OS,
-		Checks:       append([]models.HealthCheck(nil), report.Checks...),
-		OverallScore: score,
-		ReportedAt:   report.ReportedAt,
-		TenantID:     report.TenantID,
+		DeviceID:       report.DeviceID,
+		Hostname:       report.Hostname,
+		OS:             report.OS,
+		Checks:         append([]models.HealthCheck(nil), report.Checks...),
+		OverallScore:   score,
+		ReportedAt:     report.ReportedAt,
+		OrganizationID: report.OrganizationID,
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
 	paadmin "pdp/pa"
 	"pdp/pa/audit"
@@ -32,13 +33,13 @@ func TestHealthChangedRevokesSessionsThatNoLongerPassPolicy(t *testing.T) {
 		UpdatedAt: now,
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assign-health",
-		PolicyID:  "pol-health",
-		TenantID:  "tenant-1",
-		Level:     "organization",
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "assign-health",
+		PolicyID:       "pol-health",
+		OrganizationID: "organization-1",
+		Level:          "organization",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	dataStore.SaveDeviceData(&models.DeviceDataReport{
 		DeviceID:   "device-1",
@@ -49,13 +50,13 @@ func TestHealthChangedRevokesSessionsThatNoLongerPassPolicy(t *testing.T) {
 			{Name: "firewall", Status: "warning"},
 		},
 	})
-	dataStore.SaveSession(activeSession("sess-health", "device-1", "res-ssh", "gw-1", "tenant-1"))
+	dataStore.SaveSession(activeSession("sess-health", "device-1", "res-ssh", "gw-1", "organization-1"))
 
 	revoked := NewService(policyAdmin, nil).HandleEvent(events.Event{
 		Type: events.TopicHealthChanged,
 		Payload: map[string]string{
-			"device_id": "device-1",
-			"tenant_id": "tenant-1",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
 		},
 	})
 
@@ -71,15 +72,15 @@ func TestHealthChangedRevokesSessionsThatNoLongerPassPolicy(t *testing.T) {
 func TestHealthChangedRevokesSessionsWithPostureChangeControl(t *testing.T) {
 	policyAdmin, dataStore := newEnforcementTestPA(t)
 	seedEnforcementScope(dataStore)
-	session := activeSession("sess-posture-change", "device-1", "res-ssh", "gw-1", "tenant-1")
+	session := activeSession("sess-posture-change", "device-1", "res-ssh", "gw-1", "organization-1")
 	session.RevokeOnPostureChange = true
 	dataStore.SaveSession(session)
 
 	revoked := NewService(policyAdmin, nil).HandleEvent(events.Event{
 		Type: events.TopicHealthChanged,
 		Payload: map[string]string{
-			"device_id": "device-1",
-			"tenant_id": "tenant-1",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
 		},
 	})
 
@@ -103,23 +104,23 @@ func TestPolicyUpdatedRevokesDeniedSessionsWithinScope(t *testing.T) {
 		UpdatedAt:  now,
 	})
 	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:         "assign-deny",
-		PolicyID:   "pol-deny",
-		TenantID:   "tenant-1",
-		Level:      "resource",
-		ResourceID: "res-ssh",
-		Enabled:    true,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:             "assign-deny",
+		PolicyID:       "pol-deny",
+		OrganizationID: "organization-1",
+		Level:          "resource",
+		ResourceID:     "res-ssh",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
-	dataStore.SaveSession(activeSession("sess-policy", "device-1", "res-ssh", "gw-1", "tenant-1"))
-	dataStore.SaveSession(activeSession("sess-other-resource", "device-1", "res-web", "gw-1", "tenant-1"))
+	dataStore.SaveSession(activeSession("sess-policy", "device-1", "res-ssh", "gw-1", "organization-1"))
+	dataStore.SaveSession(activeSession("sess-other-resource", "device-1", "res-web", "gw-1", "organization-1"))
 
 	revoked := NewService(policyAdmin, nil).HandleEvent(events.Event{
 		Type: events.TopicPolicyUpdated,
 		Payload: map[string]string{
-			"tenant_id":   "tenant-1",
-			"resource_id": "res-ssh",
+			"organization_id": "organization-1",
+			"resource_id":     "res-ssh",
 		},
 	})
 
@@ -133,17 +134,17 @@ func TestPolicyUpdatedRevokesDeniedSessionsWithinScope(t *testing.T) {
 func TestResourceGatewayAndDeviceEventsRevokeScopedSessions(t *testing.T) {
 	policyAdmin, dataStore := newEnforcementTestPA(t)
 	seedEnforcementScope(dataStore)
-	dataStore.SaveSession(activeSession("sess-resource", "device-1", "res-ssh", "gw-1", "tenant-1"))
-	dataStore.SaveSession(activeSession("sess-gateway", "device-2", "res-web", "gw-1", "tenant-1"))
-	dataStore.SaveSession(activeSession("sess-device", "device-3", "res-web", "gw-2", "tenant-1"))
-	dataStore.SaveSession(activeSession("sess-other-tenant", "device-3", "res-web", "gw-2", "tenant-2"))
+	dataStore.SaveSession(activeSession("sess-resource", "device-1", "res-ssh", "gw-1", "organization-1"))
+	dataStore.SaveSession(activeSession("sess-gateway", "device-2", "res-web", "gw-1", "organization-1"))
+	dataStore.SaveSession(activeSession("sess-device", "device-3", "res-web", "gw-2", "organization-1"))
+	dataStore.SaveSession(activeSession("sess-other-organization", "device-3", "res-web", "gw-2", "organization-2"))
 
 	service := NewService(policyAdmin, nil)
 	if revoked := service.HandleEvent(events.Event{
 		Type: events.TopicResourcesUpdated,
 		Payload: map[string]string{
 			"resource_id":      "res-ssh",
-			"tenant_id":        "tenant-1",
+			"organization_id":  "organization-1",
 			"action":           "updated",
 			"revokes_sessions": "true",
 		},
@@ -153,8 +154,8 @@ func TestResourceGatewayAndDeviceEventsRevokeScopedSessions(t *testing.T) {
 	if revoked := service.HandleEvent(events.Event{
 		Type: events.TopicGatewayRevoked,
 		Payload: map[string]string{
-			"gateway_id": "gw-1",
-			"tenant_id":  "tenant-1",
+			"gateway_id":      "gw-1",
+			"organization_id": "organization-1",
 		},
 	}); revoked != 1 {
 		t.Fatalf("gateway revoked = %d, want 1", revoked)
@@ -162,8 +163,8 @@ func TestResourceGatewayAndDeviceEventsRevokeScopedSessions(t *testing.T) {
 	if revoked := service.HandleEvent(events.Event{
 		Type: events.TopicDeviceRevoked,
 		Payload: map[string]string{
-			"device_id": "device-3",
-			"tenant_id": "tenant-1",
+			"device_id":       "device-3",
+			"organization_id": "organization-1",
 		},
 	}); revoked != 1 {
 		t.Fatalf("device revoked = %d, want 1", revoked)
@@ -172,16 +173,12 @@ func TestResourceGatewayAndDeviceEventsRevokeScopedSessions(t *testing.T) {
 	assertRevoked(t, dataStore, "sess-resource", true)
 	assertRevoked(t, dataStore, "sess-gateway", true)
 	assertRevoked(t, dataStore, "sess-device", true)
-	assertRevoked(t, dataStore, "sess-other-tenant", false)
+	assertRevoked(t, dataStore, "sess-other-organization", false)
 }
 
 func newEnforcementTestPA(t *testing.T) (*paadmin.PolicyAdministrator, *store.Store) {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("InitDB() error = %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
+	dataStore := testdb.NewStore(t)
 	policyAdmin := &paadmin.PolicyAdministrator{
 		Engine:   evaluation.NewEngine(),
 		Sessions: sessions.NewSessionManager(dataStore, time.Hour, 10),
@@ -193,89 +190,89 @@ func newEnforcementTestPA(t *testing.T) (*paadmin.PolicyAdministrator, *store.St
 
 func seedEnforcementScope(dataStore *store.Store) {
 	now := time.Now()
-	dataStore.SaveTenant(&models.Tenant{
-		ID:        "tenant-1",
-		Name:      "Tenant 1",
-		Domain:    "tenant.test",
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        "organization-1",
+		Name:      "Organization 1",
+		Domain:    "organization.test",
 		Enabled:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	dataStore.SaveTenant(&models.Tenant{
-		ID:        "tenant-2",
-		Name:      "Tenant 2",
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        "organization-2",
+		Name:      "Organization 2",
 		Domain:    "other.test",
 		Enabled:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
 	dataStore.SaveUser(&models.User{
-		ID:        "user-1",
-		Username:  "laura",
-		Email:     "laura@tenant.test",
-		Role:      "user",
-		TenantID:  "tenant-1",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "user-1",
+		Username:       "laura",
+		Email:          "laura@organization.test",
+		Role:           "user",
+		OrganizationID: "organization-1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	dataStore.SaveGateway(&models.Gateway{
-		ID:        "gw-1",
-		TenantID:  "tenant-1",
-		TenantIDs: []string{"tenant-1"},
-		Name:      "Gateway 1",
-		Status:    "enrolled",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              "gw-1",
+		OrganizationID:  "organization-1",
+		OrganizationIDs: []string{"organization-1"},
+		Name:            "Gateway 1",
+		Status:          "enrolled",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 	dataStore.SaveGateway(&models.Gateway{
-		ID:        "gw-2",
-		TenantID:  "tenant-1",
-		TenantIDs: []string{"tenant-1"},
-		Name:      "Gateway 2",
-		Status:    "enrolled",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              "gw-2",
+		OrganizationID:  "organization-1",
+		OrganizationIDs: []string{"organization-1"},
+		Name:            "Gateway 2",
+		Status:          "enrolled",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 	dataStore.SaveResource(&models.Resource{
-		ID:        "res-ssh",
-		Name:      "SSH",
-		Type:      "ssh",
-		Host:      "ssh.internal",
-		Port:      22,
-		Enabled:   true,
-		TenantID:  "tenant-1",
-		GatewayID: "gw-1",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "res-ssh",
+		Name:           "SSH",
+		Type:           "ssh",
+		Host:           "ssh.internal",
+		Port:           22,
+		Enabled:        true,
+		OrganizationID: "organization-1",
+		GatewayID:      "gw-1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	dataStore.SaveResource(&models.Resource{
-		ID:        "res-web",
-		Name:      "Web",
-		Type:      "web",
-		Host:      "web.internal",
-		Port:      443,
-		Enabled:   true,
-		TenantID:  "tenant-1",
-		GatewayID: "gw-1",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "res-web",
+		Name:           "Web",
+		Type:           "web",
+		Host:           "web.internal",
+		Port:           443,
+		Enabled:        true,
+		OrganizationID: "organization-1",
+		GatewayID:      "gw-1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 }
 
-func activeSession(id, deviceID, resourceID, gatewayID, tenantID string) *models.Session {
+func activeSession(id, deviceID, resourceID, gatewayID, organizationID string) *models.Session {
 	now := time.Now()
 	return &models.Session{
-		ID:        id,
-		UserID:    "user-1",
-		Username:  "laura",
-		DeviceID:  deviceID,
-		SourceIP:  "192.0.2.10",
-		Resource:  resourceID,
-		GatewayID: gatewayID,
-		Protocol:  "ssh",
-		TenantID:  tenantID,
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             id,
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       deviceID,
+		SourceIP:       "192.0.2.10",
+		Resource:       resourceID,
+		GatewayID:      gatewayID,
+		Protocol:       "ssh",
+		OrganizationID: organizationID,
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	}
 }
 

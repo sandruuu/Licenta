@@ -8,7 +8,7 @@ import (
 
 func TestServiceIssueDeviceCertificateReusesSameKeyAndRevokesChangedKey(t *testing.T) {
 	dataStore := newEnrollmentTestStore(t)
-	service := NewService(dataStore)
+	service := newEnrollmentTestService(t, dataStore)
 	authority := newTestCertificateAuthority(t)
 	service.SetCertificateAuthority(authority.signCSR, authority.revokeCertificate, func(component string) string {
 		if component != "endpoint" {

@@ -18,8 +18,8 @@ func TestServiceEnrollGatewayConsumesTokenAndPersistsCertificate(t *testing.T) {
 
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              "gw-1",
-		TenantID:        gatewayTestTenantID,
-		TenantIDs:       []string{gatewayTestTenantID},
+		OrganizationID:  gatewayTestOrganizationID,
+		OrganizationIDs: []string{gatewayTestOrganizationID},
 		Name:            "Edge Gateway",
 		FQDN:            "edge.example.test",
 		EnrollmentToken: gatewayTokenHash("token-1"),
@@ -53,7 +53,7 @@ func TestServiceEnrollGatewayConsumesTokenAndPersistsCertificate(t *testing.T) {
 	if !ok {
 		t.Fatal("issued gateway certificate does not contain gateway identity")
 	}
-	if organizationID != gatewayTestTenantID || gatewayID != "gw-1" {
+	if organizationID != gatewayTestOrganizationID || gatewayID != "gw-1" {
 		t.Fatalf("issued identity = organization=%q gateway=%q", organizationID, gatewayID)
 	}
 	if !stringSliceContainsFold(cert.DNSNames, "edge.example.test") {
@@ -83,7 +83,7 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("invalid token", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "missing", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-1", "gw.example.test")})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "missing", CSRPEM: newGatewayCSR(t, gatewayTestOrganizationID, "gw-1", "gw.example.test")})
 		if !errors.Is(err, ErrInvalidEnrollmentToken) {
 			t.Fatalf("error = %v, want ErrInvalidEnrollmentToken", err)
 		}
@@ -92,8 +92,8 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("expired token", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		dataStore.SaveGateway(&models.Gateway{ID: "gw-expired", TenantID: gatewayTestTenantID, EnrollmentToken: gatewayTokenHash("expired"), TokenExpiresAt: fixedNow.Add(-time.Minute).Format(time.RFC3339), Status: "pending"})
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "expired", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-expired", "gw.example.test")})
+		dataStore.SaveGateway(&models.Gateway{ID: "gw-expired", OrganizationID: gatewayTestOrganizationID, EnrollmentToken: gatewayTokenHash("expired"), TokenExpiresAt: fixedNow.Add(-time.Minute).Format(time.RFC3339), Status: "pending"})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "expired", CSRPEM: newGatewayCSR(t, gatewayTestOrganizationID, "gw-expired", "gw.example.test")})
 		if !errors.Is(err, ErrEnrollmentTokenExpired) {
 			t.Fatalf("error = %v, want ErrEnrollmentTokenExpired", err)
 		}
@@ -102,8 +102,8 @@ func TestServiceEnrollGatewayRejectsInvalidExpiredAndEnrolledTokens(t *testing.T
 	t.Run("already enrolled", func(t *testing.T) {
 		dataStore := newGatewayTestStore(t)
 		service := newGatewayTestService(t, dataStore, fixedNow)
-		dataStore.SaveGateway(&models.Gateway{ID: "gw-enrolled", TenantID: gatewayTestTenantID, EnrollmentToken: gatewayTokenHash("enrolled"), TokenExpiresAt: fixedNow.Add(time.Hour).Format(time.RFC3339), Status: "enrolled"})
-		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "enrolled", CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-enrolled", "gw.example.test")})
+		dataStore.SaveGateway(&models.Gateway{ID: "gw-enrolled", OrganizationID: gatewayTestOrganizationID, EnrollmentToken: gatewayTokenHash("enrolled"), TokenExpiresAt: fixedNow.Add(time.Hour).Format(time.RFC3339), Status: "enrolled"})
+		_, err := service.EnrollGateway(models.GatewayEnrollRequest{Token: "enrolled", CSRPEM: newGatewayCSR(t, gatewayTestOrganizationID, "gw-enrolled", "gw.example.test")})
 		if !errors.Is(err, ErrGatewayAlreadyEnrolled) {
 			t.Fatalf("error = %v, want ErrGatewayAlreadyEnrolled", err)
 		}
@@ -116,7 +116,7 @@ func TestServiceEnrollGatewayRejectsCSRRequestedIdentityMismatch(t *testing.T) {
 	service := newGatewayTestService(t, dataStore, fixedNow)
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              "gw-1",
-		TenantID:        gatewayTestTenantID,
+		OrganizationID:  gatewayTestOrganizationID,
 		FQDN:            "edge.example.test",
 		EnrollmentToken: gatewayTokenHash("token-1"),
 		TokenExpiresAt:  fixedNow.Add(time.Hour).Format(time.RFC3339),
@@ -125,7 +125,7 @@ func TestServiceEnrollGatewayRejectsCSRRequestedIdentityMismatch(t *testing.T) {
 
 	_, err := service.EnrollGateway(models.GatewayEnrollRequest{
 		Token:  "token-1",
-		CSRPEM: newGatewayCSR(t, gatewayTestTenantID, "gw-1", "attacker.example.test"),
+		CSRPEM: newGatewayCSR(t, gatewayTestOrganizationID, "gw-1", "attacker.example.test"),
 	})
 	if !errors.Is(err, ErrInvalidCSR) {
 		t.Fatalf("error = %v, want ErrInvalidCSR", err)
@@ -143,8 +143,8 @@ func TestServiceEnrollGatewayKeepsTokenWhenSigningFails(t *testing.T) {
 
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              "gw-1",
-		TenantID:        gatewayTestTenantID,
-		TenantIDs:       []string{gatewayTestTenantID},
+		OrganizationID:  gatewayTestOrganizationID,
+		OrganizationIDs: []string{gatewayTestOrganizationID},
 		Name:            "Edge Gateway",
 		FQDN:            "edge.example.test",
 		EnrollmentToken: gatewayTokenHash("token-1"),

@@ -249,7 +249,7 @@ export default function Policies() {
     setAssignmentForm({
       ...EMPTY_ASSIGNMENT_FORM,
       policy_id: policy?.id || policies[0]?.id || '',
-      tenant_id: defaultOrganizationID,
+      organization_id: defaultOrganizationID,
       resource_ids: [],
       group_ids: [],
     });
@@ -287,7 +287,7 @@ export default function Policies() {
 
     const makePayload = ({ resourceID = '', groupID = '', groupName = '' } = {}) => ({
       policy_id: assignmentForm.policy_id,
-      organization_id: assignmentForm.tenant_id,
+      organization_id: assignmentForm.organization_id,
       level: assignmentForm.level,
       resource_id: ['resource', 'resource_group'].includes(assignmentForm.level) ? resourceID : '',
       group_id: ['group', 'resource_group'].includes(assignmentForm.level) ? groupID : '',
@@ -347,8 +347,8 @@ export default function Policies() {
     }
   };
 
-  const resourcesForAssignment = resources.filter((resource) => resource.tenant_id === assignmentForm.tenant_id);
-  const groupsForAssignment = groups.filter((group) => group.tenant_id === assignmentForm.tenant_id);
+  const resourcesForAssignment = resources.filter((resource) => resource.organization_id === assignmentForm.organization_id);
+  const groupsForAssignment = groups.filter((group) => group.organization_id === assignmentForm.organization_id);
   const policyPagination = usePaginatedTable(filteredPolicies);
   const compactCount = `${filteredPolicies.length} ${filteredPolicies.length === 1 ? 'policy' : 'policies'}`;
 

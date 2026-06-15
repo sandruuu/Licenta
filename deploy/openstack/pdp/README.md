@@ -50,9 +50,13 @@ PDP_PUBLIC_HOST=<pdp-public-domain>
 PDP_FQDN=pdp
 VAULT_PRIVATE_IP=<vault-private-ip>
 PDP_PKI_TOKEN=<token-created-by-vault-bootstrap>
+POSTGRES_PASSWORD=<strong-postgres-password>
+PDP_REDIS_URL=redis://redis:6379/0
 ```
 
 `vault-ca.crt` must be present in this folder. It is the public CA certificate used by PDP to verify Vault HTTPS.
+
+The compose stack starts PostgreSQL for persistent PDP data and Redis for shared runtime state used by multiple PDP replicas.
 
 ## Start
 
@@ -61,8 +65,8 @@ docker compose up -d
 docker compose logs -f pdp
 ```
 
-Check from the PDP VM:
+Check through the public proxy:
 
 ```sh
-curl -k https://127.0.0.1:8443/health
+curl https://$PDP_PUBLIC_HOST/health
 ```

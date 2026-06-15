@@ -14,13 +14,12 @@ import (
 
 func TestAgentSessionRevokeSessionRevokesResourceSessions(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
-	server.agentSessions = newAgentSessionStore()
 
 	deviceCertPEM, deviceCert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	enrollment := &models.DeviceEnrollment{
 		ID:              "enroll-1",
 		DeviceID:        "device-1",
-		TenantID:        transportTestTenantID,
+		OrganizationID:  transportTestOrganizationID,
 		Component:       "endpoint",
 		Status:          "approved",
 		CertPEM:         string(deviceCertPEM),
@@ -32,7 +31,7 @@ func TestAgentSessionRevokeSessionRevokesResourceSessions(t *testing.T) {
 	token := newDeviceCatalogAccessToken(t, server, dataStore, "device-1", "admin", clientCertificateFingerprint(deviceCert))
 	server.agentSessions.save(&agentSessionTransaction{
 		ID:                "srq-1",
-		TenantID:          transportTestTenantID,
+		OrganizationID:    transportTestOrganizationID,
 		DeviceID:          "device-1",
 		AgentSessionID:    "sess-test",
 		AgentSessionToken: token,
@@ -43,28 +42,28 @@ func TestAgentSessionRevokeSessionRevokesResourceSessions(t *testing.T) {
 
 	now := time.Now()
 	dataStore.SaveSession(&models.Session{
-		ID:        "resource-session-1",
-		UserID:    "user-1",
-		Username:  "alice@example.test",
-		DeviceID:  "device-1",
-		Resource:  "res-ssh",
-		GatewayID: "gw-1",
-		Protocol:  "ssh",
-		TenantID:  transportTestTenantID,
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             "resource-session-1",
+		UserID:         "user-1",
+		Username:       "alice@example.test",
+		DeviceID:       "device-1",
+		Resource:       "res-ssh",
+		GatewayID:      "gw-1",
+		Protocol:       "ssh",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	})
 	dataStore.SaveSession(&models.Session{
-		ID:        "other-device-session",
-		UserID:    "user-1",
-		Username:  "alice@example.test",
-		DeviceID:  "device-2",
-		Resource:  "res-rdp",
-		GatewayID: "gw-1",
-		Protocol:  "rdp",
-		TenantID:  transportTestTenantID,
-		CreatedAt: now.Add(-time.Minute),
-		ExpiresAt: now.Add(time.Hour),
+		ID:             "other-device-session",
+		UserID:         "user-1",
+		Username:       "alice@example.test",
+		DeviceID:       "device-2",
+		Resource:       "res-rdp",
+		GatewayID:      "gw-1",
+		Protocol:       "rdp",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
 	})
 
 	ctx := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: *deviceTLSState(deviceCert)}})

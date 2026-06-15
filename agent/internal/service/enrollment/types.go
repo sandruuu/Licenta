@@ -166,7 +166,7 @@ type EnrollmentCompleteSessionResponse struct {
 	DeviceID               string
 	AuthRealmID            string
 	IDPProfileID           string
-	TenantID               string
+	OrganizationID         string
 	CertificatePEM         string
 	CertificateChainPEM    string
 	CertificateThumbprint  string

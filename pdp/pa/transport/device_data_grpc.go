@@ -52,7 +52,7 @@ func (service *deviceDataGRPCService) ReportDeviceData(ctx context.Context, requ
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	report.TenantID = enrollment.TenantID
+	report.OrganizationID = enrollment.OrganizationID
 	report, err = service.server.pa.Devices.AcceptDeviceDataReportWithSourceIP(enrollment.DeviceID, report, grpcPeerIP(ctx))
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCodeForDeviceDataError(err)), err.Error())

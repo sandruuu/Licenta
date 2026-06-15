@@ -1,15 +1,17 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
+	"time"
 
 	"pdp/certs"
 )
 
 // ─────────────────────────────────────────────
-// Health check
+// Public trust and health endpoints.
 // ─────────────────────────────────────────────
 
 // handleCACert returns the active issuer CA certificate (public info, no auth needed).
@@ -53,43 +55,108 @@ func (s *Server) handleCertFingerprint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"sha256": fp})
 }
 
+func (s *Server) handleLiveCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "ok",
+		"service": "trustcloud",
+	})
+}
+
+func (s *Server) handleReadyCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.IsDraining() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"status":  "draining",
+			"service": "trustcloud",
+		})
+		return
+	}
+	checks, status := s.dependencyChecks(r.Context())
+	httpStatus := http.StatusOK
+	if status == "degraded" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+	writeJSON(w, httpStatus, map[string]interface{}{
+		"status":  status,
+		"service": "trustcloud",
+		"checks":  checks,
+	})
+}
+
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	checks, status := s.dependencyChecks(r.Context())
+	httpStatus := http.StatusOK
+	if status == "degraded" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+	writeJSON(w, httpStatus, map[string]interface{}{
+		"status":  status,
+		"service": "trustcloud",
+		"checks":  checks,
+	})
+}
+
+func (s *Server) dependencyChecks(ctx context.Context) (map[string]string, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	checks := map[string]string{}
 	status := "ok"
 
 	// Check database connectivity
-	if err := s.pa.Store.Ping(); err != nil {
+	if s == nil || s.pa == nil || s.pa.Store == nil {
+		checks["db"] = "not_configured"
+		status = "degraded"
+	} else if err := s.pa.Store.Ping(); err != nil {
 		checks["db"] = "error"
 		status = "degraded"
 	} else {
 		checks["db"] = "ok"
 	}
 
+	redisCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if s == nil || s.pa == nil || s.pa.Runtime == nil {
+		checks["redis"] = "not_configured"
+		status = "degraded"
+	} else if err := s.pa.Runtime.Ping(redisCtx); err != nil {
+		checks["redis"] = "error"
+		status = "degraded"
+	} else {
+		checks["redis"] = "ok"
+	}
+
 	// Check Vault issuer CA loaded
-	if len(s.externalCAPEM) > 0 {
+	if s != nil && len(s.externalCAPEM) > 0 {
 		checks["ca"] = "ok"
 	} else {
 		checks["ca"] = "not_configured"
+		status = "degraded"
 	}
 
 	// Check PA auth JWT signing keys
-	if _, err := s.pa.Auth.JWT.GetJWKSJSON(); err != nil {
+	if s == nil || s.pa == nil || s.pa.Auth == nil || s.pa.Auth.JWT == nil {
+		checks["auth"] = "not_configured"
+		status = "degraded"
+	} else if _, err := s.pa.Auth.JWT.GetJWKSJSON(); err != nil {
 		checks["auth"] = "error"
 		status = "degraded"
 	} else {
 		checks["auth"] = "ok"
 	}
 
-	httpStatus := http.StatusOK
-	if status == "degraded" {
-		httpStatus = http.StatusServiceUnavailable
-	}
-
-	writeJSON(w, httpStatus, map[string]interface{}{
-		"status":  status,
-		"service": "trustcloud",
-		"checks":  checks,
-	})
+	return checks, status
 }
 
 // handleJWKS serves the JSON Web Key Set for JWT verification (ES256 public key)

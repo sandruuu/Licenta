@@ -4,11 +4,8 @@ import (
 	"database/sql"
 	"log"
 	"strings"
-	"time"
 
 	"pdp/models"
-
-	_ "modernc.org/sqlite"
 )
 
 // ─────────────────────────────────────────────
@@ -16,7 +13,7 @@ import (
 // ─────────────────────────────────────────────
 
 const userSelectColumns = `id, username, email, password_hash, totp_secret, mfa_methods_json,
-		last_totp_counter, role, disabled, tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at`
+		last_totp_counter, role, disabled, organization_id, external_subject, auth_source, created_at, updated_at, last_login_at`
 
 func (s *Store) GetUser(id string) (*models.User, bool) {
 	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE id = ?`, id)
@@ -29,7 +26,7 @@ func (s *Store) GetUserByUsername(username string) (*models.User, bool) {
 }
 
 func (s *Store) GetUserByEmail(email string) (*models.User, bool) {
-	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE email = ? COLLATE NOCASE`, strings.TrimSpace(email))
+	row := s.db.QueryRow(`SELECT `+userSelectColumns+` FROM users WHERE lower(email) = lower(?)`, strings.TrimSpace(email))
 	return s.scanUser(row)
 }
 
@@ -39,7 +36,7 @@ func (s *Store) scanUser(row *sql.Row) (*models.User, bool) {
 	var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 	err := row.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-		&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
+		&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.OrganizationID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt)
 	if err != nil {
 		return nil, false
 	}
@@ -60,13 +57,28 @@ func (s *Store) SaveUser(user *models.User) {
 	if methods == nil {
 		methods = []string{}
 	}
-	_, err := s.db.Exec(`INSERT OR REPLACE INTO users
+	_, err := s.db.Exec(`INSERT INTO users
 		(id, username, email, password_hash, totp_secret, mfa_methods_json, last_totp_counter, role, disabled,
-		 tenant_id, external_subject, auth_source, created_at, updated_at, last_login_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 organization_id, external_subject, auth_source, created_at, updated_at, last_login_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO UPDATE SET
+			username = EXCLUDED.username,
+			email = EXCLUDED.email,
+			password_hash = EXCLUDED.password_hash,
+			totp_secret = EXCLUDED.totp_secret,
+			mfa_methods_json = EXCLUDED.mfa_methods_json,
+			last_totp_counter = EXCLUDED.last_totp_counter,
+			role = EXCLUDED.role,
+			disabled = EXCLUDED.disabled,
+			organization_id = EXCLUDED.organization_id,
+			external_subject = EXCLUDED.external_subject,
+			auth_source = EXCLUDED.auth_source,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at,
+			last_login_at = EXCLUDED.last_login_at`,
 		user.ID, user.Username, user.Email, user.PasswordHash, user.TOTPSecret,
 		toJSON(methods), user.LastTOTPCounter, user.Role, b2i(user.Disabled),
-		user.TenantID, user.ExternalSubject, user.AuthSource,
+		user.OrganizationID, user.ExternalSubject, user.AuthSource,
 		fmtTime(user.CreatedAt), fmtTime(user.UpdatedAt), fmtTime(user.LastLoginAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save user %s: %v", user.ID, err)
@@ -88,7 +100,7 @@ func (s *Store) ListUsers() []*models.User {
 		var createdAt, updatedAt, lastLoginAt, mfaMethodsJSON string
 
 		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.TOTPSecret,
-			&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.TenantID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
+			&mfaMethodsJSON, &u.LastTOTPCounter, &u.Role, &disabled, &u.OrganizationID, &u.ExternalSubject, &u.AuthSource, &createdAt, &updatedAt, &lastLoginAt); err != nil {
 			continue
 		}
 
@@ -112,47 +124,3 @@ func (s *Store) DeleteUser(id string) {
 // ─────────────────────────────────────────────
 // Login attempt tracking
 // ─────────────────────────────────────────────
-
-func (s *Store) RecordFailedLogin(username string, maxAttempts int, lockoutDuration time.Duration) {
-	var failedCount int
-	row := s.db.QueryRow("SELECT failed_count FROM login_attempts WHERE username = ?", username)
-	if err := row.Scan(&failedCount); err != nil {
-		failedCount = 0
-	}
-
-	failedCount++
-	lockedUntil := ""
-	if failedCount >= maxAttempts {
-		lockedUntil = fmtTime(time.Now().Add(lockoutDuration))
-	}
-
-	s.db.Exec(`INSERT OR REPLACE INTO login_attempts (username, failed_count, last_attempt, locked_until)
-		VALUES (?, ?, ?, ?)`, username, failedCount, fmtTime(time.Now()), lockedUntil)
-}
-
-func (s *Store) ResetLoginAttempts(username string) {
-	s.db.Exec("DELETE FROM login_attempts WHERE username = ?", username)
-}
-
-func (s *Store) IsLockedOut(username string) (bool, time.Time) {
-	var lockedUntil string
-	row := s.db.QueryRow("SELECT locked_until FROM login_attempts WHERE username = ?", username)
-	if err := row.Scan(&lockedUntil); err != nil || lockedUntil == "" {
-		return false, time.Time{}
-	}
-
-	t := parseTime(lockedUntil)
-	if t.After(time.Now()) {
-		return true, t
-	}
-	return false, time.Time{}
-}
-
-func (s *Store) GetFailedAttempts(username string) int {
-	var count int
-	row := s.db.QueryRow("SELECT failed_count FROM login_attempts WHERE username = ?", username)
-	if err := row.Scan(&count); err != nil {
-		return 0
-	}
-	return count
-}

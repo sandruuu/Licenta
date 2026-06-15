@@ -71,7 +71,7 @@ func (s *Server) sameBrowserOrigin(r *http.Request, raw string) bool {
 	}
 	publicOrigin := ""
 	if s != nil {
-		publicOrigin = s.publicOrigin()
+		publicOrigin, _ = s.publicOrigin()
 	}
 	if publicOrigin == "" {
 		return false

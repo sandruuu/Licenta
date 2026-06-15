@@ -73,7 +73,7 @@ export default function Resources() {
     defaultPort: publicConfig.resource_default_ports?.[item.value] || 0,
   })), [publicConfig.resource_default_ports]);
 
-  const gatewaysForOrganization = (organizationID) => gateways.filter((gateway) => gateway.tenant_id === organizationID);
+  const gatewaysForOrganization = (organizationID) => gateways.filter((gateway) => gateway.organization_id === organizationID);
 
   const load = async () => {
     setLoading(true);
@@ -105,7 +105,7 @@ export default function Resources() {
       name: '',
       description: '',
       type: normalizedType,
-      tenant_id: organizationID,
+      organization_id: organizationID,
       gateway_id: defaultGatewayID(organizationID),
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
@@ -127,13 +127,13 @@ export default function Resources() {
     const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
     const organizationID = searchParams.get('organization_id') || organizations[0]?.id || '';
     const option = typeOptions.find((item) => item.value === normalizedType);
-    const gatewayID = searchParams.get('gateway_id') || gateways.find((gateway) => gateway.tenant_id === organizationID)?.id || '';
+    const gatewayID = searchParams.get('gateway_id') || gateways.find((gateway) => gateway.organization_id === organizationID)?.id || '';
 
     setForm({
       name: '',
       description: '',
       type: normalizedType,
-      tenant_id: organizationID,
+      organization_id: organizationID,
       gateway_id: gatewayID,
       host: '',
       port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
@@ -160,7 +160,7 @@ export default function Resources() {
 
   const selectOrganization = (organizationID) => {
     const firstGateway = gatewaysForOrganization(organizationID)[0]?.id || '';
-    setForm({ ...form, tenant_id: organizationID, gateway_id: firstGateway });
+    setForm({ ...form, organization_id: organizationID, gateway_id: firstGateway });
   };
 
   const selectType = (type) => {
@@ -178,7 +178,7 @@ export default function Resources() {
       name: form.name?.trim(),
       description: form.description?.trim(),
       type: form.type,
-      organization_id: form.tenant_id,
+      organization_id: form.organization_id,
       gateway_id: form.gateway_id,
       host: form.host?.trim(),
       port: parseInt(form.port, 10) || 0,
@@ -258,7 +258,7 @@ export default function Resources() {
       ),
     },
     { key: 'type', label: 'Type', render: (value) => <ResourceTypeText type={value} /> },
-    { key: 'tenant_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
+    { key: 'organization_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
     { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     {
@@ -291,9 +291,9 @@ export default function Resources() {
       if (typeFilter !== 'all' && resource.type !== typeFilter) return false;
       if (statusFilter === 'enabled' && resource.enabled === false) return false;
       if (statusFilter === 'disabled' && resource.enabled !== false) return false;
-      if (organizationFilter !== 'all' && resource.tenant_id !== organizationFilter) return false;
+      if (organizationFilter !== 'all' && resource.organization_id !== organizationFilter) return false;
       if (!needle) return true;
-      const organization = organizationByID.get(resource.tenant_id);
+      const organization = organizationByID.get(resource.organization_id);
       const gateway = gatewayByID.get(resource.gateway_id);
       return [
         resource.name,
@@ -395,7 +395,7 @@ export default function Resources() {
         footer={
           <>
             <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !form.tenant_id || !form.gateway_id}>
+            <Button onClick={handleSave} disabled={saving || !form.organization_id || !form.gateway_id}>
               {saving ? 'Saving...' : modal === 'create' ? 'Create Resource' : 'Save Changes'}
             </Button>
           </>
@@ -403,7 +403,7 @@ export default function Resources() {
       >
         <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-3">
           <FormField label="Organization" className="mb-0 md:col-span-2">
-            <FormSelect value={form.tenant_id || ''} onChange={(e) => selectOrganization(e.target.value)}>
+            <FormSelect value={form.organization_id || ''} onChange={(e) => selectOrganization(e.target.value)}>
               <option value="">Select organization</option>
               {organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}
             </FormSelect>
@@ -411,7 +411,7 @@ export default function Resources() {
           <FormField label="Gateway" className="mb-0 md:col-span-2">
             <FormSelect value={form.gateway_id || ''} onChange={(e) => setForm({ ...form, gateway_id: e.target.value })}>
               <option value="">Select gateway</option>
-              {gatewaysForOrganization(form.tenant_id).map((gateway) => (
+              {gatewaysForOrganization(form.organization_id).map((gateway) => (
                 <option key={gateway.id} value={gateway.id}>{gateway.name}</option>
               ))}
             </FormSelect>
@@ -433,7 +433,7 @@ export default function Resources() {
             <FormInput value={form.host || ''} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="10.0.0.5 or server.internal" />
           </FormField>
           <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
-            <FormInput value={form.external_url || ''} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://app.example.com or ssh.example.com" />
+            <FormInput value={form.external_url || ''} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://app.company.com or ssh.company.com" />
           </FormField>
 
           <div className="md:col-span-4 flex flex-wrap items-center gap-x-8 gap-y-3 pt-2">

@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"pdp/pa"
@@ -32,18 +33,11 @@ type Server struct {
 	mtlsCAPool     *x509.CertPool
 	grpcHandler    http.Handler
 	gatewayControl *GatewayControlRegistry
-
-	sessionGatewayMu sync.RWMutex
-	sessionGateways  map[string]string
+	draining       atomic.Bool
 
 	externalPKI   *pki.VaultClient
 	externalCAPEM []byte
 
-	enrollLimiterMu sync.Mutex
-	enrollLimiter   map[string]*enrollRateEntry
-
-	authLimiterMu sync.Mutex
-	authLimiter   map[string]*enrollRateEntry // reuse: per-IP rate limit for login/register
 	agentSessions *agentSessionStore
 	stepUpAuth    *stepUpBrowserAuthStore
 	adminMFA      *adminMFAStore
@@ -64,17 +58,14 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	policyAdmin.Cfg.ApplyDefaults()
 
 	s := &Server{
-		pa:              policyAdmin,
-		mux:             http.NewServeMux(),
-		addr:            addr,
-		gatewayControl:  NewGatewayControlRegistry(),
-		sessionGateways: make(map[string]string),
-		enrollLimiter:   make(map[string]*enrollRateEntry),
-		authLimiter:     make(map[string]*enrollRateEntry),
-		agentSessions:   newAgentSessionStore(),
-		stepUpAuth:      newStepUpBrowserAuthStore(policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
-		adminMFA:        newAdminMFAStore(),
-		events:          events.NewBroker(policyAdmin.Cfg.Runtime.EventBufferSize),
+		pa:             policyAdmin,
+		mux:            http.NewServeMux(),
+		addr:           addr,
+		gatewayControl: NewGatewayControlRegistry(policyAdmin.Runtime),
+		agentSessions:  newAgentSessionStore(policyAdmin.Runtime),
+		stepUpAuth:     newStepUpBrowserAuthStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
+		adminMFA:       newAdminMFAStore(policyAdmin.Runtime),
+		events:         events.NewBroker(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.EventBufferSize),
 	}
 
 	if policyAdmin != nil && policyAdmin.Devices != nil {
@@ -136,17 +127,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 
 	s.registerRoutes()
 	s.initDeviceCatalogGRPC()
-	s.hydrateOIDCClients()
 	return s, nil
-}
-
-// hydrateOIDCClients registers the native Connect-App OIDC public client.
-// Gateways are no longer OIDC clients; they act only as resource servers/PEPs.
-func (s *Server) hydrateOIDCClients() {
-	if s.pa == nil || s.pa.Store == nil || s.pa.Auth == nil || s.pa.Auth.OIDC == nil {
-		return
-	}
-	s.pa.Auth.OIDC.RegisterNativeConnectAppClient()
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {
@@ -172,8 +153,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/auth/passkey/login/finish", s.handleAdminPasskeyLoginFinish)
 	s.mux.HandleFunc("/api/auth/passkey/register/begin", s.handleAdminPasskeyRegisterBegin)
 	s.mux.HandleFunc("/api/auth/passkey/register/finish", s.handleAdminPasskeyRegisterFinish)
-	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/config/public", s.handlePublicConfig)
+	s.mux.HandleFunc("/live", s.handleLiveCheck)
+	s.mux.HandleFunc("/ready", s.handleReadyCheck)
 	s.mux.HandleFunc("/health", s.handleHealthCheck)
 	s.mux.HandleFunc("/api/ca/cert", s.handleCACert)                   // Public: returns CA certificate PEM
 	s.mux.HandleFunc("/api/cert-fingerprint", s.handleCertFingerprint) // Public: returns server TLS cert SHA-256 fingerprint
@@ -198,7 +180,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)                     // JWKS public key endpoint
 	s.mux.HandleFunc("/.well-known/openid-configuration", s.handleOIDCDiscovery) // OIDC discovery doc
 
-	// SCIM inbound provisioning endpoints (Bearer token per tenant IdP)
+	// SCIM inbound provisioning endpoints (Bearer token per organization IdP)
 	s.mux.HandleFunc("/scim/v2/", s.handleSCIM)
 
 	// ─────────────────────────────────────────────
@@ -263,7 +245,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/gateways/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminGatewayByID)))
 
 	// ─────────────────────────────────────────────
-	// Admin Identity Provider management (per Tenant)
+	// Admin Identity Provider management (per Organization)
 	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/organizations/idps/discover", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdPDiscover)))
 	s.mux.Handle("/api/admin/organizations/idps", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviders)))
@@ -272,15 +254,16 @@ func (s *Server) registerRoutes() {
 	// ─────────────────────────────────────────────
 	// Dashboard SPA (serve React build)
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/dashboard/", s.redirectLegacyDashboardRoute)
-	s.mux.HandleFunc("/dashboard", s.redirectLegacyDashboardRoute)
 	s.mux.HandleFunc("/", s.handleDashboardSPA)
 }
 
-// StartTLS begins listening for HTTPS requests using an in-memory certificate provider.
-func (s *Server) StartTLS(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
+// StartTLS begins listening for HTTPS requests using the active dynamic certificate provider.
+func (s *Server) StartTLS(ctx context.Context, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	appCfg := s.appConfig()
-	httpHandler := loggingMiddleware(securityHeadersMiddleware(appCfg.Public.DeviceHealthAgentURL)(corsMiddleware(appCfg.CORSOrigins)(s.mux)))
+	httpHandler := loggingMiddleware(securityHeadersMiddleware()(corsMiddleware(appCfg.CORSOrigins)(s.mux)))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.grpcHandler != nil && isGRPCRequest(r) {
 			s.grpcHandler.ServeHTTP(w, r)
@@ -304,5 +287,45 @@ func (s *Server) StartTLS(getCertificate func(*tls.ClientHelloInfo) (*tls.Certif
 		IdleTimeout:       appCfg.Runtime.HTTPIdleTimeout,
 	}
 	log.Printf("[API] Server starting on %s (TLS)", s.addr)
-	return server.ListenAndServeTLS("", "")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.ListenAndServeTLS("", "")
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		s.BeginDrain()
+		if appCfg.Runtime.ReadinessDrainDelay > 0 {
+			time.Sleep(appCfg.Runtime.ReadinessDrainDelay)
+		}
+		timeout := appCfg.Runtime.HTTPShutdownTimeout
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		err := <-errCh
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
+func (s *Server) BeginDrain() {
+	if s != nil {
+		s.draining.Store(true)
+	}
+}
+
+func (s *Server) IsDraining() bool {
+	return s != nil && s.draining.Load()
 }

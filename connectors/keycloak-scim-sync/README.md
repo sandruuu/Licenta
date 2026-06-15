@@ -25,7 +25,7 @@ KEYCLOAK_ADMIN_PASSWORD=admin
 # KEYCLOAK_CLIENT_SECRET=<service-account-secret>
 
 PDP_BASE_URL=https://pdp:8443
-PDP_TENANT_ID=<organization id>
+PDP_ORGANIZATION_ID=<organization id>
 # alternatively, set the SCIM base URL directly:
 # PDP_SCIM_BASE_URL=https://pdp:8443/scim/v2/<organization id>
 PDP_SCIM_TOKEN=<token configured on the IdP in PDP>
@@ -43,8 +43,8 @@ For production-like setups, prefer `KEYCLOAK_CLIENT_ID` +
 `KEYCLOAK_CLIENT_SECRET` with a Keycloak service account that can read users and
 groups.
 
-`PDP_TENANT_ID` is used to derive the SCIM URL as
-`{PDP_BASE_URL}/scim/v2/{PDP_TENANT_ID}`. Use `PDP_SCIM_BASE_URL` when the
+`PDP_ORGANIZATION_ID` is used to derive the SCIM URL as
+`{PDP_BASE_URL}/scim/v2/{PDP_ORGANIZATION_ID}`. Use `PDP_SCIM_BASE_URL` when the
 connector must target a custom SCIM base path.
 
 ## Behavior

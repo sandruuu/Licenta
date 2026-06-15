@@ -31,7 +31,7 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	if gateway.Status == "revoked" {
 		return nil, fmt.Errorf("%w: revoked gateways cannot be enrolled", ErrForbidden)
 	}
-	if strings.TrimSpace(gateway.TenantID) == "" {
+	if strings.TrimSpace(gateway.OrganizationID) == "" {
 		return nil, fmt.Errorf("%w: gateway organization_id is required before enrollment", ErrInvalidRequest)
 	}
 	csr, err := parseGatewayCSR(req.CSRPEM)
@@ -72,8 +72,6 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	gateway.CertFingerprint = certFingerprint
 	gateway.CertSerial = certSerial
 	gateway.CertExpiresAt = now.Add(s.certificateValidity()).Format(time.RFC3339)
-	gateway.OIDCClientID = ""
-	gateway.OIDCClientSecret = ""
 	gateway.UpdatedAt = now
 	gateway.LastSeenAt = now
 	s.store.SaveGateway(gateway)

@@ -16,17 +16,17 @@ type WatchRequest struct {
 }
 
 type Event struct {
-	Type       string
-	Message    string
-	Reason     string
-	SessionID  string
-	DeviceID   string
-	UserID     string
-	TenantID   string
-	ResourceID string
-	GatewayID  string
-	PolicyID   string
-	Action     string
+	Type           string
+	Message        string
+	Reason         string
+	SessionID      string
+	DeviceID       string
+	UserID         string
+	OrganizationID string
+	ResourceID     string
+	GatewayID      string
+	PolicyID       string
+	Action         string
 }
 
 func (event Event) NormalizedType() string {

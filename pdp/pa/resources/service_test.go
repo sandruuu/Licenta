@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
 	"pdp/store"
 )
@@ -21,15 +22,12 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 	service.now = func() time.Time { return fixedNow }
 
 	resource, err := service.CreateResource(models.Resource{
-		TenantID:  testTenantID,
-		GatewayID: testGatewayID,
-		Name:      "SSH Admin",
-		Type:      "ssh",
-		Host:      "ssh.internal.test",
-		Port:      22,
-		AllowedRoles: []string{
-			"admin",
-		},
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "SSH Admin",
+		Type:           "ssh",
+		Host:           "ssh.internal.test",
+		Port:           22,
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
@@ -37,24 +35,15 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 	if !strings.HasPrefix(resource.ID, "res_") {
 		t.Fatalf("resource ID = %q, want res_ prefix", resource.ID)
 	}
-	if resource.ClientID != "" || resource.ClientSecret != "" {
-		t.Fatalf("protected resource should not receive OIDC credentials: client_id=%q secret=%q", resource.ClientID, resource.ClientSecret)
-	}
 	if !resource.Enabled {
 		t.Fatalf("resource should be enabled by default: %+v", resource)
-	}
-	if len(resource.AllowedRoles) != 0 {
-		t.Fatalf("resource creation should not persist allowed_roles: %+v", resource.AllowedRoles)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "created" || publisher.events[0].fields["resource_id"] != resource.ID {
 		t.Fatalf("resource created event mismatch: %+v", publisher.events)
 	}
 	saved, found := dataStore.GetResource(resource.ID)
-	if !found || saved.Name != resource.Name || saved.ClientID != "" || saved.ClientSecret != "" {
+	if !found || saved.Name != resource.Name {
 		t.Fatalf("resource was not persisted correctly: found=%v saved=%+v", found, saved)
-	}
-	if len(saved.AllowedRoles) != 0 {
-		t.Fatalf("saved resource should not contain allowed_roles: %+v", saved.AllowedRoles)
 	}
 }
 
@@ -85,54 +74,30 @@ func TestServiceCreateResourceRequiresHTTPSForWebResources(t *testing.T) {
 	service := NewService(dataStore)
 
 	_, err := service.CreateResource(models.Resource{
-		TenantID:    testTenantID,
-		GatewayID:   testGatewayID,
-		Name:        "Portal",
-		Type:        "web",
-		Host:        "web-app",
-		ExternalURL: "http://web-app.trustcloud.test",
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "Portal",
+		Type:           "web",
+		Host:           "web-app",
+		ExternalURL:    "http://web-app.trustcloud.test",
 	})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("http web resource error = %v, want ErrInvalidRequest", err)
 	}
 
 	resource, err := service.CreateResource(models.Resource{
-		TenantID:    testTenantID,
-		GatewayID:   testGatewayID,
-		Name:        "Portal",
-		Type:        "web",
-		Host:        "web-app",
-		ExternalURL: "https://web-app.trustcloud.test",
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "Portal",
+		Type:           "web",
+		Host:           "web-app",
+		ExternalURL:    "https://web-app.trustcloud.test",
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
 	}
 	if resource.Port != 443 {
 		t.Fatalf("default web resource port = %d, want 443", resource.Port)
-	}
-}
-
-func TestServiceListResourcesHidesLegacyClientCredentials(t *testing.T) {
-	dataStore := newResourceTestStore(t)
-	service := NewService(dataStore)
-	dataStore.SaveResource(&models.Resource{
-		ID:           "res-1",
-		Name:         "Legacy App",
-		Type:         "web",
-		ClientID:     "DIoldclientid123456",
-		ClientSecret: "old-secret",
-		Enabled:      true,
-	})
-
-	resources, err := service.ListResources()
-	if err != nil {
-		t.Fatalf("ListResources returned error: %v", err)
-	}
-	if len(resources) != 1 {
-		t.Fatalf("resource count = %d, want 1", len(resources))
-	}
-	if resources[0].ClientID != "" || resources[0].ClientSecret != "" {
-		t.Fatalf("legacy credentials should be hidden: client_id=%q secret=%q", resources[0].ClientID, resources[0].ClientSecret)
 	}
 }
 
@@ -144,15 +109,14 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	service := NewService(dataStore)
 	service.SetEventPublisher(publisher)
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", TenantID: testTenantID, GatewayID: testGatewayID, Name: "Old", Type: "ssh", Host: "old.internal", Port: 22, Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: testOrganizationID, GatewayID: testGatewayID, Name: "Old", Type: "ssh", Host: "old.internal", Port: 22, Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
 
 	fields := map[string]json.RawMessage{
-		"name":          json.RawMessage(`"New"`),
-		"port":          json.RawMessage(`2222`),
-		"enabled":       json.RawMessage(`false`),
-		"tags":          json.RawMessage(`["prod","ssh"]`),
-		"metadata":      json.RawMessage(`{"owner":"ops"}`),
-		"allowed_roles": json.RawMessage(`["admin"]`),
+		"name":     json.RawMessage(`"New"`),
+		"port":     json.RawMessage(`2222`),
+		"enabled":  json.RawMessage(`false`),
+		"tags":     json.RawMessage(`["prod","ssh"]`),
+		"metadata": json.RawMessage(`{"owner":"ops"}`),
 	}
 	updated, err := service.UpdateResource("res-1", fields)
 	if err != nil {
@@ -160,9 +124,6 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	}
 	if updated.Name != "New" || updated.Port != 2222 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" {
 		t.Fatalf("resource fields not patched correctly: %+v", updated)
-	}
-	if len(updated.AllowedRoles) != 0 {
-		t.Fatalf("legacy access fields should be ignored: %+v", updated)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "updated" {
 		t.Fatalf("resource updated event mismatch: %+v", publisher.events)
@@ -191,38 +152,33 @@ func TestServiceDeleteResourcePublishesEvent(t *testing.T) {
 
 func newResourceTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
-	return dataStore
+	return testdb.NewStore(t)
 }
 
 const (
-	testTenantID  = "tenant-1"
-	testGatewayID = "gw-1"
+	testOrganizationID = "organization-1"
+	testGatewayID      = "gw-1"
 )
 
 func seedResourceScope(dataStore *store.Store) {
 	now := time.Now()
-	dataStore.SaveTenant(&models.Tenant{
-		ID:        testTenantID,
-		Name:      "Test Tenant",
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        testOrganizationID,
+		Name:      "Test Organization",
 		Domain:    "example.test",
 		Enabled:   true,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
 	dataStore.SaveGateway(&models.Gateway{
-		ID:        testGatewayID,
-		TenantID:  testTenantID,
-		TenantIDs: []string{testTenantID},
-		Name:      "Test Gateway",
-		FQDN:      "gateway.example.test",
-		Status:    "enrolled",
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:              testGatewayID,
+		OrganizationID:  testOrganizationID,
+		OrganizationIDs: []string{testOrganizationID},
+		Name:            "Test Gateway",
+		FQDN:            "gateway.example.test",
+		Status:          "enrolled",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	})
 }
 

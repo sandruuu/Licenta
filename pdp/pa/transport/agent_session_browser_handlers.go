@@ -45,7 +45,7 @@ func (s *Server) renderBrowserAgentSessionState(w http.ResponseWriter, r *http.R
 	switch session.Status {
 	case agentSessionStatusWaitingForUserLogin:
 		if session.IDPProfileID == "" {
-			if idpCfg, tenant, ok := s.defaultIdentityProviderForTenant(session.TenantID); ok && tenant != nil && idpCfg != nil {
+			if idpCfg, organization, ok := s.defaultIdentityProviderForOrganization(session.OrganizationID); ok && organization != nil && idpCfg != nil {
 				s.redirectAgentSessionToIDP(w, r, session, idpCfg)
 				return
 			}
@@ -91,7 +91,7 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 		return
 	}
 	email := strings.TrimSpace(r.Form.Get("email"))
-	idpCfg, ok := s.resolveAgentSessionIdentityProvider(session.TenantID, email)
+	idpCfg, ok := s.resolveAgentSessionIdentityProvider(session.OrganizationID, email)
 	if !ok {
 		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", email, stepUpRemoteIP(r), models.DecisionDeny, "Email does not match any organization directory", false)
 		renderEnrollmentPage(w, "Sign in", "Email does not match any organization directory.", email, true)
@@ -100,14 +100,14 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 	s.redirectAgentSessionToIDP(w, r, session, idpCfg)
 }
 
-func (s *Server) resolveAgentSessionIdentityProvider(tenantID, email string) (*models.IdentityProviderConfig, bool) {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || s == nil || s.pa == nil || s.pa.Store == nil {
+func (s *Server) resolveAgentSessionIdentityProvider(organizationID, email string) (*models.IdentityProviderConfig, bool) {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" || s == nil || s.pa == nil || s.pa.Store == nil {
 		return nil, false
 	}
 	domain := extractDomainFromHint(email)
 	if domain != "" {
-		for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForTenant(tenantID) {
+		for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForOrganization(organizationID) {
 			if cfg == nil || !cfg.Enabled {
 				continue
 			}
@@ -117,13 +117,13 @@ func (s *Server) resolveAgentSessionIdentityProvider(tenantID, email string) (*m
 				}
 			}
 		}
-		if tenant, found := s.pa.Store.GetTenant(tenantID); found && tenant != nil && tenant.Enabled && tenantMatchesDomain(tenant, domain) {
-			idpCfg, _, ok := s.defaultIdentityProviderForTenant(tenantID)
+		if organization, found := s.pa.Store.GetOrganization(organizationID); found && organization != nil && organization.Enabled && organizationMatchesDomain(organization, domain) {
+			idpCfg, _, ok := s.defaultIdentityProviderForOrganization(organizationID)
 			return idpCfg, ok
 		}
 		return nil, false
 	}
-	idpCfg, _, ok := s.defaultIdentityProviderForTenant(tenantID)
+	idpCfg, _, ok := s.defaultIdentityProviderForOrganization(organizationID)
 	return idpCfg, ok
 }
 
@@ -180,7 +180,7 @@ func (s *Server) redirectAgentSessionToIDP(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Identity provider configuration error", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[AGENT-SESSION] Redirecting session to IdP: session=%s tenant=%s idp=%s", session.ID, session.TenantID, idpCfg.ID)
+	log.Printf("[AGENT-SESSION] Redirecting session to IdP: session=%s organization=%s idp=%s", session.ID, session.OrganizationID, idpCfg.ID)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
@@ -190,7 +190,7 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 		return false
 	}
 	idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IDPProfileID)
-	if !ok || idpCfg == nil || !idpCfg.Enabled || !strings.EqualFold(idpCfg.TenantID, session.TenantID) {
+	if !ok || idpCfg == nil || !idpCfg.Enabled || !strings.EqualFold(idpCfg.OrganizationID, session.OrganizationID) {
 		http.Error(w, "Session identity provider not found", http.StatusBadRequest)
 		return true
 	}
@@ -224,7 +224,7 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 	if len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
 		role = auth.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
 	}
-	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.Issuer, claims.Username, claims.Email, role, session.TenantID)
+	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.Issuer, claims.Username, claims.Email, role, session.OrganizationID)
 	if err != nil {
 		log.Printf("[AGENT-SESSION] Federated user provisioning failed: session=%s err=%v", session.ID, err)
 		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", claims.Username, stepUpRemoteIP(r), models.DecisionDeny, "User account could not be prepared after organization sign-in", false)

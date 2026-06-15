@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"pdp/models"
+	"pdp/runtime/redisstate"
 	"pdp/util"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -19,6 +21,9 @@ const (
 	CommandProvisionSession = "provision_session"
 	CommandRevokeSession    = "revoke_session"
 	CommandHeartbeat        = "heartbeat"
+
+	gatewayControlPresenceTTL = 5 * time.Second
+	gatewayControlResultTTL   = time.Minute
 )
 
 var (
@@ -47,27 +52,34 @@ type ControlRegistry struct {
 	mu          sync.RWMutex
 	connections map[string]*ControlConnection
 	now         func() time.Time
+	runtime     *redisstate.Client
+	instanceID  string
 }
 
 type ControlConnection struct {
+	registry    *ControlRegistry
 	gatewayID   string
 	fqdn        string
 	endpoint    string
+	ownerID     string
 	connectedAt time.Time
-	commands    chan controlEnvelope
 	done        chan struct{}
 	closeOnce   sync.Once
 }
 
-type controlEnvelope struct {
-	command *structpb.Struct
-	result  chan error
-}
-
-func NewControlRegistry() *ControlRegistry {
+func NewControlRegistry(runtimeState *redisstate.Client) *ControlRegistry {
+	instanceID := ""
+	if runtimeState != nil {
+		instanceID = runtimeState.InstanceID()
+	}
+	if instanceID == "" {
+		instanceID, _ = util.GenerateID("pdp")
+	}
 	return &ControlRegistry{
 		connections: make(map[string]*ControlConnection),
 		now:         time.Now,
+		runtime:     runtimeState,
+		instanceID:  instanceID,
 	}
 }
 
@@ -75,10 +87,31 @@ func (registry *ControlRegistry) ConnectedGatewayIDs() []string {
 	if registry == nil {
 		return nil
 	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
-	ids := make([]string, 0, len(registry.connections))
-	for gatewayID := range registry.connections {
+	if registry.runtime == nil {
+		registry.mu.RLock()
+		defer registry.mu.RUnlock()
+		ids := make([]string, 0, len(registry.connections))
+		for gatewayID := range registry.connections {
+			ids = append(ids, gatewayID)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	presence, err := registry.runtime.ListGatewayPresence(context.Background())
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(presence))
+	seen := make(map[string]struct{}, len(presence))
+	for _, item := range presence {
+		gatewayID := strings.TrimSpace(item.GatewayID)
+		if gatewayID == "" {
+			continue
+		}
+		if _, ok := seen[gatewayID]; ok {
+			continue
+		}
+		seen[gatewayID] = struct{}{}
 		ids = append(ids, gatewayID)
 	}
 	sort.Strings(ids)
@@ -141,12 +174,17 @@ func (registry *ControlRegistry) Register(gateway *models.Gateway, endpoint stri
 	if registry.now == nil {
 		registry.now = time.Now
 	}
+	streamID, err := util.GenerateID("gwstream")
+	if err != nil {
+		return nil
+	}
 	connection := &ControlConnection{
+		registry:    registry,
 		gatewayID:   strings.TrimSpace(gateway.ID),
 		fqdn:        strings.TrimSpace(gateway.FQDN),
 		endpoint:    strings.TrimSpace(endpoint),
+		ownerID:     registry.instanceID + ":" + streamID,
 		connectedAt: registry.now().UTC(),
-		commands:    make(chan controlEnvelope, 32),
 		done:        make(chan struct{}),
 	}
 	registry.mu.Lock()
@@ -155,6 +193,10 @@ func (registry *ControlRegistry) Register(gateway *models.Gateway, endpoint stri
 	}
 	registry.connections[connection.gatewayID] = connection
 	registry.mu.Unlock()
+	if err := registry.saveConnectionState(context.Background(), connection); err != nil {
+		connection.Close()
+		return nil
+	}
 	return connection
 }
 
@@ -166,42 +208,73 @@ func (registry *ControlRegistry) Unregister(connection *ControlConnection) {
 	if registry.connections[connection.gatewayID] == connection {
 		delete(registry.connections, connection.gatewayID)
 		connection.Close()
+		if registry.runtime != nil {
+			_ = registry.runtime.DeleteGatewayPresence(context.Background(), connection.gatewayID, connection.ownerID)
+		}
 	}
 	registry.mu.Unlock()
 }
 
 func (registry *ControlRegistry) send(ctx context.Context, gatewayID string, command *structpb.Struct) error {
-	if registry == nil {
+	if registry == nil || registry.runtime == nil {
 		return ErrControlNotConnected
 	}
 	gatewayID = strings.TrimSpace(gatewayID)
 	if gatewayID == "" {
 		return errors.New("gateway_id is required")
 	}
-	registry.mu.RLock()
-	connection := registry.connections[gatewayID]
-	registry.mu.RUnlock()
-	if connection == nil {
-		return fmt.Errorf("%w: %s", ErrControlNotConnected, gatewayID)
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	envelope := controlEnvelope{command: command, result: make(chan error, 1)}
-	select {
-	case connection.commands <- envelope:
-	case <-connection.done:
-		return fmt.Errorf("%w: %s", ErrControlNotConnected, gatewayID)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	select {
-	case err := <-envelope.result:
+	presence, ok, err := registry.runtime.GetGatewayPresence(ctx, gatewayID)
+	if err != nil {
 		return err
-	case <-connection.done:
+	}
+	if !ok || strings.TrimSpace(presence.OwnerID) == "" {
 		return fmt.Errorf("%w: %s", ErrControlNotConnected, gatewayID)
-	case <-ctx.Done():
-		return ctx.Err()
+	}
+	commandMap := command.AsMap()
+	commandID, _ := commandMap["command_id"].(string)
+	commandID = strings.TrimSpace(commandID)
+	if commandID == "" {
+		return errors.New("gateway control command_id is required")
+	}
+	raw, err := json.Marshal(commandMap)
+	if err != nil {
+		return err
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().UTC().Add(30 * time.Second)
+	}
+	ttl := time.Until(deadline)
+	if ttl <= 0 {
+		return context.DeadlineExceeded
+	}
+	if err := registry.runtime.EnqueueGatewayCommand(ctx, gatewayID, presence.OwnerID, commandID, raw, ttl); err != nil {
+		if errors.Is(err, redisstate.ErrGatewayControlNotConnected) || errors.Is(err, redisstate.ErrGatewayControlOwnerChanged) {
+			return fmt.Errorf("%w: %s", ErrControlNotConnected, gatewayID)
+		}
+		return err
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		result, found, err := registry.runtime.GetGatewayCommandResult(ctx, commandID)
+		if err != nil {
+			return err
+		}
+		if found {
+			if strings.TrimSpace(result.Error) != "" {
+				return errors.New(result.Error)
+			}
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -228,10 +301,68 @@ func (connection *ControlConnection) Serve(ctx context.Context, send func(*struc
 			return ctx.Err()
 		case <-connection.done:
 			return ErrControlStreamReplaced
-		case envelope := <-connection.commands:
-			envelope.result <- send(envelope.command)
+		default:
+		}
+		if err := connection.registry.saveConnectionState(ctx, connection); err != nil {
+			return err
+		}
+		envelope, err := connection.registry.runtime.PopGatewayCommand(ctx, connection.gatewayID, connection.ownerID, 250*time.Millisecond)
+		if errors.Is(err, redisstate.ErrGatewayControlOwnerChanged) {
+			return ErrControlStreamReplaced
+		}
+		if err != nil {
+			return err
+		}
+		if envelope == nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-connection.done:
+				return ErrControlStreamReplaced
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+		if err := connection.sendEnvelope(ctx, envelope, send); err != nil {
+			return err
 		}
 	}
+}
+
+func (registry *ControlRegistry) saveConnectionState(ctx context.Context, connection *ControlConnection) error {
+	if registry == nil || registry.runtime == nil || connection == nil {
+		return nil
+	}
+	return registry.runtime.SetGatewayPresence(ctx, redisstate.GatewayPresence{
+		GatewayID: connection.gatewayID,
+		OwnerID:   connection.ownerID,
+		Endpoint:  connection.endpoint,
+	}, gatewayControlPresenceTTL)
+}
+
+func (connection *ControlConnection) sendEnvelope(ctx context.Context, envelope *redisstate.GatewayCommandEnvelope, send func(*structpb.Struct) error) error {
+	if connection == nil || connection.registry == nil || connection.registry.runtime == nil || envelope == nil {
+		return nil
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		_ = connection.registry.runtime.CompleteGatewayCommand(ctx, envelope.CommandID, err.Error(), gatewayControlResultTTL)
+		return nil
+	}
+	command, err := structpb.NewStruct(payload)
+	if err != nil {
+		_ = connection.registry.runtime.CompleteGatewayCommand(ctx, envelope.CommandID, err.Error(), gatewayControlResultTTL)
+		return nil
+	}
+	sendErr := send(command)
+	errMessage := ""
+	if sendErr != nil {
+		errMessage = sendErr.Error()
+	}
+	if err := connection.registry.runtime.CompleteGatewayCommand(ctx, envelope.CommandID, errMessage, gatewayControlResultTTL); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateProvisionedSession(session ProvisionedSession) error {

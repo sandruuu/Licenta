@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"time"
+
+	"pdp/runtime/redisstate"
 )
 
 var errAgentSessionNotFound = errors.New("agent session transaction not found")
@@ -18,11 +20,12 @@ const (
 	agentSessionStatusReadyToClaim        = "READY_TO_CLAIM"
 	agentSessionStatusDenied              = "DENIED"
 	agentSessionStatusClaimed             = "CLAIMED"
+	agentSessionStateKind                 = "agent_session_transaction"
 )
 
 type agentSessionTransaction struct {
 	ID                         string
-	TenantID                   string
+	OrganizationID             string
 	DeviceID                   string
 	DeviceCertThumbprint       string
 	LocalUserSIDHash           string
@@ -55,31 +58,26 @@ type agentSessionTransaction struct {
 }
 
 type agentSessionStore struct {
-	mu       sync.RWMutex
-	sessions map[string]*agentSessionTransaction
+	state *redisstate.Client
 }
 
-func newAgentSessionStore() *agentSessionStore {
-	return &agentSessionStore{sessions: make(map[string]*agentSessionTransaction)}
+func newAgentSessionStore(state *redisstate.Client) *agentSessionStore {
+	return &agentSessionStore{state: state}
 }
 
 func (store *agentSessionStore) save(session *agentSessionTransaction) {
-	if store == nil || session == nil {
+	if store == nil || store.state == nil || session == nil {
 		return
 	}
-	store.mu.Lock()
-	store.sessions[strings.TrimSpace(session.ID)] = session
-	store.mu.Unlock()
+	_ = store.saveSession(session)
 }
 
 func (store *agentSessionStore) get(id string) (*agentSessionTransaction, bool) {
-	if store == nil {
-		return nil, false
-	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	session, ok := store.sessions[strings.TrimSpace(id)]
-	if !ok || session == nil {
+	session, ok := store.load(strings.TrimSpace(id))
+	if !ok || session == nil || sessionExpired(session, time.Now().UTC()) {
+		if store != nil && store.state != nil {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, id)
+		}
 		return nil, false
 	}
 	copy := *session
@@ -87,16 +85,14 @@ func (store *agentSessionStore) get(id string) (*agentSessionTransaction, bool) 
 }
 
 func (store *agentSessionStore) update(id string, fn func(*agentSessionTransaction) error) (*agentSessionTransaction, error) {
-	if store == nil {
-		return nil, errAgentSessionNotFound
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	session, ok := store.sessions[strings.TrimSpace(id)]
-	if !ok || session == nil {
+	session, ok := store.load(strings.TrimSpace(id))
+	if !ok || session == nil || sessionExpired(session, time.Now().UTC()) {
 		return nil, errAgentSessionNotFound
 	}
 	if err := fn(session); err != nil {
+		return nil, err
+	}
+	if err := store.saveSession(session); err != nil {
 		return nil, err
 	}
 	copy := *session
@@ -104,18 +100,22 @@ func (store *agentSessionStore) update(id string, fn func(*agentSessionTransacti
 }
 
 func (store *agentSessionStore) getByBrowserState(state string) (*agentSessionTransaction, bool) {
-	if store == nil {
-		return nil, false
-	}
 	state = strings.TrimSpace(state)
-	if state == "" {
+	if store == nil || store.state == nil || state == "" {
 		return nil, false
 	}
-	store.mu.RLock()
-	defer store.mu.RUnlock()
-	for _, session := range store.sessions {
-		if session != nil && session.BrowserState == state {
-			copy := *session
+	for key, raw := range store.listRaw() {
+		var session agentSessionTransaction
+		if err := json.Unmarshal(raw, &session); err != nil {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
+			continue
+		}
+		if sessionExpired(&session, time.Now().UTC()) {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
+			continue
+		}
+		if session.BrowserState == state {
+			copy := session
 			return &copy, true
 		}
 	}
@@ -123,22 +123,62 @@ func (store *agentSessionStore) getByBrowserState(state string) (*agentSessionTr
 }
 
 func (store *agentSessionStore) deleteByAgentSessionID(agentSessionID string) bool {
-	if store == nil {
-		return false
-	}
 	agentSessionID = strings.TrimSpace(agentSessionID)
-	if agentSessionID == "" {
+	if store == nil || store.state == nil || agentSessionID == "" {
 		return false
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	for id, session := range store.sessions {
-		if session != nil && strings.TrimSpace(session.AgentSessionID) == agentSessionID {
-			delete(store.sessions, id)
+	for key, raw := range store.listRaw() {
+		var session agentSessionTransaction
+		if err := json.Unmarshal(raw, &session); err != nil {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
+			continue
+		}
+		if strings.TrimSpace(session.AgentSessionID) == agentSessionID {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
 			return true
 		}
 	}
 	return false
+}
+
+func (store *agentSessionStore) saveSession(session *agentSessionTransaction) error {
+	raw, err := json.Marshal(session)
+	if err != nil {
+		return err
+	}
+	expiresAt := session.ExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = time.Now().UTC().Add(5 * time.Minute)
+	}
+	return store.state.SaveEphemeralState(agentSessionStateKind, session.ID, raw, expiresAt)
+}
+
+func (store *agentSessionStore) load(id string) (*agentSessionTransaction, bool) {
+	if store == nil || store.state == nil || strings.TrimSpace(id) == "" {
+		return nil, false
+	}
+	raw, ok := store.state.GetEphemeralState(agentSessionStateKind, id)
+	if !ok {
+		return nil, false
+	}
+	var session agentSessionTransaction
+	if err := json.Unmarshal(raw, &session); err != nil {
+		_ = store.state.DeleteEphemeralState(agentSessionStateKind, id)
+		return nil, false
+	}
+	return &session, true
+}
+
+func (store *agentSessionStore) listRaw() map[string][]byte {
+	values, err := store.state.ListEphemeralState(agentSessionStateKind)
+	if err != nil {
+		return nil
+	}
+	return values
+}
+
+func sessionExpired(session *agentSessionTransaction, now time.Time) bool {
+	return session == nil || (!session.ExpiresAt.IsZero() && !now.Before(session.ExpiresAt))
 }
 
 func randomSessionSecret(length int) (string, error) {

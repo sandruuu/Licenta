@@ -21,7 +21,7 @@ Gateway-ul nu face:
 
 Aceste responsabilitati raman la PDP/PA/PE si la agentul endpoint. Gateway-ul aplica doar decizia primita de la PA: accepta o conexiune mTLS de la agent, verifica o sesiune provisionata local prin control plane si releaza TCP catre tinta interna exacta trimisa de PA.
 
-Comportamentul este fail-closed: fara certificat gateway valid, fara CA PA, fara sesiune provisionata, fara token de sesiune valid, fara device binding corect sau fara control plane functional pentru mentenanta, gateway-ul refuza accesul.
+Comportamentul este fail-closed: fara certificat gateway valid, fara CA PA, fara sesiune provisionata, fara token de sesiune valid, fara device binding corect sau fara control plane functional pentru intretinere, gateway-ul refuza accesul.
 
 ## 2. Structura codului
 
@@ -529,7 +529,7 @@ Daca exista, sesiunea este marcata revoked si toate relay-urile active pentru ac
 
 `heartbeat` primeste ack `ok` cu mesaj `heartbeat received`. Nu modifica state local.
 
-## 8. Trust service si mentenanta cu PA
+## 8. Trust service si intretinere cu PA
 
 Gateway foloseste serviciul:
 
@@ -1427,7 +1427,7 @@ Unele string-uri apar doar in teste si nu reprezinta configuratie de productie:
 - `gateway.internal.test`;
 - `gateway.example.test:9443`;
 - `spiffe://gateway/organization/org-1/gateway/gw-1`;
-- `spiffe://gateway/tenant/tenant-1/gateway/gw-1`;
+- `spiffe://gateway/account/organization-1/gateway/gw-1`;
 - `device-1`;
 - `device-2`;
 - `session-secret`;
@@ -1655,7 +1655,7 @@ Nume exacte de teste prezente in gateway:
 - `TestValidateGatewayCertificateRejectsNotYetValidCertificate`;
 - `TestGatewayIdentityFromCertificateReadsPAIdentity`;
 - `TestGatewayIdentityFromCertificateRequiresFQDN`;
-- `TestGatewayIdentityFromCertificateRejectsLegacyTenantPath`;
+- `TestGatewayIdentityFromCertificateRejectsInvalidOrganizationPath`;
 - `TestHandleProvisionSessionCommand`;
 - `TestHelloMessageIncludesPublicEndpoint`;
 - `TestHandleRevokeSessionCommand`;
@@ -1676,7 +1676,7 @@ Nume exacte de teste prezente in gateway:
 - `TestStoreListSessionsReturnsCopies`;
 - `TestStorePurgeExpiredRemovesExpiredSessions`.
 
-## 21. Checklist de mentenanta
+## 21. Checklist de operare
 
 Cand se modifica gateway-ul, verifica explicit:
 

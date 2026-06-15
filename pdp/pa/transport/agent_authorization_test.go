@@ -19,16 +19,16 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	server, gatewayCert := newGatewayControlTestServer(t, "gw-1", "gateway.example.test")
 	store := server.pa.Store
 	store.SaveResource(&models.Resource{
-		ID:        "res-ssh",
-		TenantID:  transportTestTenantID,
-		GatewayID: "gw-1",
-		Name:      "SSH Server",
-		Type:      "ssh",
-		Host:      "10.10.0.10",
-		Port:      22,
-		Enabled:   true,
-		CreatedAt: time.Now().Add(-time.Hour),
-		UpdatedAt: time.Now().Add(-time.Hour),
+		ID:             "res-ssh",
+		OrganizationID: transportTestOrganizationID,
+		GatewayID:      "gw-1",
+		Name:           "SSH Server",
+		Type:           "ssh",
+		Host:           "10.10.0.10",
+		Port:           22,
+		Enabled:        true,
+		CreatedAt:      time.Now().Add(-time.Hour),
+		UpdatedAt:      time.Now().Add(-time.Hour),
 	})
 	deviceCertPEM, deviceCert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	enrollment := &models.DeviceEnrollment{
@@ -147,25 +147,25 @@ func TestAgentAuthorizationGRPCReturnsStepUpChallengeWithoutGatewaySession(t *te
 		UpdatedAt: now,
 	})
 	store.SavePolicyAssignment(&models.PolicyAssignment{
-		ID:        "assign-step-up",
-		PolicyID:  "policy-step-up",
-		TenantID:  transportTestTenantID,
-		Level:     "organization",
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "assign-step-up",
+		PolicyID:       "policy-step-up",
+		OrganizationID: transportTestOrganizationID,
+		Level:          "organization",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	store.SaveResource(&models.Resource{
-		ID:        "res-web",
-		TenantID:  transportTestTenantID,
-		GatewayID: "gw-1",
-		Name:      "Web App",
-		Type:      "web",
-		Host:      "web-app",
-		Port:      443,
-		Enabled:   true,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:             "res-web",
+		OrganizationID: transportTestOrganizationID,
+		GatewayID:      "gw-1",
+		Name:           "Web App",
+		Type:           "web",
+		Host:           "web-app",
+		Port:           443,
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	})
 	deviceCertPEM, deviceCert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
 	enrollment := &models.DeviceEnrollment{

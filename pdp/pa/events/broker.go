@@ -1,33 +1,22 @@
-// Package events provides an in-memory topic-based pub/sub broker used by
-// the PA control plane to fan out internal state-change events.
-//
-// Design goals:
-//   - Lock contention bounded by topic count, not subscriber count.
-//   - Slow subscribers MUST NOT block the publisher: each subscriber owns a
-//     bounded buffered channel; if it fills the broker drops the oldest
-//     event for that subscriber and increments a counter so operators can
-//     spot mis-sized buffers.
-//   - The broker is single-process. A future multi-PDP HA deployment
-//     would replace this with NATS / Redis pub/sub; the public surface is
-//     intentionally narrow so that swap is straightforward.
 package events
 
 import (
+	"context"
+	"encoding/json"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"pdp/runtime/redisstate"
 )
 
-// Event is the unit of fan-out. The Type names should be stable strings
-// since they are part of the wire protocol consumed by long-lived clients.
 type Event struct {
-	Type    string      `json:"type"`              // e.g. "revocation", "policy.updated", "session.deleted"
-	Time    time.Time   `json:"time"`              // server-side publish timestamp
-	Payload interface{} `json:"payload,omitempty"` // event-specific JSON-serialisable body
+	Type    string      `json:"type"`
+	Time    time.Time   `json:"time"`
+	Payload interface{} `json:"payload,omitempty"`
 }
 
-// Subscription is what a subscriber receives. C is closed when the
-// subscription is cancelled (Unsubscribe or broker shutdown).
 type Subscription struct {
 	C       <-chan Event
 	id      uint64
@@ -37,36 +26,44 @@ type Subscription struct {
 	dropped atomic.Uint64
 }
 
-// Dropped returns the number of events dropped for this subscription due
-// to a full buffer. Useful for operators to detect undersized clients.
 func (s *Subscription) Dropped() uint64 { return s.dropped.Load() }
 
-// Broker is a topic-based pub/sub fanout. Zero value is not usable —
-// always construct via NewBroker.
 type Broker struct {
 	mu       sync.RWMutex
-	subs     map[string]map[uint64]*Subscription // topic -> id -> sub
+	subs     map[string]map[uint64]*Subscription
 	nextID   atomic.Uint64
 	bufSize  int
 	shutdown atomic.Bool
+	runtime  *redisstate.Client
+	cancel   context.CancelFunc
+	closeSub func() error
 }
 
-// NewBroker returns an empty broker. bufSize is the per-subscriber channel
-// capacity (recommended 32–128); too small causes drops on bursts, too
-// large wastes memory.
-func NewBroker(bufSize int) *Broker {
+func NewBroker(runtimeState *redisstate.Client, bufSize int) *Broker {
 	if bufSize <= 0 {
 		bufSize = 64
 	}
-	return &Broker{
+	ctx, cancel := context.WithCancel(context.Background())
+	b := &Broker{
 		subs:    make(map[string]map[uint64]*Subscription),
 		bufSize: bufSize,
+		runtime: runtimeState,
+		cancel:  cancel,
 	}
+	if runtimeState == nil {
+		log.Printf("[EVENTS] Redis runtime state unavailable; event broker disabled")
+		return b
+	}
+	messages, closeSub, err := runtimeState.SubscribeEvents(ctx, standardTopics()...)
+	if err != nil {
+		log.Printf("[EVENTS] Redis subscribe failed: %v", err)
+		return b
+	}
+	b.closeSub = closeSub
+	go b.listen(messages)
+	return b
 }
 
-// Subscribe registers a subscriber for the given topics. The returned
-// Subscription's channel will receive events published to any of those
-// topics until Unsubscribe (or Shutdown) is called.
 func (b *Broker) Subscribe(topics ...string) *Subscription {
 	id := b.nextID.Add(1)
 	ch := make(chan Event, b.bufSize)
@@ -90,8 +87,6 @@ func (b *Broker) Subscribe(topics ...string) *Subscription {
 	return sub
 }
 
-// Unsubscribe removes the subscriber and closes its channel. Safe to call
-// multiple times.
 func (b *Broker) Unsubscribe(sub *Subscription) {
 	if sub == nil || !sub.closed.CompareAndSwap(false, true) {
 		return
@@ -109,19 +104,51 @@ func (b *Broker) Unsubscribe(sub *Subscription) {
 	close(sub.send)
 }
 
-// Publish fan-outs an event to every subscriber of topic. It never blocks:
-// if a subscriber's buffer is full the oldest event for that subscriber is
-// dropped (counted via Subscription.Dropped()) and the new event is enqueued.
 func (b *Broker) Publish(topic string, evt Event) {
-	if b.shutdown.Load() {
+	if b == nil || b.shutdown.Load() {
 		return
 	}
 	if evt.Time.IsZero() {
-		evt.Time = time.Now()
+		evt.Time = time.Now().UTC()
 	}
+	if evt.Type == "" {
+		evt.Type = topic
+	}
+	if b.runtime == nil {
+		log.Printf("[EVENTS] Redis runtime state unavailable for topic=%s", topic)
+		return
+	}
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("[EVENTS] marshal topic=%s: %v", topic, err)
+		return
+	}
+	if err := b.runtime.PublishEvent(topic, raw); err != nil {
+		log.Printf("[EVENTS] publish topic=%s: %v", topic, err)
+	}
+}
 
-	// Snapshot subscriber set under read lock so Publish is safe to call
-	// concurrently with Subscribe / Unsubscribe.
+func (b *Broker) listen(messages <-chan redisstate.PubSubMessage) {
+	for msg := range messages {
+		if b.shutdown.Load() {
+			return
+		}
+		var evt Event
+		if err := json.Unmarshal(msg.Payload, &evt); err != nil {
+			log.Printf("[EVENTS] decode topic=%s: %v", msg.Topic, err)
+			continue
+		}
+		if evt.Type == "" {
+			evt.Type = msg.Topic
+		}
+		b.deliver(msg.Topic, evt)
+	}
+}
+
+func (b *Broker) deliver(topic string, evt Event) {
+	if b.shutdown.Load() {
+		return
+	}
 	b.mu.RLock()
 	m := b.subs[topic]
 	if len(m) == 0 {
@@ -141,10 +168,6 @@ func (b *Broker) Publish(topic string, evt Event) {
 		select {
 		case s.send <- evt:
 		default:
-			// Buffer full: drop oldest, then attempt enqueue. We accept a
-			// best-effort drop here — if the channel is being concurrently
-			// drained we may double-drop, but the drop counter is
-			// monotonic so over-counting is bounded by races.
 			select {
 			case <-s.send:
 				s.dropped.Add(1)
@@ -159,11 +182,15 @@ func (b *Broker) Publish(topic string, evt Event) {
 	}
 }
 
-// Shutdown cancels all subscriptions and prevents further Publish calls
-// from delivering. Safe to call once at process shutdown.
 func (b *Broker) Shutdown() {
-	if !b.shutdown.CompareAndSwap(false, true) {
+	if b == nil || !b.shutdown.CompareAndSwap(false, true) {
 		return
+	}
+	if b.cancel != nil {
+		b.cancel()
+	}
+	if b.closeSub != nil {
+		_ = b.closeSub()
 	}
 	b.mu.Lock()
 	subs := make([]*Subscription, 0)
@@ -186,13 +213,24 @@ func (b *Broker) Shutdown() {
 	}
 }
 
-// Standard topic names referenced by handlers and long-lived event clients.
 const (
-	TopicRevocation       = "revocation"        // payload: {serial: "..."}
-	TopicPolicyUpdated    = "policy.updated"    // payload: {} for internal state-change consumers
-	TopicResourcesUpdated = "resources.updated" // payload: {resource_id?: "..."}
-	TopicSessionDeleted   = "session.deleted"   // payload: {session_id: "..."}
-	TopicHealthChanged    = "health.changed"    // payload: {device_id: "...", status: "..."}
-	TopicDeviceRevoked    = "device.revoked"    // payload: {device_id: "..."}
-	TopicGatewayRevoked   = "gateway.revoked"   // payload: {gateway_id: "..."}
+	TopicRevocation       = "revocation"
+	TopicPolicyUpdated    = "policy.updated"
+	TopicResourcesUpdated = "resources.updated"
+	TopicSessionDeleted   = "session.deleted"
+	TopicHealthChanged    = "health.changed"
+	TopicDeviceRevoked    = "device.revoked"
+	TopicGatewayRevoked   = "gateway.revoked"
 )
+
+func standardTopics() []string {
+	return []string{
+		TopicRevocation,
+		TopicPolicyUpdated,
+		TopicResourcesUpdated,
+		TopicSessionDeleted,
+		TopicHealthChanged,
+		TopicDeviceRevoked,
+		TopicGatewayRevoked,
+	}
+}

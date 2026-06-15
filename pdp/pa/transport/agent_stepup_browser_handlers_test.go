@@ -19,14 +19,14 @@ import (
 func TestBrowserStepUpOffersTOTPSetupForUserWithoutMFA(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
@@ -118,16 +118,16 @@ func TestBrowserStepUpSelectionMatchesAdminMFAStyle(t *testing.T) {
 	server.pa.Cfg.WebAuthnRPID = "localhost"
 	server.pa.Cfg.WebAuthnRPName = "TrustCloud"
 	server.pa.Cfg.WebAuthnRPOrigins = "https://localhost:8443"
-	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg)
+	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg, server.pa.Runtime)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID, nil)
@@ -193,22 +193,22 @@ func TestBrowserStepUpConfiguredTOTPMatchesAdminMFALayout(t *testing.T) {
 	server.pa.Cfg.WebAuthnRPID = "localhost"
 	server.pa.Cfg.WebAuthnRPName = "TrustCloud"
 	server.pa.Cfg.WebAuthnRPOrigins = "https://localhost:8443"
-	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg)
+	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg, server.pa.Runtime)
 	secret, err := auth.GenerateTOTPSecret()
 	if err != nil {
 		t.Fatalf("generate TOTP secret: %v", err)
 	}
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		TOTPSecret:   secret,
-		MFAMethods:   []string{"totp"},
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		TOTPSecret:     secret,
+		MFAMethods:     []string{"totp"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
@@ -264,7 +264,7 @@ func TestBrowserStepUpPasskeySetupUsesIdentityVerificationCopy(t *testing.T) {
 	server.pa.Cfg.WebAuthnRPID = "localhost"
 	server.pa.Cfg.WebAuthnRPName = "TrustCloud"
 	server.pa.Cfg.WebAuthnRPOrigins = "https://localhost:8443"
-	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg)
+	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg, server.pa.Runtime)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
 		ID:              "user-stepup",
 		Username:        "alice@example.test",
@@ -272,7 +272,7 @@ func TestBrowserStepUpPasskeySetupUsesIdentityVerificationCopy(t *testing.T) {
 		ExternalSubject: "alice-idp-subject",
 		AuthSource:      "https://idp.example.test",
 		Role:            "user",
-		TenantID:        transportTestTenantID,
+		OrganizationID:  transportTestOrganizationID,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}, []string{"webauthn"})
@@ -313,16 +313,16 @@ func TestBrowserStepUpPasskeyCreatePageUsesAdminMFAStyle(t *testing.T) {
 	server.pa.Cfg.WebAuthnRPID = "localhost"
 	server.pa.Cfg.WebAuthnRPName = "TrustCloud"
 	server.pa.Cfg.WebAuthnRPOrigins = "https://localhost:8443"
-	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg)
+	server.pa.Auth.WebAuthn = mfa.NewWebAuthnProvider(server.pa.Cfg, server.pa.Runtime)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"webauthn"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=webauthn", nil)
@@ -370,14 +370,14 @@ func TestBrowserStepUpPasskeyCreatePageUsesAdminMFAStyle(t *testing.T) {
 func TestBrowserStepUpCancelDeniesChallenge(t *testing.T) {
 	server, _ := newDeviceAPITestServer(t)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID, nil)
@@ -416,14 +416,14 @@ func TestBrowserStepUpCancelDeniesChallenge(t *testing.T) {
 func TestBrowserStepUpCompletedStatusUsesResourceRetryMessage(t *testing.T) {
 	server, _ := newDeviceAPITestServer(t)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
 	if _, err := server.pa.StepUps.Complete(challenge.ID, "totp", time.Now().UTC()); err != nil {
@@ -455,14 +455,14 @@ func TestBrowserStepUpCompletedStatusUsesResourceRetryMessage(t *testing.T) {
 func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
@@ -522,18 +522,18 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 }
 
 func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
-	server, dataStore := newDeviceAPITestServer(t)
+	server, _ := newDeviceAPITestServer(t)
 	server.pa.Cfg.MaxLoginAttempts = 2
 	server.pa.Cfg.LockoutDuration = time.Hour
 	challenge := newStepUpBrowserChallenge(t, server, &models.User{
-		ID:           "user-stepup",
-		Username:     "alice@example.test",
-		Email:        "alice@example.test",
-		PasswordHash: testPasswordHash(t, "secret"),
-		Role:         "user",
-		TenantID:     transportTestTenantID,
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+		ID:             "user-stepup",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
@@ -554,14 +554,14 @@ func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
 		server.handleBrowserStepUp(rr, req)
 	}
 
-	if locked, _ := dataStore.IsLockedOut("alice@example.test"); !locked {
+	if locked, _, _ := server.pa.Runtime.IsLockedOut("alice@example.test"); !locked {
 		t.Fatal("expected failed MFA re-authentication to lock the account globally")
 	}
 }
 
 func TestStepUpCSPDisallowsInlineScripts(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/stepup-1", nil)
-	policy := contentSecurityPolicy(req, "'self'")
+	policy := contentSecurityPolicy(req)
 	if !strings.Contains(policy, "script-src 'self';") {
 		t.Fatalf("step-up CSP did not restrict script-src to self: %s", policy)
 	}
@@ -604,7 +604,7 @@ func newStepUpBrowserChallenge(t *testing.T, server *Server, user *models.User, 
 		AgentSessionID: "agent-session-1",
 		UserID:         user.ID,
 		Username:       user.Username,
-		TenantID:       user.TenantID,
+		OrganizationID: user.OrganizationID,
 		DeviceID:       "device-1",
 		ResourceID:     "res-web",
 		PublicOrigin:   "https://pdp.example.test",

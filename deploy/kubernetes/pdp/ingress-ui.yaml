@@ -1,0 +1,29 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pdp-ui
+  namespace: trustcloud
+  labels:
+    app.kubernetes.io/name: pdp
+    app.kubernetes.io/part-of: trustcloud
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - pdp.apps.fsisc.ro
+      secretName: pdp-apps-fsisc-ro-tls
+  rules:
+    - host: pdp.apps.fsisc.ro
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pdp
+                port:
+                  number: 8443

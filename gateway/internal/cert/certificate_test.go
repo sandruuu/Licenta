@@ -139,12 +139,12 @@ func TestGatewayIdentityFromCertificateRequiresFQDN(t *testing.T) {
 	}
 }
 
-func TestGatewayIdentityFromCertificateRejectsLegacyTenantPath(t *testing.T) {
-	identityURI, err := url.Parse("spiffe://gateway/tenant/tenant-1/gateway/gw-1")
+func TestGatewayIdentityFromCertificateRejectsInvalidOrganizationPath(t *testing.T) {
+	identityURI, err := url.Parse("spiffe://gateway/account/organization-1/gateway/gw-1")
 	if err != nil {
 		t.Fatalf("parse identity URI: %v", err)
 	}
 	if _, err := GatewayIdentityFromCertificate(&x509.Certificate{URIs: []*url.URL{identityURI}}); err == nil {
-		t.Fatal("GatewayIdentityFromCertificate() accepted legacy tenant identity")
+		t.Fatal("GatewayIdentityFromCertificate() accepted malformed organization identity")
 	}
 }

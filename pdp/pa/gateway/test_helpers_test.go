@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"pdp/internal/testdb"
 	"pdp/models"
 	"pdp/store"
 )
@@ -26,21 +27,16 @@ func gatewayTokenHash(token string) string {
 
 func newGatewayTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dataStore := store.New(t.TempDir())
-	if err := dataStore.InitDB(); err != nil {
-		t.Fatalf("init store: %v", err)
-	}
-	t.Cleanup(func() { _ = dataStore.Close() })
-	return dataStore
+	return testdb.NewStore(t)
 }
 
-const gatewayTestTenantID = "tenant-1"
+const gatewayTestOrganizationID = "organization-1"
 
-func seedGatewayTenant(dataStore *store.Store) {
+func seedGatewayOrganization(dataStore *store.Store) {
 	now := time.Now()
-	dataStore.SaveTenant(&models.Tenant{
-		ID:        gatewayTestTenantID,
-		Name:      "Test Tenant",
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        gatewayTestOrganizationID,
+		Name:      "Test Organization",
 		Domain:    "example.test",
 		Enabled:   true,
 		CreatedAt: now,
@@ -145,13 +141,13 @@ func (ca *gatewayTestCA) lastRole() string {
 	return ca.role
 }
 
-func newGatewayCSR(t *testing.T, tenantID, gatewayID, fqdn string) string {
+func newGatewayCSR(t *testing.T, organizationID, gatewayID, fqdn string) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	identityURI, err := url.Parse(GatewayIdentityURI(tenantID, gatewayID))
+	identityURI, err := url.Parse(GatewayIdentityURI(organizationID, gatewayID))
 	if err != nil {
 		t.Fatalf("parse gateway identity URI: %v", err)
 	}

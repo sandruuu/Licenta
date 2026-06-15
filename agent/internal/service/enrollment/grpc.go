@@ -106,7 +106,7 @@ func (client *GRPCEnrollmentClient) CompleteSession(ctx context.Context, request
 		DeviceID:               stringField(fields, "device_id"),
 		AuthRealmID:            stringField(fields, "auth_realm_id"),
 		IDPProfileID:           stringField(fields, "idp_profile_id"),
-		TenantID:               stringField(fields, "tenant_id"),
+		OrganizationID:         stringField(fields, "organization_id"),
 		CertificatePEM:         stringField(fields, "certificate_pem", "cert_pem"),
 		CertificateChainPEM:    stringField(fields, "certificate_chain_pem", "ca_pem"),
 		CertificateThumbprint:  stringField(fields, "certificate_thumbprint"),

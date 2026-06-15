@@ -65,17 +65,17 @@ func (s *Server) redirectStepUpReauthToIDP(w http.ResponseWriter, r *http.Reques
 		return err
 	}
 	s.stepUpAuth.saveFederated(&stepUpFederatedReauthSession{
-		State:        state,
-		ChallengeID:  challenge.ID,
-		UserID:       user.ID,
-		TargetMethod: strings.ToLower(strings.TrimSpace(targetMethod)),
-		TenantID:     user.TenantID,
-		IdPID:        idpCfg.ID,
-		PKCEVerifier: pkceVerifier,
-		Nonce:        nonce,
-		ExpiresAt:    time.Now().UTC().Add(s.appConfig().Runtime.BrowserAuthSessionTTL),
+		State:          state,
+		ChallengeID:    challenge.ID,
+		UserID:         user.ID,
+		TargetMethod:   strings.ToLower(strings.TrimSpace(targetMethod)),
+		OrganizationID: user.OrganizationID,
+		IdPID:          idpCfg.ID,
+		PKCEVerifier:   pkceVerifier,
+		Nonce:          nonce,
+		ExpiresAt:      time.Now().UTC().Add(s.appConfig().Runtime.BrowserAuthSessionTTL),
 	})
-	log.Printf("[STEP-UP] Redirecting MFA enrollment re-auth to IdP: challenge=%s tenant=%s idp=%s", challenge.ID, user.TenantID, idpCfg.ID)
+	log.Printf("[STEP-UP] Redirecting MFA enrollment re-auth to IdP: challenge=%s organization=%s idp=%s", challenge.ID, user.OrganizationID, idpCfg.ID)
 	http.Redirect(w, r, authURL, http.StatusFound)
 	return nil
 }
@@ -91,7 +91,7 @@ func (s *Server) handleStepUpFederatedCallback(w http.ResponseWriter, r *http.Re
 		return true
 	}
 	idpCfg, ok := s.pa.Store.GetIdentityProviderConfig(session.IdPID)
-	if !ok || idpCfg == nil || !idpCfg.Enabled || !strings.EqualFold(idpCfg.TenantID, session.TenantID) {
+	if !ok || idpCfg == nil || !idpCfg.Enabled || !strings.EqualFold(idpCfg.OrganizationID, session.OrganizationID) {
 		http.Error(w, "Session identity provider not found", http.StatusBadRequest)
 		return true
 	}
@@ -119,7 +119,7 @@ func (s *Server) handleStepUpFederatedCallback(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Failed to extract identity from external IdP", http.StatusBadGateway)
 		return true
 	}
-	user, ok := s.pa.Store.GetUserByExternalSubjectForTenant(claims.Subject, idpCfg.Issuer, session.TenantID)
+	user, ok := s.pa.Store.GetUserByExternalSubjectForOrganization(claims.Subject, idpCfg.Issuer, session.OrganizationID)
 	if !ok || user == nil || user.ID != session.UserID || user.Disabled {
 		http.Error(w, "Federated identity does not match this step-up request", http.StatusForbidden)
 		return true
@@ -141,7 +141,7 @@ func (s *Server) identityProviderForStepUpUser(user *models.User) (*models.Ident
 	if s == nil || s.pa == nil || s.pa.Store == nil || user == nil {
 		return nil, false
 	}
-	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForTenant(user.TenantID) {
+	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForOrganization(user.OrganizationID) {
 		if cfg == nil || !cfg.Enabled {
 			continue
 		}

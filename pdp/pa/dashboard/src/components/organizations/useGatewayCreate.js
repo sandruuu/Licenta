@@ -60,7 +60,6 @@ function useGatewayCreate(onChanged) {
         organization_id: organization.id,
         name: form.name.trim(),
         fqdn,
-        auth_mode: 'builtin',
       });
       if (result?.enrollment_token) {
         setEnrollment({

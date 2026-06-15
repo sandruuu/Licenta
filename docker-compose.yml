@@ -93,6 +93,43 @@ services:
       - KC_BOOTSTRAP_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
     restart: unless-stopped
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: trustcloud-postgres
+    networks:
+      security:
+        aliases:
+          - postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-trustcloud}
+      - POSTGRES_USER=${POSTGRES_USER:-trustcloud}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trustcloud}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trustcloud} -d ${POSTGRES_DB:-trustcloud}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: trustcloud-redis
+    networks:
+      security:
+        aliases:
+          - redis
+    command: ["redis-server", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
   pdp:
     build:
       context: ./pdp
@@ -120,6 +157,13 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - PDP_DATABASE_URL=${PDP_DATABASE_URL:-postgres://${POSTGRES_USER:-trustcloud}:${POSTGRES_PASSWORD:-trustcloud}@postgres:5432/${POSTGRES_DB:-trustcloud}?sslmode=disable}
+      - PDP_REDIS_URL=${PDP_REDIS_URL:-redis://redis:6379/0}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://localhost:8443/health || exit 1"]
@@ -150,7 +194,7 @@ services:
       - KEYCLOAK_ADMIN_USERNAME=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-admin}
       - PDP_BASE_URL=${KEYCLOAK_SCIM_SYNC_PDP_BASE_URL:-https://pdp:8443}
-      - PDP_TENANT_ID=${KEYCLOAK_SCIM_SYNC_TENANT_ID:-}
+      - PDP_ORGANIZATION_ID=${KEYCLOAK_SCIM_SYNC_ORGANIZATION_ID:-}
       - PDP_SCIM_TOKEN=${KEYCLOAK_SCIM_SYNC_SCIM_TOKEN:-}
       - PDP_TLS_SKIP_VERIFY=${KEYCLOAK_SCIM_SYNC_PDP_TLS_SKIP_VERIFY:-true}
       - SYNC_INTERVAL=${KEYCLOAK_SCIM_SYNC_INTERVAL:-60s}
@@ -222,4 +266,6 @@ volumes:
   vault-data:
     driver: local
   keycloak-data:
+    driver: local
+  postgres-data:
     driver: local

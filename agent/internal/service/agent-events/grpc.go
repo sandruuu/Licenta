@@ -67,17 +67,17 @@ func eventFromStruct(value *structpb.Struct) Event {
 		fields = value.AsMap()
 	}
 	return Event{
-		Type:       stringField(fields, "type", "event_type"),
-		Message:    stringField(fields, "message"),
-		Reason:     stringField(fields, "reason"),
-		SessionID:  stringField(fields, "session_id"),
-		DeviceID:   stringField(fields, "device_id"),
-		UserID:     stringField(fields, "user_id"),
-		TenantID:   stringField(fields, "tenant_id"),
-		ResourceID: stringField(fields, "resource_id"),
-		GatewayID:  stringField(fields, "gateway_id"),
-		PolicyID:   stringField(fields, "policy_id"),
-		Action:     stringField(fields, "action"),
+		Type:           stringField(fields, "type", "event_type"),
+		Message:        stringField(fields, "message"),
+		Reason:         stringField(fields, "reason"),
+		SessionID:      stringField(fields, "session_id"),
+		DeviceID:       stringField(fields, "device_id"),
+		UserID:         stringField(fields, "user_id"),
+		OrganizationID: stringField(fields, "organization_id"),
+		ResourceID:     stringField(fields, "resource_id"),
+		GatewayID:      stringField(fields, "gateway_id"),
+		PolicyID:       stringField(fields, "policy_id"),
+		Action:         stringField(fields, "action"),
 	}
 }
 

@@ -2,13 +2,17 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"strings"
+	"time"
 
 	"pdp/models"
 	"pdp/pa"
 	"pdp/pa/events"
 )
+
+const gatewaySessionBindingStateKind = "gateway_session_binding"
 
 func (s *Server) wireSessionDeleteSink() {
 	if s == nil || s.pa == nil || s.pa.Sessions == nil {
@@ -21,7 +25,7 @@ func (s *Server) wireSessionDeleteSink() {
 			fields["user_id"] = session.UserID
 			fields["device_id"] = session.DeviceID
 			fields["resource_id"] = session.Resource
-			fields["tenant_id"] = session.TenantID
+			fields["organization_id"] = session.OrganizationID
 			fields["gateway_id"] = session.GatewayID
 		}
 		s.publishCAEPEvent(events.TopicSessionDeleted, fields)
@@ -38,12 +42,11 @@ func (s *Server) rememberGatewaySession(sessionID, gatewayID string) {
 	if sessionID == "" || gatewayID == "" {
 		return
 	}
-	s.sessionGatewayMu.Lock()
-	if s.sessionGateways == nil {
-		s.sessionGateways = make(map[string]string)
+	raw, err := json.Marshal(gatewayID)
+	if err != nil || s.pa == nil || s.pa.Runtime == nil {
+		return
 	}
-	s.sessionGateways[sessionID] = gatewayID
-	s.sessionGatewayMu.Unlock()
+	_ = s.pa.Runtime.SaveEphemeralState(gatewaySessionBindingStateKind, sessionID, raw, time.Now().UTC().Add(24*time.Hour))
 }
 
 func (s *Server) gatewaySessionBinding(sessionID string) (string, bool) {
@@ -54,12 +57,18 @@ func (s *Server) gatewaySessionBinding(sessionID string) (string, bool) {
 	if sessionID == "" {
 		return "", false
 	}
-	s.sessionGatewayMu.RLock()
-	defer s.sessionGatewayMu.RUnlock()
-	if s.sessionGateways == nil {
+	if s.pa == nil || s.pa.Runtime == nil {
 		return "", false
 	}
-	gatewayID, ok := s.sessionGateways[sessionID]
+	raw, ok := s.pa.Runtime.GetEphemeralState(gatewaySessionBindingStateKind, sessionID)
+	if !ok {
+		return "", false
+	}
+	var gatewayID string
+	if err := json.Unmarshal(raw, &gatewayID); err != nil {
+		_ = s.pa.Runtime.DeleteEphemeralState(gatewaySessionBindingStateKind, sessionID)
+		return "", false
+	}
 	return strings.TrimSpace(gatewayID), ok && strings.TrimSpace(gatewayID) != ""
 }
 
@@ -71,11 +80,9 @@ func (s *Server) forgetGatewaySession(sessionID string) {
 	if sessionID == "" {
 		return
 	}
-	s.sessionGatewayMu.Lock()
-	if s.sessionGateways != nil {
-		delete(s.sessionGateways, sessionID)
+	if s.pa != nil && s.pa.Runtime != nil {
+		_ = s.pa.Runtime.DeleteEphemeralState(gatewaySessionBindingStateKind, sessionID)
 	}
-	s.sessionGatewayMu.Unlock()
 }
 
 func (s *Server) revokeProvisionedGatewaySession(session *models.Session, reason string) {

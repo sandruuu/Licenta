@@ -1,9 +1,6 @@
 {$PDP_PUBLIC_HOST} {
 	encode zstd gzip
 
-	@public_registration path /api/auth/register /api/auth/register/*
-	respond @public_registration "Public administrator registration is disabled. Create the first administrator locally before publishing the PDP." 403
-
 	reverse_proxy https://pdp:8443 {
 		header_up Host {host}
 		transport http {
