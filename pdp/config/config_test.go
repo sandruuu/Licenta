@@ -36,7 +36,7 @@ func TestApplyEnvironmentOverridesPublicOrigin(t *testing.T) {
 }
 
 func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
-	t.Setenv(PDPTLSDNSNamesEnv, "pdp.apps.fsisc.ro, pdp-mtls.apps.fsisc.ro")
+	t.Setenv(PDPTLSDNSNamesEnv, "trust-cloud.dev, mtls.trust-cloud.dev")
 	t.Setenv(PDPPublicOriginEnv, "https://pa.remote-access-demo.xyz")
 	t.Setenv(PDPFederatedCallbackURLEnv, "https://callbacks.remote-access-demo.xyz/cb")
 	t.Setenv(PDPWebAuthnRPIDEnv, "remote-access-demo.xyz")
@@ -52,7 +52,7 @@ func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
 	if cfg.Public.FederatedCallbackURL != "https://callbacks.remote-access-demo.xyz/cb" {
 		t.Fatalf("FederatedCallbackURL = %q", cfg.Public.FederatedCallbackURL)
 	}
-	if len(cfg.TLSDNSNames) != 2 || cfg.TLSDNSNames[0] != "pdp.apps.fsisc.ro" || cfg.TLSDNSNames[1] != "pdp-mtls.apps.fsisc.ro" {
+	if len(cfg.TLSDNSNames) != 2 || cfg.TLSDNSNames[0] != "trust-cloud.dev" || cfg.TLSDNSNames[1] != "mtls.trust-cloud.dev" {
 		t.Fatalf("TLSDNSNames = %#v", cfg.TLSDNSNames)
 	}
 	if cfg.WebAuthnRPID != "remote-access-demo.xyz" {
@@ -68,13 +68,13 @@ func TestApplyEnvironmentOverridesExplicitValues(t *testing.T) {
 
 func TestCertificateDNSNamesIncludesPDPFQDNAndDeduplicates(t *testing.T) {
 	cfg := &Config{
-		PDPFQDN:     "pdp-mtls.apps.fsisc.ro",
-		TLSDNSNames: []string{"pdp.apps.fsisc.ro", "pdp-mtls.apps.fsisc.ro", "PDP.APPS.FSISC.RO"},
+		PDPFQDN:     "mtls.trust-cloud.dev",
+		TLSDNSNames: []string{"trust-cloud.dev", "mtls.trust-cloud.dev", "TRUST-CLOUD.DEV"},
 	}
 
 	names := cfg.CertificateDNSNames()
 
-	if len(names) != 2 || names[0] != "pdp-mtls.apps.fsisc.ro" || names[1] != "pdp.apps.fsisc.ro" {
+	if len(names) != 2 || names[0] != "mtls.trust-cloud.dev" || names[1] != "trust-cloud.dev" {
 		t.Fatalf("CertificateDNSNames = %#v", names)
 	}
 }

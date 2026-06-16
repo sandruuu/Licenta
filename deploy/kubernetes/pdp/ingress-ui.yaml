@@ -14,10 +14,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - pdp.apps.fsisc.ro
-      secretName: pdp-apps-fsisc-ro-tls
+        - trust-cloud.dev
+      secretName: trust-cloud-dev-tls
   rules:
-    - host: pdp.apps.fsisc.ro
+    - host: trust-cloud.dev
       http:
         paths:
           - path: /
@@ -27,3 +27,4 @@ spec:
                 name: pdp
                 port:
                   number: 8443
+

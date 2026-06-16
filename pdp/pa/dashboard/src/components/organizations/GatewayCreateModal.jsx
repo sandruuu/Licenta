@@ -1,5 +1,5 @@
 import { Copy, Router, X } from 'lucide-react';
-import { copyText, gatewayFQDNFromLabel, gatewayLabelFromName, organizationDomain } from './organizationUtils';
+import { copyText } from './organizationUtils';
 import { FormSelect } from '../ui/FormField';
 import { formatDateTime } from '../../utils/format';
 
@@ -17,9 +17,7 @@ export default function GatewayCreateModal({
 }) {
   if (!organization) return null;
 
-  const gatewayDomain = organizationDomain(organization);
-  const gatewayDNSLabel = gatewayLabelFromName(form.fqdn_label);
-  const gatewayGeneratedFQDN = gatewayFQDNFromLabel(gatewayDNSLabel, organization);
+  const gatewayFQDN = (form.fqdn || '').trim();
 
   return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-graphite/45 backdrop-blur-sm p-4">
@@ -66,18 +64,12 @@ export default function GatewayCreateModal({
 
               <div>
                 <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">FQDN</label>
-                <div className="flex overflow-hidden rounded-md border border-border bg-surface-secondary shadow-sm transition-colors focus-within:border-accent focus-within:ring-[3px] focus-within:ring-accent-muted">
-                  <input
-                    type="text"
-                    value={form.fqdn_label || ''}
-                    onChange={(event) => setForm({ ...form, fqdn_label: gatewayLabelFromName(event.target.value) })}
-                    placeholder="e.g. edge-01"
-                    className="min-w-0 flex-1 border-0 bg-transparent px-3 py-2 font-mono text-[13px] text-text-primary focus:outline-none" />
-                  <span className="inline-flex max-w-[55%] items-center border-l border-border px-3 py-2 font-mono text-[13px] text-text-secondary">
-                    {gatewayDomain ? `.${gatewayDomain}` : '.organization-domain'}
-                  </span>
-                </div>
-                <input type="text" value={gatewayGeneratedFQDN || ''} readOnly className="sr-only" aria-label="Generated gateway FQDN" />
+                <input
+                  type="text"
+                  value={form.fqdn || ''}
+                  onChange={(event) => setForm({ ...form, fqdn: event.target.value })}
+                  placeholder="e.g. gateway.example.com"
+                  className="w-full px-3 py-2 bg-surface border border-border rounded-md font-mono text-[13px] text-text-primary focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted transition" />
               </div>
 
               {enrollment?.token ? (
@@ -116,7 +108,7 @@ export default function GatewayCreateModal({
                   <button onClick={onClose}
                     className="px-4 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary">Cancel</button>
                   <button onClick={onCreate}
-                    disabled={saving || !organization?.id || !gatewayDomain || !gatewayDNSLabel}
+                    disabled={saving || !organization?.id || !gatewayFQDN}
                     className="px-4 py-2 text-xs font-semibold bg-accent text-white-smoke rounded-md hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1.5">
                     <Router size={14} /> {saving ? 'Creating...' : 'Create Gateway'}
                   </button>

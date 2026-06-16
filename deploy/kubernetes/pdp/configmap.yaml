@@ -4,13 +4,13 @@ metadata:
   name: pdp-config
   namespace: trustcloud
 data:
-  PDP_FQDN: "pdp-mtls.apps.fsisc.ro"
-  PDP_TLS_DNS_NAMES: "pdp.apps.fsisc.ro,pdp-mtls.apps.fsisc.ro"
-  PDP_PUBLIC_ORIGIN: "https://pdp.apps.fsisc.ro"
-  PDP_CORS_ORIGINS: "https://pdp.apps.fsisc.ro"
-  PDP_FEDERATED_CALLBACK_URL: "https://pdp.apps.fsisc.ro/auth/federated/callback"
-  PDP_WEBAUTHN_RP_ID: "pdp.apps.fsisc.ro"
-  PDP_WEBAUTHN_RP_ORIGINS: "https://pdp.apps.fsisc.ro"
+  PDP_FQDN: "mtls.trust-cloud.dev"
+  PDP_TLS_DNS_NAMES: "trust-cloud.dev,mtls.trust-cloud.dev"
+  PDP_PUBLIC_ORIGIN: "https://trust-cloud.dev"
+  PDP_CORS_ORIGINS: "https://trust-cloud.dev"
+  PDP_FEDERATED_CALLBACK_URL: "https://trust-cloud.dev/auth/federated/callback"
+  PDP_WEBAUTHN_RP_ID: "trust-cloud.dev"
+  PDP_WEBAUTHN_RP_ORIGINS: "https://trust-cloud.dev"
   PDP_PKI_URL: "https://vault.vault.svc.cluster.local:8200"
   PDP_PKI_CA_FILE: "/app/vault-ca/vault-ca.crt"
   PDP_PKI_SERVER_NAME: "vault.vault.svc.cluster.local"
@@ -21,8 +21,8 @@ data:
   config.json: |
     {
       "listen_addr": ":8443",
-      "pdp_fqdn": "pdp-mtls.apps.fsisc.ro",
-      "tls_dns_names": ["pdp.apps.fsisc.ro", "pdp-mtls.apps.fsisc.ro"],
+      "pdp_fqdn": "mtls.trust-cloud.dev",
+      "tls_dns_names": ["trust-cloud.dev", "mtls.trust-cloud.dev"],
       "tls_cert": "/app/data/pdp-server-tls-cert.pem",
       "mtls_ca": "/app/data/vault-pki-ca-cert.pem",
       "pki_url": "https://vault.vault.svc.cluster.local:8200",
@@ -49,10 +49,10 @@ data:
       "jwt_key_encrypted_path": "/app/data/jwt_signing_key.enc",
       "mfa_transit_key": "trustcloud-key",
       "mfa_secret_key_encrypted_path": "/app/data/mfa_secret.key.enc",
-      "webauthn_rp_id": "pdp.apps.fsisc.ro",
+      "webauthn_rp_id": "trust-cloud.dev",
       "webauthn_rp_name": "TrustCloud",
-      "webauthn_rp_origins": "https://pdp.apps.fsisc.ro",
-      "cors_origins": ["https://pdp.apps.fsisc.ro"],
+      "webauthn_rp_origins": "https://trust-cloud.dev",
+      "cors_origins": ["https://trust-cloud.dev"],
       "runtime": {
         "store_auto_save_interval": 60000000000,
         "session_cleanup_interval": 300000000000,
@@ -86,7 +86,7 @@ data:
         "resource_session_renew_before": 60000000000
       },
       "public": {
-        "federated_callback_url": "https://pdp.apps.fsisc.ro/auth/federated/callback",
+        "federated_callback_url": "https://trust-cloud.dev/auth/federated/callback",
         "oidc_default_scopes": "openid profile email",
         "oidc_default_claim_mapping": {
           "username": "preferred_username",
@@ -163,3 +163,4 @@ data:
         "max_score": 100
       }
     }
+

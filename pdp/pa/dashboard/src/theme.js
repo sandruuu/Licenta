@@ -1,20 +1,14 @@
 const THEME_KEY = 'pdp_theme';
-const THEMES = new Set(['light', 'dark']);
-
-function systemTheme() {
-  if (typeof window === 'undefined' || !window.matchMedia) return 'light';
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
+const LIGHT_THEME = 'light';
 
 export function getCurrentTheme() {
-  if (typeof document === 'undefined') return 'light';
+  if (typeof document === 'undefined') return LIGHT_THEME;
   const theme = document.documentElement.dataset.theme;
-  if (THEMES.has(theme)) return theme;
-  return systemTheme();
+  return theme === LIGHT_THEME ? theme : LIGHT_THEME;
 }
 
-export function applyTheme(theme) {
-  const nextTheme = THEMES.has(theme) ? theme : systemTheme();
+export function applyTheme() {
+  const nextTheme = LIGHT_THEME;
   if (typeof document !== 'undefined') {
     document.documentElement.dataset.theme = nextTheme;
     document.documentElement.style.colorScheme = nextTheme;
@@ -23,17 +17,16 @@ export function applyTheme(theme) {
 }
 
 export function initTheme() {
-  let stored = '';
   try {
-    stored = localStorage.getItem(THEME_KEY) || '';
+    localStorage.setItem(THEME_KEY, LIGHT_THEME);
   } catch {
-    stored = '';
+    // The dashboard still renders light if storage is unavailable.
   }
-  return applyTheme(THEMES.has(stored) ? stored : systemTheme());
+  return applyTheme();
 }
 
-export function saveTheme(theme) {
-  const nextTheme = applyTheme(theme);
+export function saveTheme() {
+  const nextTheme = applyTheme();
   try {
     localStorage.setItem(THEME_KEY, nextTheme);
   } catch {

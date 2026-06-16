@@ -1,0 +1,7 @@
+.git
+.gocache
+**/.gocache
+data
+pa/dashboard/node_modules
+pa/dashboard/vite-*.log
+*.test

@@ -13,6 +13,7 @@ import (
 
 const (
 	FileName           = "config.json"
+	PAURLEnv           = "GATEWAY_PA_URL"
 	EnrollmentTokenEnv = "GATEWAY_ENROLLMENT_TOKEN"
 	PublicEndpointEnv  = "GATEWAY_PUBLIC_ENDPOINT"
 
@@ -96,6 +97,9 @@ func (cfg *Config) Validate() error {
 }
 
 func (cfg *Config) ApplyEnvironment() error {
+	if paURL := strings.TrimSpace(os.Getenv(PAURLEnv)); paURL != "" {
+		cfg.PAURL = paURL
+	}
 	if endpoint := strings.TrimSpace(os.Getenv(PublicEndpointEnv)); endpoint != "" {
 		cfg.PublicEndpoint = endpoint
 	}

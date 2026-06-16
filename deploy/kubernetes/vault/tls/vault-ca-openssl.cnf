@@ -1,0 +1,16 @@
+[req]
+distinguished_name = req_distinguished_name
+prompt = no
+default_bits = 4096
+default_md = sha256
+x509_extensions = v3_ca
+
+[req_distinguished_name]
+CN = TrustCloud Vault Kubernetes CA
+O = TrustCloud
+
+[v3_ca]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer

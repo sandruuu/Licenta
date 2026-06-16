@@ -30,6 +30,17 @@ func TestApplyEnvironmentOverridesPublicEndpoint(t *testing.T) {
 	}
 }
 
+func TestApplyEnvironmentOverridesPAURL(t *testing.T) {
+	t.Setenv(PAURLEnv, "https://mtls.trust-cloud.dev")
+	cfg := &Config{PAURL: "https://pdp:8443"}
+	if err := cfg.ApplyEnvironment(); err != nil {
+		t.Fatalf("ApplyEnvironment() error = %v", err)
+	}
+	if cfg.PAURL != "https://mtls.trust-cloud.dev" {
+		t.Fatalf("PAURL = %q, want https://mtls.trust-cloud.dev", cfg.PAURL)
+	}
+}
+
 func TestValidateDefaultsSessionRevalidationInterval(t *testing.T) {
 	cfg := &Config{PAURL: "https://pdp:8443"}
 	if err := cfg.Validate(); err != nil {

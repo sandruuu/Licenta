@@ -55,11 +55,11 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	}
 	certPEM, err := s.signer([]byte(req.CSRPEM), s.certificateValidityDays, s.pkiRole, profile)
 	if err != nil {
-		s.store.SaveGateway(gateway)
+		_ = s.store.SaveGateway(gateway)
 		return nil, fmt.Errorf("%w: %v", ErrInvalidCSR, err)
 	}
 	if err := validateGatewayCertificate(certPEM, csr, gateway); err != nil {
-		s.store.SaveGateway(gateway)
+		_ = s.store.SaveGateway(gateway)
 		return nil, err
 	}
 	certFingerprint, certSerial := certificateIdentity(certPEM)
@@ -74,7 +74,9 @@ func (s *Service) EnrollGateway(req models.GatewayEnrollRequest) (*EnrollmentRes
 	gateway.CertExpiresAt = now.Add(s.certificateValidity()).Format(time.RFC3339)
 	gateway.UpdatedAt = now
 	gateway.LastSeenAt = now
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: enroll gateway: %v", ErrGatewayPersistence, err)
+	}
 
 	return &EnrollmentResult{Gateway: gateway, CertPEM: certPEM}, nil
 }
@@ -124,7 +126,9 @@ func (s *Service) RenewGatewayCertificate(gateway *models.Gateway, csrPEM string
 	gateway.CertExpiresAt = now.Add(s.certificateValidity()).Format(time.RFC3339)
 	gateway.UpdatedAt = now
 	gateway.LastSeenAt = now
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: renew gateway certificate: %v", ErrGatewayPersistence, err)
+	}
 
 	if oldSerial != "" && oldSerial != gateway.CertSerial && s.revoker != nil {
 		s.revoker(oldSerial, oldCertPEM, gatewaySubjectID(gateway.ID), oldExpiresOn)

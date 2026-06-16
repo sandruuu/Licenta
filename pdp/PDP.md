@@ -8,7 +8,7 @@ Documentatia este intentionat foarte detaliata. Include comportamentul efectiv d
 
 PDP-ul este serviciul central de decizie si administrare pentru TrustCloud. El:
 
-- porneste un server HTTPS/gRPC peste TLS 1.3;
+- porneste un server HTTPS/gRPC peste TLS 1.2+;
 - isi obtine cheia privata si certificatele din Vault PKI/Transit;
 - expune dashboard-ul administrativ si API-urile admin;
 - autentifica administratorii locali, passkey-urile si fluxurile federate OIDC;
@@ -75,7 +75,7 @@ La pornire se executa, in ordine:
 17. Se construieste serverul transport HTTP/gRPC.
 18. Se porneste serverul TLS prin `StartTLS`.
 
-Serverul foloseste TLS 1.3 minim. Certificatul prezentat clientilor este obtinut din callback-ul dinamic `GetCertificate`, ceea ce permite rotirea certificatului in runtime.
+Serverul foloseste TLS 1.2 minim. Certificatul prezentat clientilor este obtinut din callback-ul dinamic `GetCertificate`, ceea ce permite rotirea certificatului in runtime.
 
 ## 3. Configuratie
 

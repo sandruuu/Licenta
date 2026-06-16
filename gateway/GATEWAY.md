@@ -63,7 +63,7 @@ Config-ul curent din repository este:
 
 ```json
 {
-  "pa_url": "https://pdp:8443",
+  "pa_url": "https://mtls.trust-cloud.dev",
   "public_endpoint": "localhost:9443",
   "session_revalidation_interval": 30000000000
 }
@@ -135,7 +135,10 @@ Exemple:
 Gateway-ul citeste explicit:
 
 - `GATEWAY_ENROLLMENT_TOKEN`
+- `GATEWAY_PA_URL`
 - `GATEWAY_PUBLIC_ENDPOINT`
+
+`GATEWAY_PA_URL` suprascrie `pa_url` din JSON. In deployment-ul cu PDP pe Kubernetes prin LoadBalancer L4, valoarea folosita de gateway trebuie sa fie endpoint-ul mTLS al PDP-ului, de exemplu `https://mtls.trust-cloud.dev`.
 
 `GATEWAY_PUBLIC_ENDPOINT` suprascrie `public_endpoint` din JSON.
 
@@ -145,6 +148,7 @@ Exemple:
 
 - `GATEWAY_ENROLLMENT_TOKEN=raw-token`
 - `GATEWAY_ENROLLMENT_TOKEN=file:/run/secrets/gateway-token`
+- `GATEWAY_PA_URL=https://mtls.trust-cloud.dev`
 - `GATEWAY_PUBLIC_ENDPOINT=gateway.example.com:9443`
 
 ### 3.4 Path-uri certificate si artefacte locale
@@ -1151,8 +1155,8 @@ Acest loop doar logheaza; renewal-ul propriu-zis este in `StartCertRenewalLoop`.
 - serviciu `gateway`;
 - container name default `trustgateway`, override prin `GATEWAY_CONTAINER_NAME`;
 - restart `unless-stopped`;
-- `extra_hosts: pdp:host-gateway`;
 - port host default `9443`, override prin `GATEWAY_HOST_PORT`;
+- env `GATEWAY_PA_URL`, default `https://mtls.trust-cloud.dev`;
 - env `GATEWAY_ENROLLMENT_TOKEN`;
 - env `GATEWAY_PUBLIC_ENDPOINT`, default `localhost:9443`, prin sintaxa compose `${GATEWAY_PUBLIC_ENDPOINT:-localhost:9443}`.
 

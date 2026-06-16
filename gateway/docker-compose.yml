@@ -16,11 +16,10 @@ services:
       dockerfile: Dockerfile.gateway
     container_name: ${GATEWAY_CONTAINER_NAME:-trustgateway}
     restart: unless-stopped
-    extra_hosts:
-      - "pdp:host-gateway"
     ports:
       - "${GATEWAY_HOST_PORT:-9443}:9443"
     environment:
+      GATEWAY_PA_URL: ${GATEWAY_PA_URL:-https://mtls.trust-cloud.dev}
       GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:-}
       GATEWAY_PUBLIC_ENDPOINT: ${GATEWAY_PUBLIC_ENDPOINT:-localhost:9443}
     entrypoint: ["/bin/sh", "-c"]

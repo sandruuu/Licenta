@@ -15,7 +15,7 @@ import (
 // Gateway operations
 // ─────────────────────────────────────────────
 
-func (s *Store) SaveGateway(gw *models.Gateway) {
+func (s *Store) SaveGateway(gw *models.Gateway) error {
 	resources := gw.AssignedResources
 	if resources == nil {
 		resources = []string{}
@@ -33,7 +33,7 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 		 cert_pem, cert_fingerprint, cert_serial, cert_expires_at,
 		 listen_addr, public_ip, assigned_resources_json,
 		 created_at, updated_at, last_seen_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			fqdn = EXCLUDED.fqdn,
@@ -59,7 +59,9 @@ func (s *Store) SaveGateway(gw *models.Gateway) {
 		fmtTime(gw.CreatedAt), fmtTime(gw.UpdatedAt), fmtTime(gw.LastSeenAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save gateway %s: %v", gw.ID, err)
+		return err
 	}
+	return nil
 }
 
 func (s *Store) GetGateway(id string) (*models.Gateway, bool) {

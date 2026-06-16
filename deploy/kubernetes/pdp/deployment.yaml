@@ -7,13 +7,10 @@ metadata:
     app.kubernetes.io/name: pdp
     app.kubernetes.io/part-of: trustcloud
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: pdp
@@ -31,8 +28,8 @@ spec:
         fsGroup: 1000
       containers:
         - name: pdp
-          image: trustcloud-pdp:latest
-          imagePullPolicy: IfNotPresent
+          image: laurasandru/trustcloud-pdp:latest
+          imagePullPolicy: Always
           ports:
             - name: https
               containerPort: 8443

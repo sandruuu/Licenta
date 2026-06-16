@@ -8,12 +8,20 @@
 .env
 .env.local
 .env.*.local
+deploy/kubernetes/**/secret.yaml
+deploy/kubernetes/**/tls-secret.yaml
+deploy/kubernetes/**/vault-ca-secret.yaml
+!deploy/kubernetes/**/*.example.yaml
 
 # ── Certificates & Keys (sensitive material) ──
 *.pem
+# Public PDP CA used by the agent config; private keys/certs remain ignored.
+!agent/pdp-ca.pem
 *.key
 !*.pub                    # allow public keys (e.g. jwt-signing.pub)
 *.crt
+*.csr
+*.srl
 *.pfx
 *.p12
 

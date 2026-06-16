@@ -6,12 +6,16 @@ metadata:
   labels:
     app.kubernetes.io/name: pdp
     app.kubernetes.io/part-of: trustcloud
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: trustcloud-pdp-mtls
+    service.beta.kubernetes.io/do-loadbalancer-size-unit: "1"
 spec:
   type: LoadBalancer
-  externalTrafficPolicy: Local
+  externalTrafficPolicy: Cluster
   selector:
     app.kubernetes.io/name: pdp
   ports:
     - name: tls
+      protocol: TCP
       port: 443
       targetPort: https

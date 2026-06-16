@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: database
+  namespace: trustcloud
   labels:
     app.kubernetes.io/name: postgres
     app.kubernetes.io/part-of: trustcloud

@@ -85,6 +85,7 @@ func (s *Server) handleAdminGateways(w http.ResponseWriter, r *http.Request) {
 			"id":               result.Gateway.ID,
 			"organization_id":  result.Gateway.OrganizationID,
 			"name":             result.Gateway.Name,
+			"fqdn":             result.Gateway.FQDN,
 			"enrollment_token": result.EnrollmentToken,
 			"token_expires_at": result.Gateway.TokenExpiresAt,
 			"status":           result.Gateway.Status,

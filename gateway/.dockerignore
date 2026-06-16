@@ -1,0 +1,6 @@
+.git
+.gocache
+**/.gocache
+gateway/.gocache
+certs
+*.test

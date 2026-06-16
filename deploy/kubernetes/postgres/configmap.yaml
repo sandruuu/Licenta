@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-config
-  namespace: database
+  namespace: trustcloud
 data:
   POSTGRES_DB: "trustcloud"
   POSTGRES_USER: "trustcloud"

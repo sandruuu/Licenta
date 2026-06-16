@@ -235,7 +235,7 @@ function buildTree({ organization, gateways, resources }) {
     id: `organization:${organization.id}`,
     kicker: 'Organization',
     label: organization.name,
-    subtitle: organization.domain || 'Primary domain not set',
+    subtitle: organization.domain || 'Domain not set',
     meta: `${gateways.length} gateway${gateways.length === 1 ? '' : 's'}`,
     metric: `${resources.length} resource${resources.length === 1 ? '' : 's'}`,
     badge: organization.enabled === false ? 'disabled' : 'enabled',

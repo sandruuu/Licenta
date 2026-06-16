@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { createGateway as createGatewayRequest } from '../../api';
-import { gatewayFQDNFromLabel, gatewayLabelFromName, organizationDomain } from './organizationUtils';
 
 function useGatewayCreate(onChanged) {
   const [organization, setOrganization] = useState(null);
@@ -12,7 +11,7 @@ function useGatewayCreate(onChanged) {
 
   const openGatewayCreate = (selectedOrganization) => {
     setOrganization(selectedOrganization);
-    setForm({ name: '', fqdn_label: '' });
+    setForm({ name: '', fqdn: '' });
     setError('');
     setEnrollment(null);
     setOpen(true);
@@ -27,7 +26,7 @@ function useGatewayCreate(onChanged) {
   const closeGatewayCreate = () => {
     setOpen(false);
     setOrganization(null);
-    setForm({ name: '', fqdn_label: '' });
+    setForm({ name: '', fqdn: '' });
     setError('');
     setEnrollment(null);
   };
@@ -35,22 +34,17 @@ function useGatewayCreate(onChanged) {
   const handleGatewayCreate = async () => {
     setError('');
     setEnrollment(null);
-    const fqdnLabel = gatewayLabelFromName(form.fqdn_label);
-    const fqdn = gatewayFQDNFromLabel(fqdnLabel, organization);
+    const fqdn = (form.fqdn || '').trim().toLowerCase();
     if (!organization?.id) {
       setError('Organization is required');
-      return;
-    }
-    if (!organizationDomain(organization)) {
-      setError('Set a primary domain for this organization before creating a gateway');
       return;
     }
     if (!form.name?.trim()) {
       setError('Gateway name is required');
       return;
     }
-    if (!fqdnLabel) {
-      setError('Gateway FQDN label is required');
+    if (!fqdn) {
+      setError('Gateway FQDN is required');
       return;
     }
 
@@ -70,7 +64,7 @@ function useGatewayCreate(onChanged) {
           expires_at: result.token_expires_at,
         });
       }
-      setForm({ name: '', fqdn_label: '' });
+      setForm({ name: '', fqdn: '' });
       onChanged();
     } catch (e) {
       setError(e.message || 'Failed to create gateway');

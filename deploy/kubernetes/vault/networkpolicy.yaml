@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-pdp-and-bootstrap-to-vault
+  namespace: vault
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: vault-bootstrap
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: trustcloud
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pdp
+      ports:
+        - protocol: TCP
+          port: 8200

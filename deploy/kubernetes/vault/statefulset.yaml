@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: vault
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/part-of: trustcloud
+spec:
+  serviceName: vault
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vault
+        app.kubernetes.io/part-of: trustcloud
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.17
+          imagePullPolicy: IfNotPresent
+          command:
+            - vault
+          args:
+            - server
+            - -config=/vault/config/vault.hcl
+          ports:
+            - name: https
+              containerPort: 8200
+          env:
+            - name: VAULT_ADDR
+              value: https://127.0.0.1:8200
+            - name: VAULT_CACERT
+              value: /vault/tls/ca.crt
+            - name: SKIP_CHOWN
+              value: "true"
+          volumeMounts:
+            - name: vault-config
+              mountPath: /vault/config
+              readOnly: true
+            - name: vault-tls
+              mountPath: /vault/tls
+              readOnly: true
+            - name: vault-data
+              mountPath: /vault/file
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault status >/dev/null 2>&1
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - VAULT_ADDR=https://127.0.0.1:8200 VAULT_SKIP_VERIFY=true vault status >/dev/null 2>&1 || [ $? -eq 2 ]
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1
+              memory: 1Gi
+      volumes:
+        - name: vault-config
+          configMap:
+            name: vault-config
+        - name: vault-tls
+          secret:
+            secretName: vault-tls
+  volumeClaimTemplates:
+    - metadata:
+        name: vault-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 2Gi

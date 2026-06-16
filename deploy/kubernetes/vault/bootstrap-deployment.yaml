@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault-bootstrap
+  namespace: vault
+  labels:
+    app.kubernetes.io/name: vault-bootstrap
+    app.kubernetes.io/part-of: trustcloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vault-bootstrap
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vault-bootstrap
+        app.kubernetes.io/part-of: trustcloud
+    spec:
+      containers:
+        - name: vault-bootstrap
+          image: hashicorp/vault:1.17
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - /vault/bootstrap/bootstrap.sh
+          env:
+            - name: VAULT_ADDR
+              value: https://vault.vault.svc.cluster.local:8200
+            - name: VAULT_CACERT
+              value: /vault/tls/ca.crt
+            - name: TRUSTCLOUD_VAULT_STATE_DIR
+              value: /vault/state
+            - name: TRUSTCLOUD_VAULT_BOOTSTRAP_MODE
+              value: watch
+          volumeMounts:
+            - name: vault-bootstrap
+              mountPath: /vault/bootstrap
+              readOnly: true
+            - name: vault-bootstrap-state
+              mountPath: /vault/state
+            - name: vault-tls
+              mountPath: /vault/tls
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: vault-bootstrap
+          configMap:
+            name: vault-bootstrap
+            defaultMode: 0755
+        - name: vault-bootstrap-state
+          persistentVolumeClaim:
+            claimName: vault-bootstrap-state
+        - name: vault-tls
+          secret:
+            secretName: vault-tls

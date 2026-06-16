@@ -1,5 +1,5 @@
 {
-  "pa_url": "https://pdp:8443",
+  "pa_url": "https://mtls.trust-cloud.dev",
   "public_endpoint": "localhost:9443",
   "session_revalidation_interval": 30000000000
 }

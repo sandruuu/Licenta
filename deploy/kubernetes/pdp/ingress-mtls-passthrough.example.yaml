@@ -12,7 +12,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: pdp-mtls.apps.fsisc.ro
+    - host: mtls.trust-cloud.dev
       http:
         paths:
           - path: /
@@ -22,3 +22,4 @@ spec:
                 name: pdp
                 port:
                   number: 8443
+

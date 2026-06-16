@@ -272,7 +272,7 @@ func (s *Server) StartTLS(ctx context.Context, getCertificate func(*tls.ClientHe
 		httpHandler.ServeHTTP(w, r)
 	})
 	tlsConfig := &tls.Config{
-		MinVersion:     tls.VersionTLS13,
+		MinVersion:     tls.VersionTLS12,
 		GetCertificate: getCertificate,
 	}
 	tlsConfig.ClientCAs = s.mtlsCAPool

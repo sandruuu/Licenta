@@ -212,7 +212,9 @@ func (s *Service) CreateGateway(req CreateGatewayRequest) (*CreateGatewayResult,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: create gateway: %v", ErrGatewayPersistence, err)
+	}
 
 	return &CreateGatewayResult{Gateway: gateway, EnrollmentToken: enrollmentToken}, nil
 }
@@ -264,7 +266,9 @@ func (s *Service) UpdateGateway(id string, req UpdateGatewayRequest) (*models.Ga
 		gateway.AssignedResources = targetResources
 	}
 	gateway.UpdatedAt = s.clock()
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: update gateway: %v", ErrGatewayPersistence, err)
+	}
 	return gateway, nil
 }
 
@@ -299,7 +303,9 @@ func (s *Service) RegenerateEnrollmentToken(id string) (*RegenerateTokenResult, 
 	gateway.TokenExpiresAt = now.Add(s.enrollmentTokenTTL).Format(time.RFC3339)
 	gateway.Status = "pending"
 	gateway.UpdatedAt = now
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: regenerate gateway token: %v", ErrGatewayPersistence, err)
+	}
 	return &RegenerateTokenResult{Gateway: gateway, EnrollmentToken: enrollmentToken, TokenExpiresAt: gateway.TokenExpiresAt}, nil
 }
 
@@ -322,7 +328,9 @@ func (s *Service) RevokeGateway(id string) (*models.Gateway, error) {
 	gateway.CertFingerprint = ""
 	gateway.CertSerial = ""
 	gateway.CertExpiresAt = ""
-	s.store.SaveGateway(gateway)
+	if err := s.store.SaveGateway(gateway); err != nil {
+		return nil, fmt.Errorf("%w: revoke gateway: %v", ErrGatewayPersistence, err)
+	}
 	s.publishGatewayRevoked(gateway, "gateway_revoked")
 	return gateway, nil
 }
