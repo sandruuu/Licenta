@@ -43,6 +43,8 @@ func serviceConfigFromConfig(config ServiceConfig) service.Config {
 		CertificateRenewBefore:           config.CertificateRenewBefore,
 		CertificateRenewCheckInterval:    config.CertificateRenewCheckInterval,
 		CertificateRenewTimeout:          config.CertificateRenewTimeout,
+		SessionRenewBefore:               config.SessionRenewBefore,
+		SessionRenewRetryInterval:        config.SessionRenewRetryInterval,
 		DeviceDataSyncInterval:           config.DeviceDataSyncInterval,
 		DeviceDataSyncChangeScanInterval: config.DeviceDataSyncChangeScanInterval,
 		EnrollmentStatePath:              config.EnrollmentStatePath,

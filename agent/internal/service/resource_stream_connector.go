@@ -155,8 +155,7 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		return nil, err
 	}
 	connector.recordResourceAllowed(request, authorization)
-	gatewayEndpoint := firstNonEmpty(authorization.GatewayEndpoint, record.GatewayEndpoints...)
-	if gatewayEndpoint == "" {
+	if strings.TrimSpace(authorization.GatewayEndpoint) == "" {
 		return nil, fmt.Errorf("PDP allowed resource %s without gateway endpoint", request.ResourceID)
 	}
 	tunnel, err := connector.gatewayTunnel()
@@ -171,13 +170,17 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		ResourceID:        firstNonEmpty(authorization.ResourceID, request.ResourceID),
 		Protocol:          protocol,
 		GatewayID:         authorization.GatewayID,
-		GatewayEndpoint:   gatewayEndpoint,
+		GatewayEndpoint:   strings.TrimSpace(authorization.GatewayEndpoint),
 		GatewayServerName: authorization.GatewayServerName,
 		Process:           gatewayProcess,
 	}
 	stream, err := tunnel.OpenResourceStream(ctx, streamRequest)
 	if err != nil && fromCache && isRetryableGatewaySessionError(err) {
 		connector.forgetResourceSession(cacheKey)
+		authRequest, err = connector.authorizeRequestWithCurrentAgentToken(authRequest, cacheKey.AgentSessionID)
+		if err != nil {
+			return nil, fmt.Errorf("refresh agent session token for resource %s: %w", request.ResourceID, err)
+		}
 		authorization, _, err = connector.authorizeResourceSession(ctx, cacheKey, authorizer, authRequest, true)
 		if err != nil {
 			return nil, fmt.Errorf("reauthorize resource %s: %w", request.ResourceID, err)
@@ -195,7 +198,7 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		streamRequest.SessionToken = authorization.SessionToken
 		streamRequest.ResourceID = firstNonEmpty(authorization.ResourceID, request.ResourceID)
 		streamRequest.GatewayID = authorization.GatewayID
-		streamRequest.GatewayEndpoint = firstNonEmpty(authorization.GatewayEndpoint, record.GatewayEndpoints...)
+		streamRequest.GatewayEndpoint = strings.TrimSpace(authorization.GatewayEndpoint)
 		streamRequest.GatewayServerName = authorization.GatewayServerName
 		stream, err = tunnel.OpenResourceStream(ctx, streamRequest)
 	}
@@ -412,7 +415,13 @@ func (connector *resourceStreamConnector) renewResourceSessionUntilReleased(ctx 
 			return
 		}
 		renewCtx, cancel := context.WithTimeout(ctx, resourceSessionRenewTimeout)
-		renewed, _, err := connector.authorizeResourceSession(renewCtx, key, authorizer, request, true)
+		renewRequest, requestErr := connector.authorizeRequestWithCurrentAgentToken(request, key.AgentSessionID)
+		if requestErr != nil {
+			cancel()
+			connector.warnResourceSession("resource session renew could not load current agent token", key, current.SessionID, requestErr)
+			return
+		}
+		renewed, _, err := connector.authorizeResourceSession(renewCtx, key, authorizer, renewRequest, true)
 		cancel()
 		if err != nil {
 			connector.warnResourceSession("resource session renew failed", key, current.SessionID, err)
@@ -430,6 +439,24 @@ func (connector *resourceStreamConnector) renewResourceSessionUntilReleased(ctx 
 		connector.refreshResourceSessionID(current.SessionID, renewed)
 		current = renewed
 	}
+}
+
+func (connector *resourceStreamConnector) authorizeRequestWithCurrentAgentToken(request flowauthorization.AuthorizeRequest, agentSessionID string) (flowauthorization.AuthorizeRequest, error) {
+	if connector == nil || connector.userSessions == nil {
+		return request, fmt.Errorf("user session provider is unavailable")
+	}
+	session, found, err := connector.userSessions.ActiveAuthenticatedSession()
+	if err != nil {
+		return request, err
+	}
+	if !found {
+		return request, ErrAuthenticationRequired
+	}
+	if strings.TrimSpace(session.AgentSessionID) != strings.TrimSpace(agentSessionID) {
+		return request, fmt.Errorf("active agent session changed")
+	}
+	request.AgentSessionToken = session.AgentSessionToken
+	return request, nil
 }
 
 func (connector *resourceStreamConnector) warnResourceSession(message string, key resourceSessionCacheKey, sessionID string, err error) {

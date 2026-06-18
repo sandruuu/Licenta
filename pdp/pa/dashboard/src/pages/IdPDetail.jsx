@@ -5,13 +5,16 @@ import {
   ChevronLeft,
   Edit2,
   Key,
+  RotateCcw,
   Search,
   UserRoundCheck,
   Users,
 } from 'lucide-react';
 import { getDirectoryGroups, getDirectoryUsers, getIdPs, getOrganizations, updateIdP } from '../api';
 import Button from '../components/ui/Button';
+import PageLoading from '../components/ui/PageLoading';
 import Modal from '../components/ui/Modal';
+import GatewayTokenModal from '../components/organizations/GatewayTokenModal';
 import FormField, { FormCheckbox, FormInput } from '../components/ui/FormField';
 import StatusText from '../components/ui/StatusText';
 import {
@@ -75,9 +78,11 @@ export default function IdPDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editSaving, setEditSaving] = useState(false);
+  const [regeneratingSCIMToken, setRegeneratingSCIMToken] = useState(false);
+  const [scimTokenModal, setScimTokenModal] = useState(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ showLoading = true } = {}) => {
+    if (showLoading) setLoading(true);
     setError('');
     try {
       const [organizationData, idpData, userData, groupData] = await Promise.all([
@@ -95,7 +100,7 @@ export default function IdPDetail() {
     } catch (e) {
       setError(e.message || 'Failed to load IdP data');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [organizationID, idpID]);
 
@@ -147,9 +152,17 @@ export default function IdPDetail() {
       claim_email: idp.claim_mapping?.email || '',
       claim_groups: idp.claim_mapping?.groups || '',
       client_secret: '',
-      scim_token: '',
     });
     setEditOpen(true);
+  };
+
+  const showSCIMToken = (token, providerName) => {
+    setScimTokenModal({ token, providerName, organizationID });
+  };
+
+  const closeSCIMTokenModal = () => {
+    setScimTokenModal(null);
+    load({ showLoading: false });
   };
 
   const saveEdit = async () => {
@@ -162,7 +175,6 @@ export default function IdPDetail() {
         issuer: editForm.issuer?.trim(),
         client_id: editForm.client_id?.trim(),
         client_secret: editForm.client_secret || undefined,
-        scim_token: editForm.scim_token || undefined,
         scopes: (editForm.scopes || '').trim(),
         enabled: editForm.enabled !== false,
         auto_discovery: editForm.auto_discovery !== false,
@@ -183,13 +195,25 @@ export default function IdPDetail() {
     }
   };
 
+  const regenerateSCIMToken = async () => {
+    setRegeneratingSCIMToken(true);
+    setError('');
+    try {
+      const updatedIdP = await updateIdP(idp.id, { regenerate_scim_token: true });
+      setEditOpen(false);
+      if (updatedIdP?.scim_token) {
+        showSCIMToken(updatedIdP.scim_token, updatedIdP.name || idp.name);
+      }
+      await load({ showLoading: false });
+    } catch (e) {
+      setError(e.message || 'Failed to regenerate SCIM token');
+    } finally {
+      setRegeneratingSCIMToken(false);
+    }
+  };
+
   if (loading) {
-    return (
-      <div className="py-16 text-center text-text-muted">
-        <span className="spinner mr-2" />
-        Loading IdP...
-      </div>
-    );
+    return <PageLoading label="Loading..." />;
   }
 
   if (!idp) {
@@ -378,9 +402,16 @@ export default function IdPDetail() {
           <FormField label="OIDC client secret" className="mb-3">
             <FormInput type="password" value={editForm.client_secret || ''} onChange={(event) => setEditForm({ ...editForm, client_secret: event.target.value })} placeholder="Leave blank to keep unchanged" />
           </FormField>
-          <FormField label="SCIM provisioning token" className="mb-3">
-            <FormInput type="password" value={editForm.scim_token || ''} onChange={(event) => setEditForm({ ...editForm, scim_token: event.target.value })} placeholder="Leave blank to keep unchanged" />
-          </FormField>
+          <div className="mb-3 rounded-md border border-border bg-surface-secondary px-4 py-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.2px] text-text-secondary">SCIM provisioning token</p>
+            <p className="mt-2 text-sm font-semibold text-text-secondary">
+              {idp.has_scim_token ? 'A token is configured. Regenerate it only when rotating connector or IdP credentials.' : 'No token is configured.'}
+            </p>
+            <Button type="button" variant="secondary" className="mt-3" onClick={regenerateSCIMToken} disabled={regeneratingSCIMToken}>
+              <RotateCcw size={14} />
+              {regeneratingSCIMToken ? 'Generating...' : 'Regenerate token'}
+            </Button>
+          </div>
           <FormField label="Scopes" className="mb-3 md:col-span-2">
             <FormInput value={editForm.scopes || ''} onChange={(event) => setEditForm({ ...editForm, scopes: event.target.value })} className="font-mono" />
           </FormField>
@@ -403,6 +434,24 @@ export default function IdPDetail() {
           </FormField>
         </div>
       </Modal>
+
+      <GatewayTokenModal
+        open={!!scimTokenModal}
+        tokenInfo={scimTokenModal}
+        title="SCIM provisioning token"
+        tokenLabel={scimTokenModal?.providerName ? `Token for ${scimTokenModal.providerName}` : 'SCIM token'}
+        warningText="Use these values in the SCIM connector. The token will not be shown again."
+        copyTitle="Copy SCIM token"
+        fields={[
+          {
+            key: 'organization-id',
+            label: 'Organization ID',
+            value: scimTokenModal?.organizationID || organizationID,
+            copyTitle: 'Copy organization ID',
+          },
+        ]}
+        onClose={closeSCIMTokenModal}
+      />
     </div>
   );
 }

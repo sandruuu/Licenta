@@ -7,19 +7,23 @@ import {
   Edit2,
   Building2,
   Plus,
+  RotateCcw,
   Router,
 } from 'lucide-react';
-import { getGateways, getOrganizations, getResources, revokeGateway, updateGateway } from '../api';
+import { getGateways, getOrganizations, getResources, regenerateGatewayToken, revokeGateway, updateGateway } from '../api';
 import Button from '../components/ui/Button';
+import PageLoading from '../components/ui/PageLoading';
 import Modal from '../components/ui/Modal';
 import FormField, { FormInput } from '../components/ui/FormField';
 import StatusText from '../components/ui/StatusText';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import GatewayTokenModal from '../components/organizations/GatewayTokenModal';
 import {
   DetailEmptyState as EmptyState,
   InlineBackButton,
 } from '../components/ui/Detail';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
+import { formatDateTime } from '../utils/format';
 import { navigateBack, navigateWithReturn } from '../utils/navigation';
 
 const detailPanelClass = 'rounded-md border border-border bg-transparent';
@@ -37,15 +41,48 @@ function isRevokedGateway(gateway) {
   return String(gateway?.status || '').toLowerCase() === 'revoked';
 }
 
+function isEnrolledGateway(gateway) {
+  const status = String(gateway?.status || '').toLowerCase();
+  return status === 'enrolled' || status === 'active';
+}
+
+function externalHost(resource) {
+  return resource?.external_url || resource?.host || '';
+}
+
+function endpointLabel(host, port) {
+  const base = host || '-';
+  return port ? `${base}:${port}` : base;
+}
+
+function resourceExternalPort(resource) {
+  return resource?.external_port || '';
+}
+
+function resourceInternalPort(resource) {
+  return resource?.internal_port || '';
+}
+
 function resourceProtocolLabel(resource) {
   const type = String(resource?.type || 'resource').toUpperCase();
-  return resource?.port ? `${type} : ${resource.port}` : type;
+  return `${type} - ${endpointLabel(resource?.host, resourceInternalPort(resource))}`;
 }
 
 function resourceTargetLabel(resource) {
-  if (resource?.external_url) return resource.external_url;
-  if (resource?.host) return resource.port ? `${resource.host}:${resource.port}` : resource.host;
-  return resource?.description || resource?.id || '-';
+  return endpointLabel(externalHost(resource), resourceExternalPort(resource));
+}
+
+function DetailField({ label, value, mono = false, children }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">{label}</p>
+      {children || (
+        <p className={`mt-2 truncate text-sm font-semibold text-text-primary ${mono ? 'text-mono' : ''}`}>
+          {value === undefined || value === null || value === '' ? '-' : value}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function GatewayDetail() {
@@ -64,6 +101,9 @@ export default function GatewayDetail() {
   const [editSaving, setEditSaving] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [regeneratingToken, setRegeneratingToken] = useState(false);
+  const [gatewayTokenModal, setGatewayTokenModal] = useState(null);
+  const [refreshAfterTokenModal, setRefreshAfterTokenModal] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -142,13 +182,50 @@ export default function GatewayDetail() {
     }
   };
 
+  const regenerateToken = async () => {
+    if (!gateway) return;
+    if (isEnrolledGateway(gateway)) {
+      setError('Gateway is already enrolled. Enrollment token regeneration is no longer available.');
+      return;
+    }
+    setRegeneratingToken(true);
+    setError('');
+    setGatewayTokenModal({
+      loading: true,
+      name: gateway.name,
+      fqdn: gateway.fqdn,
+    });
+    try {
+      const result = await regenerateGatewayToken(gateway.id);
+      setGatewayTokenModal({
+        ...result,
+        name: gateway.name,
+        fqdn: gateway.fqdn,
+      });
+      setRefreshAfterTokenModal(true);
+    } catch (e) {
+      const message = e.message || 'Failed to regenerate gateway token';
+      setError(message);
+      setGatewayTokenModal({
+        error: message,
+        name: gateway.name,
+        fqdn: gateway.fqdn,
+      });
+    } finally {
+      setRegeneratingToken(false);
+    }
+  };
+
+  const closeGatewayTokenModal = () => {
+    setGatewayTokenModal(null);
+    if (refreshAfterTokenModal) {
+      setRefreshAfterTokenModal(false);
+      load();
+    }
+  };
+
   if (loading) {
-    return (
-      <div className="py-16 text-center text-text-muted">
-        <span className="spinner mr-2" />
-        Loading gateway...
-      </div>
-    );
+    return <PageLoading />;
   }
 
   if (!gateway) {
@@ -165,6 +242,7 @@ export default function GatewayDetail() {
 
   const resourceListFilter = `organization_id=${encodeURIComponent(organization?.id || gateway.organization_id || '')}&gateway_id=${encodeURIComponent(gateway.id)}&q=${encodeURIComponent(gateway.name || gateway.id)}`;
   const gatewayRevoked = isRevokedGateway(gateway);
+  const gatewayEnrolled = isEnrolledGateway(gateway);
 
   return (
     <div className="space-y-7">
@@ -200,6 +278,12 @@ export default function GatewayDetail() {
                 Revoke
               </Button>
             ) : null}
+            {!gatewayEnrolled ? (
+              <Button variant="secondary" onClick={regenerateToken} disabled={regeneratingToken}>
+                <RotateCcw size={14} />
+                Regenerate token
+              </Button>
+            ) : null}
             <Button onClick={openEdit}>
               <Edit2 size={14} />
               Edit
@@ -208,6 +292,30 @@ export default function GatewayDetail() {
         </div>
 
         <div className="border-t border-border" />
+
+        <section className={`${detailPanelClass} p-5`}>
+          <h2 className={relatedSectionTitleClass}>Gateway configuration</h2>
+          <div className="mt-5 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+            <DetailField label="Name" value={gateway.name || gateway.id} />
+            <DetailField label="Organization" value={organization?.name || gateway.organization_id} />
+            <DetailField label="FQDN" value={gateway.fqdn} mono />
+            <DetailField label="Status">
+              <div className="mt-2">
+                <StatusText variant={gatewayStatusVariant(gateway.status)}>{gateway.status || 'active'}</StatusText>
+              </div>
+            </DetailField>
+            <DetailField
+              label="Token expires"
+              value={gatewayRevoked ? 'Invalidated' : formatDateTime(gateway.token_expires_at)}
+              mono
+            />
+            <DetailField
+              label="Cert expires"
+              value={gatewayRevoked ? 'Invalidated' : formatDateTime(gateway.cert_expires_at)}
+              mono
+            />
+          </div>
+        </section>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
           <section className={`${detailPanelClass} min-h-[460px] overflow-hidden`} aria-label="Gateway infrastructure">
@@ -309,6 +417,13 @@ export default function GatewayDetail() {
         confirmLabel="Revoke gateway"
         loadingLabel="Revoking..."
         loading={revoking}
+      />
+
+      <GatewayTokenModal
+        open={!!gatewayTokenModal}
+        tokenInfo={gatewayTokenModal}
+        title="Gateway enrollment token"
+        onClose={closeGatewayTokenModal}
       />
     </div>
   );

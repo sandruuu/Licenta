@@ -8,12 +8,12 @@ import (
 	"pdp/models"
 )
 
-func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, now time.Time, riskScore int, observedAccess models.AccessConditions) bool {
-	return e.matchesRuleScope(rule, ctx, now, riskScore, observedAccess) &&
+func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, now time.Time, observedAccess models.AccessConditions) bool {
+	return e.matchesRuleScope(rule, ctx, now, observedAccess) &&
 		matchesHealthRequirements(rule.Conditions, ctx.Request.DeviceHealth)
 }
 
-func (e *Engine) matchesRuleScope(rule *models.PolicyRule, ctx AccessContext, now time.Time, riskScore int, observedAccess models.AccessConditions) bool {
+func (e *Engine) matchesRuleScope(rule *models.PolicyRule, ctx AccessContext, now time.Time, observedAccess models.AccessConditions) bool {
 	req := ctx.Request
 	cond := rule.Conditions
 
@@ -21,7 +21,7 @@ func (e *Engine) matchesRuleScope(rule *models.PolicyRule, ctx AccessContext, no
 		return false
 	}
 
-	if !matchesRiskConditions(cond.Risk, riskScore, observedAccess, ctx, req) {
+	if !matchesRiskConditions(cond.Risk, observedAccess, ctx, req) {
 		return false
 	}
 
@@ -109,12 +109,12 @@ func (e *Engine) matchesRuleScope(rule *models.PolicyRule, ctx AccessContext, no
 	return true
 }
 
-func (e *Engine) defaultDecision(req models.AccessRequest, riskScore int, observedAccess models.AccessConditions) *models.AccessDecision {
-	log.Printf("[PE] Default decision: DENY (no matching rule, risk=%d)", riskScore)
+func (e *Engine) defaultDecision(req models.AccessRequest, observedAccess models.AccessConditions, riskSignals []string) *models.AccessDecision {
+	log.Printf("[PE] Default decision: DENY (no matching rule)")
 	return &models.AccessDecision{
 		Decision:         models.DecisionDeny,
 		Reason:           "No matching access rule - denied by zero-trust default",
-		RiskScore:        riskScore,
+		RiskSignals:      append([]string(nil), riskSignals...),
 		AccessConditions: observedAccess,
 	}
 }

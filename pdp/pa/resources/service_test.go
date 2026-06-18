@@ -27,7 +27,9 @@ func TestServiceCreateResourceCreatesProtectedResourceAndPublishesEvent(t *testi
 		Name:           "SSH Admin",
 		Type:           "ssh",
 		Host:           "ssh.internal.test",
-		Port:           22,
+		ExternalPort:   22,
+		InternalPort:   22,
+		ExternalURL:    "ssh.example.test",
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
@@ -66,9 +68,20 @@ func TestServiceCreateResourceValidatesRequest(t *testing.T) {
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("missing scope error = %v, want ErrInvalidRequest", err)
 	}
+
+	_, err = service.CreateResource(models.Resource{
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "No Ports",
+		Type:           "ssh",
+		Host:           "ssh.internal.test",
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("missing ports error = %v, want ErrInvalidRequest", err)
+	}
 }
 
-func TestServiceCreateResourceRequiresHTTPSForWebResources(t *testing.T) {
+func TestServiceCreateResourceValidatesExternalHost(t *testing.T) {
 	dataStore := newResourceTestStore(t)
 	seedResourceScope(dataStore)
 	service := NewService(dataStore)
@@ -79,10 +92,12 @@ func TestServiceCreateResourceRequiresHTTPSForWebResources(t *testing.T) {
 		Name:           "Portal",
 		Type:           "web",
 		Host:           "web-app",
-		ExternalURL:    "http://web-app.trustcloud.test",
+		ExternalPort:   443,
+		InternalPort:   443,
+		ExternalURL:    "10",
 	})
 	if !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("http web resource error = %v, want ErrInvalidRequest", err)
+		t.Fatalf("numeric external fqdn error = %v, want ErrInvalidRequest", err)
 	}
 
 	resource, err := service.CreateResource(models.Resource{
@@ -90,14 +105,67 @@ func TestServiceCreateResourceRequiresHTTPSForWebResources(t *testing.T) {
 		GatewayID:      testGatewayID,
 		Name:           "Portal",
 		Type:           "web",
-		Host:           "web-app",
-		ExternalURL:    "https://web-app.trustcloud.test",
+		Host:           "10.10.0.5",
+		ExternalPort:   443,
+		InternalPort:   443,
+		ExternalURL:    "https://web-app.trustcloud.test/admin",
 	})
 	if err != nil {
 		t.Fatalf("CreateResource returned error: %v", err)
 	}
-	if resource.Port != 443 {
-		t.Fatalf("default web resource port = %d, want 443", resource.Port)
+	if resource.ExternalURL != "https://web-app.trustcloud.test/admin" {
+		t.Fatalf("ExternalURL = %q, want original trimmed URL", resource.ExternalURL)
+	}
+
+	httpResource, err := service.CreateResource(models.Resource{
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "HTTP Portal",
+		Type:           "web",
+		Host:           "web-http",
+		ExternalPort:   80,
+		InternalPort:   8080,
+		ExternalURL:    "http://web-http.trustcloud.test/login",
+	})
+	if err != nil {
+		t.Fatalf("CreateResource with HTTP external host returned error: %v", err)
+	}
+	if httpResource.ExternalURL != "http://web-http.trustcloud.test/login" {
+		t.Fatalf("ExternalURL = %q, want original HTTP URL", httpResource.ExternalURL)
+	}
+}
+
+func TestServiceCreateResourceValidatesInternalHost(t *testing.T) {
+	dataStore := newResourceTestStore(t)
+	seedResourceScope(dataStore)
+	service := NewService(dataStore)
+
+	_, err := service.CreateResource(models.Resource{
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "RDP",
+		Type:           "rdp",
+		Host:           "10",
+		ExternalPort:   3389,
+		InternalPort:   3389,
+		ExternalURL:    "rdp.trustcloud.test",
+	})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid internal IPv4 error = %v, want ErrInvalidRequest", err)
+	}
+
+	_, err = service.CreateResource(models.Resource{
+		OrganizationID: testOrganizationID,
+		GatewayID:      testGatewayID,
+		Name:           "RDP",
+		Type:           "rdp",
+		Host:           "rdp.internal",
+		ExternalPort:   3389,
+		InternalPort:   3389,
+		ExternalURL:    "rdp.trustcloud.test",
+	})
+	if err != nil {
+		t.Fatalf("CreateResource returned error: %v", err)
 	}
 }
 
@@ -109,20 +177,21 @@ func TestServiceUpdateResourcePatchesFieldsAndPublishesEvent(t *testing.T) {
 	service := NewService(dataStore)
 	service.SetEventPublisher(publisher)
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: testOrganizationID, GatewayID: testGatewayID, Name: "Old", Type: "ssh", Host: "old.internal", Port: 22, Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: testOrganizationID, GatewayID: testGatewayID, Name: "Old", Type: "ssh", Host: "old.internal", ExternalPort: 22, InternalPort: 22, ExternalURL: "ssh.example.test", Enabled: true, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
 
 	fields := map[string]json.RawMessage{
-		"name":     json.RawMessage(`"New"`),
-		"port":     json.RawMessage(`2222`),
-		"enabled":  json.RawMessage(`false`),
-		"tags":     json.RawMessage(`["prod","ssh"]`),
-		"metadata": json.RawMessage(`{"owner":"ops"}`),
+		"name":          json.RawMessage(`"New"`),
+		"external_port": json.RawMessage(`2222`),
+		"internal_port": json.RawMessage(`22`),
+		"enabled":       json.RawMessage(`false`),
+		"tags":          json.RawMessage(`["prod","ssh"]`),
+		"metadata":      json.RawMessage(`{"owner":"ops"}`),
 	}
 	updated, err := service.UpdateResource("res-1", fields)
 	if err != nil {
 		t.Fatalf("UpdateResource returned error: %v", err)
 	}
-	if updated.Name != "New" || updated.Port != 2222 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" {
+	if updated.Name != "New" || updated.ExternalPort != 2222 || updated.InternalPort != 22 || updated.Enabled || len(updated.Tags) != 2 || updated.Metadata["owner"] != "ops" {
 		t.Fatalf("resource fields not patched correctly: %+v", updated)
 	}
 	if len(publisher.events) != 1 || publisher.events[0].fields["action"] != "updated" {
@@ -137,7 +206,7 @@ func TestServiceDeleteResourcePublishesEvent(t *testing.T) {
 	service := NewService(dataStore)
 	service.SetEventPublisher(publisher)
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", Name: "Portal", Type: "web", Host: "portal.internal.test", CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", Name: "Portal", Type: "web", Host: "portal.internal.test", ExternalPort: 443, InternalPort: 443, CreatedAt: fixedNow.Add(-time.Hour), UpdatedAt: fixedNow.Add(-time.Hour)})
 
 	if err := service.DeleteResource("res-1"); err != nil {
 		t.Fatalf("DeleteResource returned error: %v", err)

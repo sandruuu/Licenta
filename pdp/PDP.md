@@ -34,8 +34,7 @@ In cod, PDP-ul este impartit in aceste zone principale:
 - `store`: persistenta PostgreSQL.
 - `pa`: Policy Administrator si serviciile lui.
 - `runtime/redisstate`: state runtime distribuit in Redis, lock-uri, rate limit, login lockout, evenimente si gateway control.
-- `pe/evaluation`: Policy Engine, impartit pe evaluare, actiuni, matching, step-up, risc, health/proces si IP/timp.
-- `pe/risk`: calculul scorului numeric de risc.
+- `pe/evaluation`: Policy Engine, impartit pe evaluare, actiuni, matching, step-up, semnale contextuale, health/proces si IP/timp.
 - `pa/transport`: HTTP, gRPC, middleware si dashboard.
 - `pa/transport/agent_stepup_browser_*`: flow-ul browser de step-up, separat in handlers, metode UI si endpoint-uri WebAuthn.
 - `pa/transport/scim_*`: routerul SCIM, operatiile pe resurse si utilitarele comune SCIM.
@@ -109,13 +108,9 @@ Campuri JSON exacte pe grupuri:
 - Autentificare admin: login-ul cu parola cere intotdeauna MFA; nu exista toggle de configurare pentru dezactivare.
 - Dashboard public: `public.federated_callback_url`, `public.oidc_default_scopes`, `public.oidc_default_claim_mapping`, `public.resource_default_ports`.
 - Geo lookup: `geo.provider_url`, `geo.http_timeout`, `geo.cache_ttl`, `geo.cache_max_entries`, `geo.same_area_distance_km`, `geo.suspicious_travel_speed_kmh`, `geo.impossible_travel_speed_kmh`.
-- Risk scoring: `risk.device_data_critical_after`, `risk.device_data_stale_after`, `risk.device_data_critical_points`, `risk.device_data_stale_points`, `risk.no_device_health_points`, `risk.health_excellent_min`, `risk.health_good_min`, `risk.health_fair_min`, `risk.health_good_points`, `risk.health_fair_points`, `risk.health_poor_points`, `risk.critical_check_points`, `risk.failed_attempts_high`, `risk.failed_attempts_medium`, `risk.failed_attempts_low`, `risk.failed_attempts_high_points`, `risk.failed_attempts_medium_points`, `risk.failed_attempts_low_points`, `risk.business_hours_start`, `risk.business_hours_end`, `risk.business_days`, `risk.outside_business_points`, `risk.night_hours_start`, `risk.night_hours_end`, `risk.night_hours_points`, `risk.new_device_points`, `risk.new_location_points`, `risk.user_baseline_anomaly_points`, `risk.protocol_points`, `risk.unknown_protocol_points`, `risk.impossible_travel_points`, `risk.suspicious_geo_velocity_kmh`, `risk.suspicious_geo_velocity_points`, `risk.max_anomaly_points`, `risk.max_score`.
-
 Fisierul `pdp/config.json` nu mai contine URL-uri locale sau secrete demo. Valorile dependente de mediu, cum ar fi originul public, callback-ul OIDC federat, URL-ul PostgreSQL, URL-ul Redis si tokenul Vault, trebuie livrate prin Secret/ConfigMap sau variabile de mediu. Valorile publice neutre ramase sunt `oidc_default_scopes="openid profile email"`, claim mapping `username=preferred_username`, `email=email`, `groups=groups`, iar `resource_default_ports` este `web=443`, `ssh=22`, `rdp=3389`.
 
 Valorile geo efective sunt: provider `https://ipapi.co/{ip}/json/`, timeout `3s`, cache TTL `1h`, maxim `10000` intrari in cache, aceeasi arie la `50km`, viteza suspecta la `500km/h` si imposibila la `900km/h`.
-
-Valorile de risc efective sunt: device data critic dupa `30m` cu `30` puncte, device data stale dupa `10m` cu `15` puncte, lipsa health `25` puncte, health excellent minim `80`, good minim `60`, fair minim `40`, good `10` puncte, fair `20`, poor `35`, critical checks `Firewall=5`, `Antivirus=5`, `Disk Encryption=3`, `Password & Lock=2`, failed attempts high/medium/low la `5/3/1` incercari cu `20/10/5` puncte, business hours `08:00-18:00` luni-vineri, outside business `10` puncte, night hours `00:00-06:00` cu `5` puncte, device nou `10`, locatie noua `5`, protocol points `rdp=10`, `ssh=5`, `http=0`, `https=0`, protocol necunoscut `5`, impossible travel `30`, viteza geo suspecta `500km/h` cu `15` puncte, plafon anomalii `25` si scor maxim `100`.
 
 Cand `pdp_public_origin` este setat, config-ul deriva si completeaza:
 
@@ -172,6 +167,12 @@ Defaulturile aplicate in cod includ:
 - max incercari enrollment pe window: `5`;
 - timeout revocare gateway: `5s`;
 - reinnoire sesiune resursa inainte de expiry: `1m`;
+- access token admin dashboard: `5m`;
+- idle timeout sesiune admin dashboard: `30m`;
+- absolute timeout sesiune admin dashboard: `8h`;
+- access token agent session: `5m`;
+- idle timeout agent session: `30m`;
+- absolute timeout agent session: `8h`;
 - issuer TOTP: `TrustCloud`;
 - path secret MFA criptat: `data_dir/mfa_secret.key.enc`;
 - validitate certificat gateway: `7` zile;
@@ -211,6 +212,12 @@ Fisierul `pdp/config.json` curent configureaza duratele in nanosecunde, fiindca 
 - `runtime.federation_cache_ttl = 21600000000000`: 6h.
 - `runtime.federation_http_timeout = 10000000000`: 10s.
 - `runtime.browser_auth_session_ttl = 300000000000`: 5m.
+- `runtime.admin_access_token_ttl = 300000000000`: 5m.
+- `runtime.admin_session_idle_ttl = 1800000000000`: 30m.
+- `runtime.admin_session_absolute_ttl = 28800000000000`: 8h.
+- `runtime.agent_session_access_token_ttl = 300000000000`: 5m.
+- `runtime.agent_session_idle_ttl = 1800000000000`: 30m.
+- `runtime.agent_session_absolute_ttl = 28800000000000`: 8h.
 - `runtime.csrf_cookie_max_age_seconds = 3600`: 1h.
 - `runtime.enroll_rate_limit_window = 60000000000`: 1m.
 - `runtime.enroll_rate_limit_max = 5`: maxim 5 incercari enrollment pe IP/fereastra.
@@ -222,20 +229,19 @@ Fisierul `pdp/config.json` curent configureaza duratele in nanosecunde, fiindca 
 - `enrollment.browser_session_ttl = 300000000000`: 5m.
 - `geo.http_timeout = 3000000000`: 3s.
 - `geo.cache_ttl = 3600000000000`: 1h.
-- `risk.device_data_stale_after = 600000000000`: 10m.
-- `risk.device_data_critical_after = 1800000000000`: 30m.
-
 `runtime.http_read_timeout`, `runtime.http_write_timeout` si `runtime.http_idle_timeout` sunt `0` in config-ul curent. In Go `http.Server`, valoarea zero inseamna ca timeout-ul respectiv nu este impus de acel camp.
 
 ### 3.5 Durata tokenurilor, codurilor si challenge-urilor
 
 Duratele efective in configuratia curenta:
 
-- Token admin dashboard: 1h. Este JWT ES256 generat cu `GenerateAuthTokenWithPurpose`, foloseste `jwt_expiry`, audience `trustcloud`, JTI revocabil si `mfa_done=true` dupa MFA.
+- Access token admin dashboard: 5m. Este JWT ES256 cu audience `trustcloud`, `mfa_done=true`, JTI revocabil si `session_id` obligatoriu. Middleware-ul admin accepta tokenul doar daca sesiunea `session_id` exista in Redis si userul local este inca enabled cu rol `platform_admin`. Tokenurile admin vechi fara `session_id` sunt refuzate.
+- Sesiune admin dashboard: state server-side in Redis, cheia `admin_dashboard_session`, cu refresh token stocat doar ca hash. Refresh tokenul este single-use logic: `/api/auth/session/refresh` verifica hash-ul, roteste refresh tokenul, extinde idle timeout-ul si emite un access token nou. Idle timeout-ul este 30m fara activitate, iar absolute timeout-ul este 8h.
+- Logout admin dashboard: `/api/auth/logout` sterge sesiunea Redis si revoca JTI-ul access tokenului curent daca este prezent. Din acel moment, orice access token ramas neexpirat este refuzat deoarece sesiunea server-side nu mai exista.
 - Token pentru passkey enrollment admin: 1h. Este acelasi tip de JWT admin, dar cu purpose `passkey_enrollment`; endpoint-urile de inrolare passkey cer acest purpose.
 - Token OIDC access token emis de PDP: 1h. Raspunsul `/auth/token` intoarce `expires_in = 3600`, calculat din `JWTExpiry.Seconds()`.
 - Token OIDC ID token emis de PDP: 1h. Este tot JWT PDP; daca exista nonce, tokenul este regenerat cu nonce si acelasi `jwt_expiry`.
-- Token agent session: 1h. Este JWT cu audience `trustagent-api`, purpose `trustagent.session`, subject `device:{device_id}`, `mfa_done=true`, scope-uri agent si binding la certificatul mTLS prin `cnf.x5t#S256`.
+- Access token agent session: 5m. Este JWT cu audience `trustagent-api`, purpose `trustagent.session`, subject `device:{device_id}`, `mfa_done=true`, scope-uri agent si binding la certificatul mTLS prin `cnf.x5t#S256`. Sesiunea reala este server-side in Redis ca `agent_session_transaction`: `RenewSession` roteste access tokenul, dar nu extinde idle timeout-ul. Idle timeout-ul se muta doar la activitate reala de acces la resurse, iar absolute timeout-ul ramane 8h de la claim.
 - Token EST/device enrollment: 5m. Este JWT dedicat cu audience `trustcloud-enrollment`, purpose `device_enrollment`, device_id obligatoriu, JTI obligatoriu si `expires_in = 300`. Este consumat single-use prin `ConsumeTokenOnce`.
 - OIDC authorize session: 5m. Este sesiunea Redis dintre `/auth/authorize` si autentificarea browserului.
 - OIDC authorization code: 60s. Codul este single-use; daca este refolosit, este sters si refuzat.
@@ -293,7 +299,7 @@ Tabele:
 - `policy_rules`: politici; include nume, descriere, enabled, action, conditions JSON, session controls, auth/user/network/location/risk policies si step-up requirements.
 - `policy_assignments`: assignment-uri de politici; include policy ID, organizatie, nivel, target resource, target group, order index si flag default.
 - `sessions`: sesiuni active de acces; include user/device/resource/gateway/organizatie, protocol, expirare, session controls, risk, matched rule/policy si revocation flag.
-- `resources`: resurse protejate; include tip, host, port, external URL, organizatie, gateway, enabled, tags, metadata.
+- `resources`: resurse protejate; include tip, host intern, `internal_port`, external URL/FQDN, `external_port`, organizatie, gateway, enabled, tags, metadata.
 - `audit_log`: evenimente auditabile; include hash chain prin `prev_hash` si `entry_hash`.
 - `device_data`: raport raw normalizat de device posture.
 - `revoked_tokens`: JTI-uri revocate sau consumate o singura data.
@@ -317,7 +323,7 @@ Codul nu pastreaza ramuri alternative de baza de date sau migrari versionate. `I
 Redis este obligatoriu pentru componentele care trebuie partajate intre replici PDP, dar nu trebuie persistate relational:
 
 - OIDC authorize sessions, authorization codes, refresh tokens si federation state;
-- WebAuthn challenge sessions si admin MFA challenges;
+- WebAuthn challenge sessions, admin MFA challenges si sesiuni admin dashboard cu refresh token rotit;
 - browser enrollment sessions, agent session transactions si step-up browser auth;
 - step-up challenges si binding-uri sesiune-gateway;
 - rate limiting si login lockout;
@@ -343,7 +349,7 @@ PDP poate rula cu mai multe replici daca sunt respectate urmatoarele conditii:
 
 Manifesturile pornesc cu doua replici, HPA minim doua replici si maxim cinci, Service intern `ClusterIP`, Service public `LoadBalancer` pentru mTLS, Ingress normal pentru UI/OIDC cu cert-manager/Let's Encrypt, probe `/live` si `/ready`, plus exemple pentru Secret si fallback passthrough. Nu se introduce versionare aplicativa noua de tip `v1`/`v2`; rutele si structurile raman unice.
 
-Codul runtime foloseste Redis pentru lock-uri distribuite, rate limit, sesiuni OIDC/WebAuthn/MFA/step-up, sesiuni interactive de enrollment agent, cozi de control gateway si cache-ul de discovery OIDC federat. Clientii OIDC sunt cititi din PostgreSQL de fiecare replica. Cheile JWT si MFA nu au fallback local in runtime-ul PDP: Vault Transit, Redis si caile de chei criptate sunt obligatorii. Certificatul PDP este reincarcat periodic de pe disc, astfel incat o replica poate prelua certificatul reinnoit de alta replica.
+Codul runtime foloseste Redis pentru lock-uri distribuite, rate limit, sesiuni admin dashboard, sesiuni OIDC/WebAuthn/MFA/step-up, sesiuni interactive de enrollment agent, cozi de control gateway si cache-ul de discovery OIDC federat. Clientii OIDC sunt cititi din PostgreSQL de fiecare replica. Cheile JWT si MFA nu au fallback local in runtime-ul PDP: Vault Transit, Redis si caile de chei criptate sunt obligatorii. Certificatul PDP este reincarcat periodic de pe disc, astfel incat o replica poate prelua certificatul reinnoit de alta replica.
 
 La SIGTERM, transportul PDP marcheaza readiness-ul ca `draining`, asteapta `readiness_drain_delay`, apoi executa graceful shutdown pe serverul HTTP/gRPC cu `http_shutdown_timeout`.
 
@@ -364,8 +370,7 @@ La SIGTERM, transportul PDP marcheaza readiness-ul ca `draining`, asteapta `read
 - `auth_token`;
 - `app`;
 - `process`: identitatea procesului client;
-- `anomaly_alerts`;
-- `anomaly_score`.
+- `anomaly_alerts`.
 
 ### 5.2 ProcessIdentity
 
@@ -385,8 +390,7 @@ Politicile pot bloca sau permite dupa nume, path, basename si hash SHA256. Hash-
 
 - `decision`: `allow`, `deny` sau `step_up_required`;
 - `reason`;
-- `risk_score`;
-- `risk_level`;
+- `risk_signals`: semnale concrete observate, de exemplu `new_location`, `impossible_travel` sau `device_non_compliant`;
 - `access_conditions`;
 - `session_controls`;
 - `matched_rule`;
@@ -411,7 +415,7 @@ Politicile pot bloca sau permite dupa nume, path, basename si hash SHA256. Hash-
 `RuleConditions` permite:
 
 - mod de potrivire access conditions: `all` sau `any`;
-- risc: scor minim/maxim, niveluri si semnale;
+- risc: semnale explicite, nu scor numeric;
 - roluri, useri si grupuri permise;
 - locatie utilizator;
 - retea;
@@ -492,7 +496,7 @@ Pentru acces, `device_data` este convertit in health prin `DeviceHealthFromData`
 - protocol;
 - source IP;
 - created/last activity/expiry;
-- risk score;
+- risk signals;
 - matched rule;
 - matched policy list;
 - session controls;
@@ -529,7 +533,7 @@ PA-ul este stratul care aduna contextul real din store inainte sa cheme PE:
 - construieste context de locatie si geo-velocity;
 - selecteaza politicile aplicabile prin assignments.
 
-Daca userul federat are un `directory_user` dezactivat, PA intoarce deny direct cu risc 100 si motivul `directory user is disabled`.
+Daca userul federat are un `directory_user` dezactivat, PA intoarce deny direct cu motivul `directory user is disabled`.
 
 ## 7. Policy Engine
 
@@ -539,17 +543,16 @@ PE-ul este in `pdp/pe/evaluation`.
 
 `Evaluate` executa:
 
-1. Calculeaza riscul prin `risk.CalculateRiskScore`.
-2. Deriva access conditions observate.
-3. Parcurge regulile enabled care se potrivesc pe scope.
-4. Imbina session controls restrictiv.
-5. Intoarce deny imediat daca device posture esueaza sau actiunea efectiva este deny.
-6. Colecteaza regulile care cer step-up.
-7. Retine prima regula allow.
-8. Daca nu s-a potrivit nimic, deny fail-closed.
-9. Daca exista step-up si contextul nu satisface cerinta, intoarce `step_up_required`.
-10. Daca step-up-ul este satisfacut, allow.
-11. Daca exista allow, allow.
+1. Deriva access conditions observate si semnalele concrete ale requestului.
+2. Parcurge regulile enabled care se potrivesc pe scope.
+3. Imbina session controls restrictiv.
+4. Intoarce deny imediat daca device posture esueaza sau actiunea efectiva este deny.
+5. Colecteaza regulile care cer step-up.
+6. Retine prima regula allow.
+7. Daca nu s-a potrivit nimic, deny fail-closed.
+8. Daca exista step-up si contextul nu satisface cerinta, intoarce `step_up_required`.
+9. Daca step-up-ul este satisfacut, allow.
+10. Daca exista allow, allow.
 
 Prioritatea efectiva este:
 
@@ -633,18 +636,9 @@ Actiunile canonice acceptate de motor sunt `allow`, `deny` si `step_up_required`
 
 ### 7.5 Conditii de risc
 
-Riscul este transformat in nivel:
+Nu exista scor numeric de risc. Motorul de politici decide pe baza regulilor configurate explicit si a semnalelor concrete observate.
 
-- `critical`: scor >= 80;
-- `high`: scor >= 60;
-- `medium`: scor >= 30;
-- `low`: sub 30.
-
-Conditiile pot verifica:
-
-- scor minim/maxim;
-- lista de niveluri acceptate;
-- semnale concrete, precum new location, impossible travel, baseline anomaly.
+Conditiile de risc pot verifica doar semnale concrete, precum new location, impossible travel, baseline anomaly, device non-compliant, compromised endpoint, failed attempts sau anomalii raportate.
 
 ### 7.6 Retele
 
@@ -743,17 +737,17 @@ Session controls sunt imbinate restrictiv:
 - cel mai mic `max_age_seconds` pozitiv castiga;
 - cel mai mic `revalidate_every_seconds` pozitiv castiga;
 - `revoke_on_posture_change` se combina prin OR;
-- `revoke_on_risk_increase` se combina prin OR.
+- semnalele observate sunt atasate sesiunii pentru audit si troubleshooting.
 
-## 8. Calculul de risc
+## 8. Semnale contextuale
 
-Calculul este in `pe/risk/risk.go`.
+Semnalele sunt derivate in `pe/evaluation/risk_conditions.go`.
 
-Scorul este intre `0` si `100`. Semnale folosite:
+Nu exista scor numeric de risc. PE nu decide pe baza unui numar, ci pe baza politicilor si a semnalelor concrete observate. Semnale folosite:
 
 - date device stale;
 - statusuri device critical;
-- scor device health agregat;
+- stare device health agregata;
 - checks critice configurate;
 - incercari de login esuate;
 - acces in afara orelor business;
@@ -761,12 +755,9 @@ Scorul este intre `0` si `100`. Semnale folosite:
 - device nou;
 - locatie noua;
 - anomaly de baseline utilizator;
-- protocol sensibil sau necunoscut;
 - impossible travel;
 - geo velocity suspect;
-- anomaly score din request.
-
-Protocoalele sensibile includ SSH si RDP, sau porturile 22 si 3389.
+- anomalii raportate in request.
 
 ## 9. Autentificare administrator
 
@@ -893,8 +884,7 @@ Ordinea de rezolvare IdP este:
 
 1. `idp_id` explicit, cu verificare de organizatie;
 2. `login_hint` dupa domeniu, prin domenii IdP sau domenii de organizatie;
-3. `organization_id` explicit;
-4. fallback la singura organizatie activata cu IdP, doar daca exista exact una.
+3. `organization_id` explicit.
 
 Pentru o organizatie, IdP-ul default este `default_idp_id` daca este enabled; altfel primul IdP enabled.
 
@@ -1307,6 +1297,7 @@ gRPC:
 - `SessionStatus`;
 - `ClaimSession`;
 - `GetCatalog`;
+- `RenewSession`;
 - `RevokeSession`.
 
 Toate operatiile relevante cer mTLS dispozitiv. Interceptorul verifica:
@@ -1324,6 +1315,8 @@ Agentul trebuie sa trimita informatii despre userul local Windows:
 - SID hash;
 - logon session ID;
 - Windows session ID.
+
+Request-ul trebuie sa includa `session_renewal_required=true`. Sesiunea agent este intotdeauna gestionata server-side in Redis, cu `RenewSession`, idle timeout si absolute timeout; nu exista fallback la sesiuni agent fara aceste limite.
 
 Device ID-ul din request, daca exista, trebuie sa fie identic cu cel din certificat.
 
@@ -1346,6 +1339,7 @@ Agentul revendica sesiunea dupa ce browser login-ul a terminat. PDP verifica:
 - nu este consumat;
 - claim secret este valid;
 - datele userului local Windows se potrivesc cu cele din StartSession;
+- request-ul include `session_renewal_required=true`;
 - certificatul dispozitivului este acelasi.
 
 La succes:
@@ -1355,6 +1349,7 @@ La succes:
 - leaga tokenul de thumbprint-ul certificatului prin `cnf.x5t#S256`;
 - include scope-uri;
 - include organizatie, user, device si Windows session fields;
+- creeaza starea server-side Redis cu `last_activity_at`, `idle_expires_at`, `absolute_expires_at`;
 - intoarce user info.
 
 ### 15.4 Agent session token
@@ -1376,6 +1371,8 @@ Tokenul agent are:
   - `session:revoke`.
 
 Validarea verifica audience, purpose, scope, JTI nerevocat si thumbprint certificat.
+
+`RenewSession` cere token cu scope `session:renew`, acelasi mTLS device si acelasi `session_id`. PDP cauta sesiunea in Redis, verifica idle timeout-ul si absolute timeout-ul, revoca JTI-ul tokenului vechi si emite un access token nou. Renew-ul de fundal nu actualizeaza `last_activity_at`; acesta este actualizat doar dupa o autorizare reusita de resursa cu scope `flow:authorize`.
 
 ### 15.5 Catalog
 
@@ -1427,7 +1424,6 @@ gRPC:
 
 - cere token cu scope `device-data:write`;
 - cere mTLS device;
-- respinge campul `overall_score` in rapoartele raw;
 - cere `device_id` egal cu identitatea certificatului;
 - seteaza organizatia din enrollment;
 - seteaza source IP din peer;
@@ -1560,8 +1556,6 @@ Daca exista si este valida:
 - aplica session controls noi;
 - reinnoieste doar daca expira inainte de `renew_before` sau daca noile controale o fac mai scurta;
 - altfel o reutilizeaza.
-
-Daca `RevokeOnRiskIncrease` este true si riscul nou este mai mare decat riscul sesiunii existente, sesiunea veche este revocata cu motiv `risk_increased` si se creeaza una noua.
 
 Expiry-ul este minimul dintre:
 
@@ -1770,6 +1764,8 @@ Evenimente suprimate si sterse din lant:
 
 - `POST /api/auth/login`
 - `POST /api/auth/mfa/verify`
+- `POST /api/auth/session/refresh`
+- `POST /api/auth/logout`
 - `POST /api/auth/revoke-token`
 - `POST /api/auth/passkey/login/begin`
 - `POST /api/auth/passkey/login/finish`
@@ -1838,7 +1834,9 @@ Evenimente suprimate si sterse din lant:
 
 Metode exacte pentru API-urile admin:
 
-- `GET /api/admin/session`: confirma sesiunea admin curenta si intoarce status, user_id, username si role din headerele setate de middleware.
+- `GET /api/admin/session`: confirma sesiunea admin curenta pe baza access tokenului si a sesiunii Redis active; intoarce status, user_id, username, role, `session_id`, `expires_at`, `expires_in`, `idle_expires_at` si `absolute_expires_at`. Nu emite token nou.
+- `POST /api/auth/session/refresh`: primeste `session_id` si `refresh_token`, valideaza hash-ul din Redis, roteste refresh tokenul, extinde idle timeout-ul si intoarce un nou `auth_token`, `refresh_token`, `session_id`, `expires_at`, `expires_in` si `refresh_expires_at`.
+- `POST /api/auth/logout`: sterge sesiunea Redis prin access token valid si/sau refresh token valid; access tokenurile ramase sunt refuzate imediat pentru ca nu mai au sesiune server-side.
 - `GET /api/admin/users`: intoarce doar userul admin curent; campurile sensibile sunt eliminate.
 - `GET /api/admin/organizations`: listeaza organizatiile unde adminul are membership.
 - `POST /api/admin/organizations`: creeaza organizatie, genereaza ID cu prefix `org` daca lipseste, asigura Global Policy si creeaza membership pentru adminul curent.
@@ -1848,7 +1846,7 @@ Metode exacte pentru API-urile admin:
 - `GET /api/admin/organizations/idps?organization_id=...`: listeaza IdP-urile organizatiei, cu secretele mascate.
 - `POST /api/admin/organizations/idps`: creeaza IdP; cere organization_id, name, issuer si client_id; refuza al doilea IdP pentru aceeasi organizatie.
 - `GET /api/admin/organizations/idps/{id}`: citeste un IdP dupa ID, cu verificare de acces pe organizatie.
-- `PUT /api/admin/organizations/idps/{id}`: actualizeaza partial IdP-ul; `client_secret` si `scim_token` sunt schimbate doar daca payload-ul trimite valori non-empty.
+- `PUT /api/admin/organizations/idps/{id}`: actualizeaza partial IdP-ul; `client_secret` se schimba doar daca payload-ul trimite o valoare non-empty, iar tokenul SCIM se schimba doar prin `regenerate_scim_token=true`.
 - `DELETE /api/admin/organizations/idps/{id}`: sterge IdP-ul si reconciliaza default IdP pe organizatie.
 - `POST /api/admin/organizations/idps/discover`: primeste `issuer`, ruleaza OIDC discovery si intoarce endpoints sau HTTP 502 la esec.
 - `GET /api/admin/sessions`: listeaza sesiunile active filtrate pe organizatiile permise.

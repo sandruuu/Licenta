@@ -7,13 +7,13 @@ COPY . .
 RUN mkdir -p /build/bin && CGO_ENABLED=0 go build -o /build/bin/gateway ./cmd/gateway
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates su-exec
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
 WORKDIR /app
 RUN mkdir -p certs && chown -R appuser:appuser /app
 COPY --from=builder /build/bin/gateway .
-COPY config.json /app/config.json
-USER appuser
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 9443
 VOLUME ["/app/certs"]
-ENTRYPOINT ["./gateway"]
+ENTRYPOINT ["docker-entrypoint.sh"]

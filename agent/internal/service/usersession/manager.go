@@ -41,6 +41,12 @@ func normalizeConfig(config Config) Config {
 	if config.LoginPollInterval <= 0 {
 		config.LoginPollInterval = DefaultPollInterval
 	}
+	if config.SessionRenewBefore <= 0 {
+		config.SessionRenewBefore = DefaultSessionRenewBefore
+	}
+	if config.SessionRenewRetryInterval <= 0 {
+		config.SessionRenewRetryInterval = DefaultSessionRenewRetry
+	}
 	config.TrustedStepUpHosts = normalizeTrustedStepUpHosts(config.TrustedStepUpHosts)
 	return config
 }
@@ -536,7 +542,90 @@ func (manager *Manager) startAuthenticatedSessionExpiryWatcher(key string) {
 	expiresAt := session.expiresAt
 	manager.mu.Unlock()
 
-	go manager.expireAuthenticatedSession(ctx, key, sessionID, sessionToken, peer, expiresAt)
+	go manager.maintainAuthenticatedSession(ctx, key, sessionID, sessionToken, peer, expiresAt)
+}
+
+func (manager *Manager) maintainAuthenticatedSession(ctx context.Context, key, sessionID, sessionToken string, peer ipc.PeerIdentity, expiresAt time.Time) {
+	currentToken := sessionToken
+	currentExpiresAt := expiresAt
+	for {
+		wait := manager.authenticatedSessionRenewWait(currentExpiresAt)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		if !manager.clock().UTC().Before(currentExpiresAt.UTC()) {
+			manager.expireAuthenticatedSession(ctx, key, sessionID, currentToken, peer, currentExpiresAt)
+			return
+		}
+
+		renewed, err := manager.renewAuthenticatedSession(ctx, key, sessionID, currentToken)
+		if err == nil {
+			currentToken = renewed.AgentSessionToken
+			currentExpiresAt = renewed.ExpiresAt
+			continue
+		}
+		manager.logger.Warn("failed to renew agent session token", "session_id", sessionID, "error", err)
+
+		retryWait := manager.config.SessionRenewRetryInterval
+		if retryWait <= 0 {
+			retryWait = DefaultSessionRenewRetry
+		}
+		if manager.clock().UTC().Add(retryWait).After(currentExpiresAt.UTC()) {
+			manager.expireAuthenticatedSession(ctx, key, sessionID, currentToken, peer, currentExpiresAt)
+			return
+		}
+		retryTimer := time.NewTimer(retryWait)
+		select {
+		case <-ctx.Done():
+			retryTimer.Stop()
+			return
+		case <-retryTimer.C:
+		}
+	}
+}
+
+func (manager *Manager) renewAuthenticatedSession(ctx context.Context, key, sessionID, sessionToken string) (RenewSessionResponse, error) {
+	renewCtx, cancel := context.WithTimeout(ctx, DefaultSessionRenewTimeout)
+	defer cancel()
+	client, err := manager.clientForLogout(renewCtx)
+	if err != nil {
+		return RenewSessionResponse{}, err
+	}
+	renewed, err := client.RenewSession(renewCtx, RenewSessionRequest{
+		AgentSessionToken: sessionToken,
+		SessionID:         sessionID,
+	})
+	if err != nil {
+		return RenewSessionResponse{}, err
+	}
+	if strings.TrimSpace(renewed.AgentSessionID) != strings.TrimSpace(sessionID) {
+		return RenewSessionResponse{}, fmt.Errorf("renewed session_id does not match active session")
+	}
+	if strings.TrimSpace(renewed.AgentSessionToken) == "" {
+		return RenewSessionResponse{}, fmt.Errorf("renewed agent session token is empty")
+	}
+	if renewed.ExpiresAt.IsZero() || !renewed.ExpiresAt.UTC().After(manager.clock().UTC()) {
+		return RenewSessionResponse{}, fmt.Errorf("renewed agent session token is already expired")
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	session := manager.sessions[key]
+	if session == nil || session.state != ipc.UserSessionStateAuthenticated || session.agentSessionID != sessionID {
+		return RenewSessionResponse{}, fmt.Errorf("active session changed before renewal completed")
+	}
+	if session.agentSessionToken != sessionToken {
+		return RenewSessionResponse{}, fmt.Errorf("active session token changed before renewal completed")
+	}
+	session.agentSessionToken = renewed.AgentSessionToken
+	session.expiresAt = renewed.ExpiresAt
+	session.message = "Authenticated"
+	session.lastError = ""
+	return renewed, nil
 }
 
 func (manager *Manager) expireAuthenticatedSession(ctx context.Context, key, sessionID, sessionToken string, peer ipc.PeerIdentity, expiresAt time.Time) {
@@ -581,6 +670,26 @@ func (manager *Manager) expireAuthenticatedSession(ctx context.Context, key, ses
 			manager.logger.Warn("failed to clear protected resources after session expiry", "session_id", sessionID, "error", err)
 		}
 	}
+}
+
+func (manager *Manager) authenticatedSessionRenewWait(expiresAt time.Time) time.Duration {
+	now := manager.clock().UTC()
+	remaining := expiresAt.UTC().Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	lead := manager.config.SessionRenewBefore
+	if lead <= 0 {
+		lead = DefaultSessionRenewBefore
+	}
+	if maxLead := remaining / 2; maxLead < lead {
+		lead = maxLead
+	}
+	wait := remaining - lead
+	if wait < 0 {
+		return 0
+	}
+	return wait
 }
 
 func (manager *Manager) authenticatedSessionExpiryWait(expiresAt time.Time) time.Duration {

@@ -45,9 +45,6 @@ func (service *deviceDataGRPCService) ReportDeviceData(ctx context.Context, requ
 	if service.server.pa == nil || service.server.pa.Devices == nil {
 		return nil, status.Error(codes.Unavailable, devices.ErrServiceUnavailable.Error())
 	}
-	if _, hasScore := request.GetFields()["overall_score"]; hasScore {
-		return nil, status.Error(codes.InvalidArgument, "overall_score is not accepted on raw device data reports")
-	}
 	report, err := deviceDataReportFromStruct(request)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

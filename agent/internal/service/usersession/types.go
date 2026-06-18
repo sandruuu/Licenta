@@ -24,12 +24,17 @@ const (
 	DefaultPollInterval        = 3 * time.Second
 	DefaultExpiryRevokeLead    = 30 * time.Second
 	DefaultExpiryRevokeTimeout = 10 * time.Second
+	DefaultSessionRenewBefore  = 2 * time.Minute
+	DefaultSessionRenewRetry   = 15 * time.Second
+	DefaultSessionRenewTimeout = 10 * time.Second
 )
 
 type Config struct {
-	LoginTimeout       time.Duration
-	LoginPollInterval  time.Duration
-	TrustedStepUpHosts []string
+	LoginTimeout              time.Duration
+	LoginPollInterval         time.Duration
+	SessionRenewBefore        time.Duration
+	SessionRenewRetryInterval time.Duration
+	TrustedStepUpHosts        []string
 }
 
 type Dependencies struct {
@@ -52,6 +57,7 @@ type Client interface {
 	SessionStatus(context.Context, SessionStatusRequest) (SessionStatusResponse, error)
 	ClaimSession(context.Context, ClaimSessionRequest) (ClaimSessionResponse, error)
 	GetCatalog(context.Context, GetCatalogRequest) (CatalogResponse, error)
+	RenewSession(context.Context, RenewSessionRequest) (RenewSessionResponse, error)
 	RevokeSession(context.Context, RevokeSessionRequest) error
 	Close() error
 }
@@ -103,6 +109,20 @@ type ClaimSessionResponse struct {
 	PolicyEpoch       int
 	DisplayName       string
 	Email             string
+}
+
+type RenewSessionRequest struct {
+	AgentSessionToken string
+	SessionID         string
+}
+
+type RenewSessionResponse struct {
+	AgentSessionID    string
+	AgentSessionToken string
+	ExpiresAt         time.Time
+	IdleExpiresAt     time.Time
+	AbsoluteExpiresAt time.Time
+	PolicyEpoch       int
 }
 
 type GetCatalogRequest struct {

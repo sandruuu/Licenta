@@ -62,6 +62,24 @@ func TestAuthTokenCanCarryPurpose(t *testing.T) {
 	}
 }
 
+func TestAuthTokenCanCarrySessionAndCustomTTL(t *testing.T) {
+	manager := newTestJWTManager(t)
+	authToken, err := manager.GenerateAuthTokenWithSession("user-1", "user@example.com", "platform_admin", "", "", true, "", "ads-session-1", 2*time.Minute)
+	if err != nil {
+		t.Fatalf("GenerateAuthTokenWithSession returned error: %v", err)
+	}
+	claims, err := manager.ValidateAuthToken(authToken)
+	if err != nil {
+		t.Fatalf("ValidateAuthToken returned error: %v", err)
+	}
+	if claims.SessionID != "ads-session-1" {
+		t.Fatalf("session_id = %q, want %q", claims.SessionID, "ads-session-1")
+	}
+	if claims.ExpiresAt == nil || time.Until(claims.ExpiresAt.Time) > 3*time.Minute {
+		t.Fatalf("custom ttl was not applied: expires_at=%v", claims.ExpiresAt)
+	}
+}
+
 func TestEnrollmentParserRejectsAgentToken(t *testing.T) {
 	manager := newTestJWTManager(t)
 	authToken, err := manager.GenerateAuthToken("user-1", "user@example.com", "user", "device-1", "", false)

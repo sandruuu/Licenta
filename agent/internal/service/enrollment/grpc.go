@@ -112,7 +112,6 @@ func (client *GRPCEnrollmentClient) CompleteSession(ctx context.Context, request
 		CertificateThumbprint:  stringField(fields, "certificate_thumbprint"),
 		ExpiresAt:              timeField(fields, "expires_at"),
 		PDPEndpoint:            stringField(fields, "pdp_endpoint"),
-		GatewayEndpoints:       stringSliceField(fields, "gateway_endpoints"),
 		EnrolledByIDPProfileID: stringField(fields, "enrolled_by_idp_profile_id"),
 	}, nil
 }
@@ -162,23 +161,4 @@ func secondsField(fields map[string]any, name string) time.Duration {
 		}
 	}
 	return 0
-}
-
-func stringSliceField(fields map[string]any, name string) []string {
-	value, ok := fields[name]
-	if !ok || value == nil {
-		return nil
-	}
-	raw, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	result := make([]string, 0, len(raw))
-	for _, item := range raw {
-		trimmed := strings.TrimSpace(fmt.Sprint(item))
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
 }

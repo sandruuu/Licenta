@@ -20,6 +20,7 @@ const (
 	sessionGRPCSessionStatusPath = "/" + sessionGRPCServiceName + "/SessionStatus"
 	sessionGRPCClaimSessionPath  = "/" + sessionGRPCServiceName + "/ClaimSession"
 	sessionGRPCGetCatalogPath    = "/" + sessionGRPCServiceName + "/GetCatalog"
+	sessionGRPCRenewSessionPath  = "/" + sessionGRPCServiceName + "/RenewSession"
 	sessionGRPCRevokeSessionPath = "/" + sessionGRPCServiceName + "/RevokeSession"
 )
 
@@ -91,10 +92,11 @@ func NewGRPCClientFromConnection(connection *grpc.ClientConn) (*GRPCClient, erro
 
 func (client *GRPCClient) StartSession(ctx context.Context, request StartSessionRequest) (StartSessionResponse, error) {
 	payload, err := structpb.NewStruct(map[string]any{
-		"device_id":              request.DeviceID,
-		"agent_version":          request.AgentVersion,
-		"device_cert_thumbprint": request.DeviceCertThumbprint,
-		"device_data_revision":   request.DeviceDataRevision,
+		"device_id":                request.DeviceID,
+		"agent_version":            request.AgentVersion,
+		"device_cert_thumbprint":   request.DeviceCertThumbprint,
+		"device_data_revision":     request.DeviceDataRevision,
+		"session_renewal_required": true,
 		"local_user": map[string]any{
 			"sid_hash":                 request.LocalUserSIDHash,
 			"windows_logon_session_id": request.WindowsLogonSessionID,
@@ -137,9 +139,10 @@ func (client *GRPCClient) SessionStatus(ctx context.Context, request SessionStat
 
 func (client *GRPCClient) ClaimSession(ctx context.Context, request ClaimSessionRequest) (ClaimSessionResponse, error) {
 	payload, err := structpb.NewStruct(map[string]any{
-		"session_request_id":   request.SessionRequestID,
-		"claim_secret":         request.ClaimSecret,
-		"device_data_revision": request.DeviceDataRevision,
+		"session_request_id":       request.SessionRequestID,
+		"claim_secret":             request.ClaimSecret,
+		"device_data_revision":     request.DeviceDataRevision,
+		"session_renewal_required": true,
 		"local_user": map[string]any{
 			"sid_hash":                 request.LocalUserSIDHash,
 			"windows_logon_session_id": request.WindowsLogonSessionID,
@@ -184,6 +187,29 @@ func (client *GRPCClient) GetCatalog(ctx context.Context, request GetCatalogRequ
 		TTLSeconds:       int(numberField(fields, "ttl_seconds")),
 		PolicyEpoch:      stringField(fields, "policy_epoch"),
 		DeviceDataPolicy: deviceDataPolicy(fields["device_data_policy"]),
+	}, nil
+}
+
+func (client *GRPCClient) RenewSession(ctx context.Context, request RenewSessionRequest) (RenewSessionResponse, error) {
+	payload, err := structpb.NewStruct(map[string]any{
+		"access_token": request.AgentSessionToken,
+		"session_id":   request.SessionID,
+	})
+	if err != nil {
+		return RenewSessionResponse{}, err
+	}
+	var response structpb.Struct
+	if err := client.connection.Invoke(ctx, sessionGRPCRenewSessionPath, payload, &response); err != nil {
+		return RenewSessionResponse{}, err
+	}
+	fields := response.AsMap()
+	return RenewSessionResponse{
+		AgentSessionID:    stringField(fields, "agent_session_id"),
+		AgentSessionToken: stringField(fields, "agent_session_token"),
+		ExpiresAt:         timeField(fields, "expires_at"),
+		IdleExpiresAt:     timeField(fields, "idle_expires_at"),
+		AbsoluteExpiresAt: timeField(fields, "absolute_expires_at"),
+		PolicyEpoch:       int(numberField(fields, "policy_epoch")),
 	}, nil
 }
 

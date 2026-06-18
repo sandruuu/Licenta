@@ -1,0 +1,29 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+runcmd:
+  - |
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y xrdp xfce4 xfce4-terminal dbus-x11 sudo
+
+    if ! id "${rdp_user}" >/dev/null 2>&1; then
+      if getent group "${rdp_user}" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -g users "${rdp_user}"
+      else
+        useradd -m -s /bin/bash "${rdp_user}"
+      fi
+    fi
+    echo "${rdp_user}:${rdp_password}" | chpasswd
+    adduser "${rdp_user}" sudo || true
+
+    echo "xfce4-session" > "/home/${rdp_user}/.xsession"
+    chown "${rdp_user}:${rdp_user}" "/home/${rdp_user}/.xsession"
+
+    adduser xrdp ssl-cert || true
+    chgrp ssl-cert /etc/xrdp/key.pem || true
+    chmod 0640 /etc/xrdp/key.pem || true
+    systemctl enable --now xrdp

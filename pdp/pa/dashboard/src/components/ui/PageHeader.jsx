@@ -1,6 +1,6 @@
 import { Plus } from 'lucide-react';
 
-export default function PageHeader({ title, subtitle, createLabel, onCreate, size = 'large' }) {
+export default function PageHeader({ title, subtitle, createLabel, onCreate, actions, size = 'large' }) {
   const isLarge = size === 'large';
 
   return (
@@ -10,15 +10,20 @@ export default function PageHeader({ title, subtitle, createLabel, onCreate, siz
           <h1 className={`${isLarge ? 'text-[28px]' : 'text-[22px]'} font-bold leading-tight text-text-primary`}>{title}</h1>
           {subtitle && <p className={`mt-1 ${isLarge ? 'text-base' : 'text-sm'} font-semibold text-text-secondary`}>{subtitle}</p>}
         </div>
-        {createLabel && onCreate && (
-          <button
-            type="button"
-            onClick={onCreate}
-            className="inline-flex shrink-0 items-center gap-2 rounded-md bg-accent px-5 py-2.5 text-sm font-bold text-white-smoke shadow-accent transition-colors hover:bg-accent-hover sm:mt-2"
-          >
-            <Plus size={16} />
-            {createLabel}
-          </button>
+        {(actions || (createLabel && onCreate)) && (
+          <div className="flex shrink-0 items-center gap-2 sm:mt-2">
+            {actions}
+            {createLabel && onCreate && (
+              <button
+                type="button"
+                onClick={onCreate}
+                className="inline-flex shrink-0 items-center gap-2 rounded-md bg-accent px-5 py-2.5 text-sm font-bold text-white-smoke shadow-accent transition-colors hover:bg-accent-hover"
+              >
+                <Plus size={16} />
+                {createLabel}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

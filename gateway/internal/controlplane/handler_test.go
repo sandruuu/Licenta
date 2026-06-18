@@ -49,6 +49,7 @@ func TestHandleProvisionSessionCommand(t *testing.T) {
 			"resource_id":        "res-ssh",
 			"resource_name":      "SSH Server",
 			"internal_host":      "10.10.0.10",
+			"external_port":      float64(2222),
 			"internal_port":      float64(22),
 			"protocol":           "ssh",
 			"expires_at":         now.Add(time.Hour).Format(time.RFC3339Nano),
@@ -66,7 +67,7 @@ func TestHandleProvisionSessionCommand(t *testing.T) {
 		t.Fatalf("provisioned sessions = %d, want 1", len(sessionHandler.provisioned))
 	}
 	session := sessionHandler.provisioned[0]
-	if session.ID != "sess-1" || session.DeviceID != "device-1" || session.ResourceID != "res-ssh" || session.InternalHost != "10.10.0.10" || session.InternalPort != 22 {
+	if session.ID != "sess-1" || session.DeviceID != "device-1" || session.ResourceID != "res-ssh" || session.InternalHost != "10.10.0.10" || session.ExternalPort != 2222 || session.InternalPort != 22 {
 		t.Fatalf("provisioned session = %+v", session)
 	}
 	if session.ExpiresAt.IsZero() || session.MaxBandwidthMbps != 25 || len(session.Constraints) != 2 {

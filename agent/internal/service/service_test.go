@@ -130,7 +130,6 @@ func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T
 			CertificateThumbprint: "thumbprint",
 			ExpiresAt:             now.Add(time.Hour),
 			PDPEndpoint:           "https://pdp.example.com",
-			GatewayEndpoints:      []string{"gw1.example.com"},
 		},
 	}
 	service := New(Config{EnrollmentPollInterval: 10 * time.Millisecond, EnrollmentTimeout: time.Minute}, Dependencies{
@@ -910,6 +909,10 @@ func (client *fakeUserSessionClient) ClaimSession(context.Context, usersession.C
 
 func (client *fakeUserSessionClient) GetCatalog(context.Context, usersession.GetCatalogRequest) (usersession.CatalogResponse, error) {
 	return client.catalog, nil
+}
+
+func (client *fakeUserSessionClient) RenewSession(context.Context, usersession.RenewSessionRequest) (usersession.RenewSessionResponse, error) {
+	return usersession.RenewSessionResponse{}, nil
 }
 
 func (client *fakeUserSessionClient) RevokeSession(_ context.Context, request usersession.RevokeSessionRequest) error {

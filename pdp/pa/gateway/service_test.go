@@ -11,7 +11,7 @@ import (
 func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	dataStore := newGatewayTestStore(t)
 	seedGatewayOrganization(dataStore)
-	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", ExternalPort: 22, InternalPort: 22, Enabled: true})
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
@@ -75,8 +75,8 @@ func TestServiceUpdateGatewayPatchesFields(t *testing.T) {
 	fixedNow := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	service := NewService(dataStore, "gateway-role")
 	service.now = func() time.Time { return fixedNow }
-	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", Enabled: true})
-	dataStore.SaveResource(&models.Resource{ID: "res-2", OrganizationID: gatewayTestOrganizationID, Name: "RDP", Type: "rdp", Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-1", OrganizationID: gatewayTestOrganizationID, Name: "SSH", Type: "ssh", ExternalPort: 22, InternalPort: 22, Enabled: true})
+	dataStore.SaveResource(&models.Resource{ID: "res-2", OrganizationID: gatewayTestOrganizationID, Name: "RDP", Type: "rdp", ExternalPort: 3389, InternalPort: 3389, Enabled: true})
 	dataStore.SaveGateway(&models.Gateway{
 		ID:              "gw-1",
 		OrganizationID:  gatewayTestOrganizationID,
@@ -124,8 +124,13 @@ func TestServiceRegenerateRevokeAndDeleteGateway(t *testing.T) {
 		Status: "enrolled", CertSerial: "serial-1", CertPEM: "cert-1", CertFingerprint: "fingerprint-1", CertExpiresAt: "2025-01-09T03:04:05Z",
 	})
 	dataStore.SaveGateway(&models.Gateway{ID: "gw-2", Name: "Delete Gateway", Status: "enrolled", CertSerial: "serial-2", CertPEM: "cert-2"})
+	dataStore.SaveGateway(&models.Gateway{ID: "gw-3", Name: "Pending Gateway", Status: "pending", EnrollmentToken: gatewayTokenHash("old-pending-token"), TokenExpiresAt: "2025-01-02T04:04:05Z"})
 
-	regenerated, err := service.RegenerateEnrollmentToken("gw-1")
+	if _, err := service.RegenerateEnrollmentToken("gw-1"); !errors.Is(err, ErrGatewayAlreadyEnrolled) {
+		t.Fatalf("RegenerateEnrollmentToken enrolled gateway error = %v, want ErrGatewayAlreadyEnrolled", err)
+	}
+
+	regenerated, err := service.RegenerateEnrollmentToken("gw-3")
 	if err != nil {
 		t.Fatalf("RegenerateEnrollmentToken returned error: %v", err)
 	}

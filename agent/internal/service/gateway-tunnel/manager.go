@@ -85,8 +85,6 @@ type Manager struct {
 	defaultServerName string
 	logger            *slog.Logger
 	status            Status
-	conn              net.Conn
-	session           *yamux.Session
 	sessions          map[tunnelKey]*tunnelConnection
 	statusMu          sync.RWMutex
 }
@@ -326,8 +324,6 @@ func (manager *Manager) connectToLocked(ctx context.Context, key tunnelKey) erro
 	}
 	connectedAt := time.Now().UTC()
 	manager.sessions[key] = &tunnelConnection{conn: tlsConn, session: session, connectedAt: connectedAt}
-	manager.conn = tlsConn
-	manager.session = session
 	manager.options.GatewayAddress = key.address
 	manager.options.ServerName = key.serverName
 	manager.setStatus(Status{State: StatusReady, GatewayAddress: key.address, ServerName: key.serverName, ConnectedAt: connectedAt, LastError: ""})
@@ -449,14 +445,6 @@ func (manager *Manager) closeSessionLocked() {
 		closeTunnelConnection(connection)
 		delete(manager.sessions, key)
 	}
-	if manager.session != nil {
-		_ = manager.session.Close()
-	}
-	if manager.conn != nil {
-		_ = manager.conn.Close()
-	}
-	manager.session = nil
-	manager.conn = nil
 }
 
 func (manager *Manager) tunnelKey(gatewayAddress, serverName string) tunnelKey {
@@ -487,10 +475,6 @@ func (manager *Manager) sessionForKeyLocked(key tunnelKey) *yamux.Session {
 			closeTunnelConnection(connection)
 			delete(manager.sessions, key)
 		}
-	}
-	legacyKey := manager.tunnelKey(manager.options.GatewayAddress, manager.options.ServerName)
-	if manager.session != nil && !manager.session.IsClosed() && legacyKey == key {
-		return manager.session
 	}
 	return nil
 }

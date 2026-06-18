@@ -291,6 +291,22 @@ func (um *UserManager) FindOrCreateFederatedUser(externalSubject, authSource, us
 	}
 
 	if existing, found := um.store.GetUserByUsername(username); found {
+		sameOrganization := strings.TrimSpace(existing.OrganizationID) == strings.TrimSpace(organizationID)
+		if sameOrganization {
+			existing.ExternalSubject = externalSubject
+			existing.AuthSource = authSource
+			existing.LastLoginAt = time.Now()
+			existing.UpdatedAt = existing.LastLoginAt
+			if role != existing.Role {
+				existing.Role = role
+			}
+			if email != "" && existing.Email != email {
+				existing.Email = email
+			}
+			um.store.SaveUser(existing)
+			log.Printf("[AUTH] Federated user linked: %s (source=%s, sub=%s, role=%s)", existing.Username, authSource, externalSubject, existing.Role)
+			return existing, nil
+		}
 		if existing.ExternalSubject != externalSubject || existing.AuthSource != authSource {
 			return nil, fmt.Errorf("username '%s' already exists with different auth source", username)
 		}

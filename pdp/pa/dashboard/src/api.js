@@ -1,44 +1,92 @@
 // API client for the TrustCloud/PA backend
 const API_BASE = '/api';
+const ACCESS_TOKEN_KEY = 'admin_token';
+const REFRESH_TOKEN_KEY = 'admin_refresh_token';
+const SESSION_ID_KEY = 'admin_session_id';
 
 // Get the auth token from localStorage
 export function getToken() {
-  return localStorage.getItem('admin_token');
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
+}
+
+export function getRefreshToken() {
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+export function getSessionID() {
+  return localStorage.getItem(SESSION_ID_KEY);
 }
 
 // Set the auth token
 export function setToken(token) {
-  localStorage.setItem('admin_token', token);
+  if (token) {
+    localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  }
+}
+
+export function setAuthSession(session) {
+  if (!session) return;
+  setToken(session.auth_token || session.token);
+  if (session.refresh_token) {
+    localStorage.setItem(REFRESH_TOKEN_KEY, session.refresh_token);
+  }
+  if (session.session_id) {
+    localStorage.setItem(SESSION_ID_KEY, session.session_id);
+  }
 }
 
 // Clear auth
-export function clearToken() {
-  localStorage.removeItem('admin_token');
+export function clearAuthSession() {
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+  localStorage.removeItem(SESSION_ID_KEY);
 }
 
-// Generic fetch wrapper with auth headers, error handling, and response unwrapping
-async function apiFetch(path, options = {}) {
-  const { redirectOnUnauthorized = true, ...fetchOptions } = options;
+export function clearToken() {
+  clearAuthSession();
+}
+
+function decodeTokenPayload(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const padded = parts[1] + '='.repeat((4 - (parts[1].length % 4)) % 4);
+    const json = window.atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+export function getTokenExpiresAt() {
+  const payload = decodeTokenPayload(getToken());
+  if (!payload?.exp) return null;
+  return Number(payload.exp) * 1000;
+}
+
+export function getSessionRefreshDelay() {
+  const expiresAt = getTokenExpiresAt();
+  if (!expiresAt) return 5 * 60 * 1000;
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return 0;
+  const refreshBeforeExpiry = 2 * 60 * 1000;
+  if (remaining <= refreshBeforeExpiry) return 0;
+  const maxRefreshInterval = 5 * 60 * 1000;
+  const minRefreshInterval = 30 * 1000;
+  return Math.max(minRefreshInterval, Math.min(maxRefreshInterval, remaining - refreshBeforeExpiry));
+}
+
+function authHeaders(extraHeaders = {}) {
   const token = getToken();
-  const headers = {
+  return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...fetchOptions.headers,
+    ...extraHeaders,
   };
+}
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...fetchOptions,
-    headers,
-  });
-
-  if (res.status === 401) {
-    clearToken();
-    if (redirectOnUnauthorized) {
-      window.location.href = '/login';
-    }
-    throw new Error('Unauthorized');
-  }
-
+async function readJSONResponse(res, path) {
   const text = await res.text();
   let json = null;
   if (text) {
@@ -56,11 +104,46 @@ async function apiFetch(path, options = {}) {
     throw new Error(json?.error || res.statusText);
   }
 
-  // Unwrap APIResponse envelope: { success, data, message } -> data
   if (json !== null && typeof json === 'object' && 'data' in json) {
     return json.data;
   }
   return json;
+}
+
+// Generic fetch wrapper with auth headers, error handling, token refresh, and response unwrapping
+async function apiFetch(path, options = {}) {
+  const {
+    redirectOnUnauthorized = true,
+    retryOnUnauthorized = true,
+    clearOnUnauthorized = true,
+    ...fetchOptions
+  } = options;
+
+  const run = () => fetch(`${API_BASE}${path}`, {
+    ...fetchOptions,
+    headers: authHeaders(fetchOptions.headers),
+  });
+
+  let res = await run();
+
+  if (res.status === 401 && retryOnUnauthorized && getRefreshToken() && getSessionID()) {
+    try {
+      await refreshAdminSession();
+      res = await run();
+    } catch {
+      // Fall through to the normal unauthorized handling below.
+    }
+  }
+
+  if (res.status === 401) {
+    if (clearOnUnauthorized) clearAuthSession();
+    if (redirectOnUnauthorized) {
+      window.location.href = '/login';
+    }
+    throw new Error('Unauthorized');
+  }
+
+  return readJSONResponse(res, path);
 }
 
 export async function getOrganizations() {
@@ -174,10 +257,56 @@ export async function finishPasskeyRegistration(token, credential) {
   return data;
 }
 
-export async function validateAdminSession() {
-  return apiFetch('/admin/session', {
-    redirectOnUnauthorized: false,
+export async function refreshAdminSession() {
+  const sessionID = getSessionID();
+  const refreshToken = getRefreshToken();
+  if (!sessionID || !refreshToken) {
+    throw new Error('Missing session refresh credentials');
+  }
+  const res = await fetch(`${API_BASE}/auth/session/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionID, refresh_token: refreshToken }),
   });
+  const session = await readJSONResponse(res, '/auth/session/refresh');
+  setAuthSession(session);
+  return session;
+}
+
+export async function logoutAdminSession() {
+  const token = getToken();
+  const sessionID = getSessionID();
+  const refreshToken = getRefreshToken();
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ session_id: sessionID, refresh_token: refreshToken }),
+    });
+  } finally {
+    clearAuthSession();
+  }
+}
+
+export async function validateAdminSession() {
+  if (!getToken()) {
+    return refreshAdminSession();
+  }
+  try {
+    return await apiFetch('/admin/session', {
+      redirectOnUnauthorized: false,
+      retryOnUnauthorized: false,
+      clearOnUnauthorized: false,
+    });
+  } catch (err) {
+    if (getRefreshToken() && getSessionID()) {
+      return refreshAdminSession();
+    }
+    throw err;
+  }
 }
 
 // ─── Dashboard ──────────────────────────────

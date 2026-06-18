@@ -20,6 +20,7 @@ func TestValidateProvisionedConnectAcceptsPASession(t *testing.T) {
 		ResourceID:   "res-ssh",
 		ResourceName: "SSH Server",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -43,19 +44,6 @@ func TestValidateProvisionedConnectAcceptsPASession(t *testing.T) {
 	}
 }
 
-func TestValidateProvisionedConnectRejectsLegacyBearerOnly(t *testing.T) {
-	gateway := &Gateway{provisioned: provisioning.NewStore()}
-	_, code, message := gateway.validateProvisionedConnect(&ConnectRequest{
-		Token:      "legacy-access-token",
-		DeviceID:   "device-1",
-		RemoteAddr: "100.64.0.10",
-		RemotePort: 22,
-	}, &connectionState{certDeviceID: "device-1"})
-	if code != CodeSessionInvalid {
-		t.Fatalf("code = %q, want %q (message=%q)", code, CodeSessionInvalid, message)
-	}
-}
-
 func TestRevokeProvisionedSessionDeniesConnect(t *testing.T) {
 	now := time.Date(2026, 5, 8, 12, 0, 0, 0, time.UTC)
 	gateway := &Gateway{provisioned: provisioning.NewStoreWithClock(func() time.Time { return now })}
@@ -65,6 +53,7 @@ func TestRevokeProvisionedSessionDeniesConnect(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -97,6 +86,7 @@ func TestRevokeProvisionedSessionTerminatesActiveRelays(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -156,6 +146,7 @@ func TestProvisionSessionRenewsActiveRelays(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    nextExpiry,
@@ -181,6 +172,7 @@ func TestCleanupExpiredProvisionedSessionsRemovesSessionsAndTerminatesRelays(t *
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Minute),

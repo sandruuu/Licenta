@@ -113,6 +113,9 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 			OIDCAuthCodeTTL:         time.Minute,
 			OIDCRefreshTokenTTL:     time.Hour,
 			OIDCCleanupInterval:     time.Minute,
+			AdminAccessTokenTTL:     5 * time.Minute,
+			AdminSessionIdleTTL:     30 * time.Minute,
+			AdminSessionAbsoluteTTL: 8 * time.Hour,
 		},
 		Public: config.PublicDashboardConfig{
 			FederatedCallbackURL: "https://localhost:8443/auth/federated/callback",
@@ -155,6 +158,7 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		pa:            policyAdmin,
 		mtlsCAPool:    x509.NewCertPool(),
 		stepUpAuth:    newStepUpBrowserAuthStore(runtimeState, cfg.Runtime.BrowserAuthSessionTTL),
+		adminSessions: newAdminSessionStore(runtimeState, cfg.Runtime.AdminAccessTokenTTL, cfg.Runtime.AdminSessionIdleTTL, cfg.Runtime.AdminSessionAbsoluteTTL),
 		adminMFA:      newAdminMFAStore(runtimeState),
 		agentSessions: newAgentSessionStore(runtimeState),
 	}
@@ -185,7 +189,7 @@ func newTestPolicyAdministrator(t *testing.T, cfg *config.Config, dataStore *sto
 	}
 	return &pa.PolicyAdministrator{
 		Auth:       authService,
-		Engine:     evaluation.NewEngine(cfg.Risk),
+		Engine:     evaluation.NewEngine(),
 		Geo:        policies.NewGeoLocator(dataStore, runtimeState, cfg.Geo),
 		Catalog:    catalog.NewService(dataStore, cfg.Runtime.CatalogTTLSeconds),
 		Devices:    devices.NewService(dataStore, auditLogger),

@@ -37,6 +37,7 @@ func TestGatewayControlStreamSendsCommandsAndValidatesAcks(t *testing.T) {
 			ResourceID:       "res-ssh",
 			ResourceName:     "SSH Server",
 			InternalHost:     "10.10.0.10",
+			ExternalPort:     2222,
 			InternalPort:     22,
 			Protocol:         "ssh",
 			ExpiresAt:        time.Now().Add(time.Hour),

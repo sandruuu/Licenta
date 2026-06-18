@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Ban, Edit2, RotateCcw, Server, Trash2 } from 'lucide-react';
+import { AlertCircle, Ban, Edit2, RotateCcw, Server, Trash2 } from 'lucide-react';
 import {
   createResource,
   deleteResource,
@@ -30,15 +30,91 @@ const typeMeta = [
 ];
 
 function catalogHost(resource) {
-  const externalURL = resource?.external_url || '';
-  if (externalURL.includes('://')) {
-    try {
-      return new URL(externalURL).hostname || externalURL;
-    } catch {
-      return externalURL;
-    }
+  return resource?.external_url || resource?.host || '-';
+}
+
+function resourceExternalPort(resource) {
+  return resource?.external_port || '';
+}
+
+function resourceInternalPort(resource) {
+  return resource?.internal_port || '';
+}
+
+function isValidPort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function looksLikeIPv4(value) {
+  return /^[0-9.]+$/.test(String(value || '').trim());
+}
+
+function isValidIPv4(value) {
+  const parts = String(value || '').trim().split('.');
+  return parts.length === 4 && parts.every((part) => {
+    if (!/^\d+$/.test(part)) return false;
+    const number = Number(part);
+    return number >= 0 && number <= 255 && String(number) === part;
+  });
+}
+
+function isValidDNSName(value, requireDot = false) {
+  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host || host.length > 253) return false;
+  if (requireDot && !host.includes('.')) return false;
+  if (host.includes('..')) return false;
+  return host.split('.').every((label) => (
+    label.length > 0
+      && label.length <= 63
+      && !label.startsWith('-')
+      && !label.endsWith('-')
+      && /^[a-z0-9-]+$/.test(label)
+  ));
+}
+
+function sanitizeInternalHost(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return { error: 'Internal Host is required.' };
+  if (looksLikeIPv4(host)) {
+    return isValidIPv4(host)
+      ? { value: host }
+      : { error: 'Internal Host must be a valid IPv4 address or DNS hostname.' };
   }
-  return externalURL || resource?.host || '-';
+  if (!isValidDNSName(host)) {
+    return { error: 'Internal Host must be a valid IPv4 address or DNS hostname.' };
+  }
+  return { value: host };
+}
+
+function sanitizeExternalAddress(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { error: 'External Host is required.' };
+
+  let host = raw;
+  if (raw.includes('://')) {
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return { error: 'External Host must be a valid HTTP/HTTPS URL or DNS hostname.' };
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { error: 'External Host URL must use HTTP or HTTPS.' };
+    }
+    if (parsed.port) {
+      return { error: 'External Host cannot include a port. Use External Port instead.' };
+    }
+    host = parsed.hostname;
+  } else if (/[/:?#]/.test(raw)) {
+    return { error: 'External Host must be a valid HTTP/HTTPS URL or DNS hostname.' };
+  }
+
+  host = host.trim().toLowerCase().replace(/\.$/, '');
+  if (looksLikeIPv4(host) || !isValidDNSName(host, true)) {
+    return { error: 'External Host must be a valid DNS hostname.' };
+  }
+  return { value: raw };
 }
 
 export default function Resources() {
@@ -59,7 +135,7 @@ export default function Resources() {
   const [deleteResourceTarget, setDeleteResourceTarget] = useState(null);
   const [revokeResourceTarget, setRevokeResourceTarget] = useState(null);
   const [reactivateResourceTarget, setReactivateResourceTarget] = useState(null);
-  const [error, setError] = useState('');
+  const [modalError, setModalError] = useState('');
   const [openedCreateFromURL, setOpenedCreateFromURL] = useState(false);
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -74,17 +150,20 @@ export default function Resources() {
   })), [publicConfig.resource_default_ports]);
 
   const gatewaysForOrganization = (organizationID) => gateways.filter((gateway) => gateway.organization_id === organizationID);
+  const defaultPortForType = (type) => {
+    const option = typeOptions.find((item) => item.value === type);
+    return option?.defaultPort || publicConfig.resource_default_ports?.[type] || publicConfig.resource_default_ports?.web || '';
+  };
 
   const load = async () => {
     setLoading(true);
-    setError('');
     try {
       const [resourceData, organizationData, gatewayData] = await Promise.all([getResources(), getOrganizations(), getGateways()]);
       setResources(Array.isArray(resourceData) ? resourceData : []);
       setOrganizations(Array.isArray(organizationData) ? organizationData : []);
       setGateways(Array.isArray(gatewayData) ? gatewayData : []);
     } catch (e) {
-      setError(e.message || 'Failed to load resources');
+      console.error(e);
     } finally {
       setLoading(false);
     }
@@ -100,7 +179,8 @@ export default function Resources() {
   const openCreate = (type = searchParams.get('type') || 'web') => {
     const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
     const organizationID = defaultOrganizationID();
-    const option = typeOptions.find((item) => item.value === normalizedType);
+    const defaultPort = defaultPortForType(normalizedType);
+    setModalError('');
     setForm({
       name: '',
       description: '',
@@ -108,7 +188,8 @@ export default function Resources() {
       organization_id: organizationID,
       gateway_id: defaultGatewayID(organizationID),
       host: '',
-      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
+      external_port: defaultPort,
+      internal_port: defaultPort,
       external_url: '',
       enabled: true,
     });
@@ -126,7 +207,7 @@ export default function Resources() {
     const type = searchParams.get('type') || 'web';
     const normalizedType = typeOptions.some((item) => item.value === type) ? type : 'web';
     const organizationID = searchParams.get('organization_id') || organizations[0]?.id || '';
-    const option = typeOptions.find((item) => item.value === normalizedType);
+    const defaultPort = defaultPortForType(normalizedType);
     const gatewayID = searchParams.get('gateway_id') || gateways.find((gateway) => gateway.organization_id === organizationID)?.id || '';
 
     setForm({
@@ -136,10 +217,12 @@ export default function Resources() {
       organization_id: organizationID,
       gateway_id: gatewayID,
       host: '',
-      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
+      external_port: defaultPort,
+      internal_port: defaultPort,
       external_url: '',
       enabled: true,
     });
+    setModalError('');
     setModal('create');
     setOpenedCreateFromURL(true);
   }, [
@@ -154,38 +237,83 @@ export default function Resources() {
   ]);
 
   const openEdit = (resource) => {
-    setForm({ ...resource });
+    setModalError('');
+    setForm({
+      ...resource,
+      external_port: resourceExternalPort(resource),
+      internal_port: resourceInternalPort(resource),
+    });
     setModal('edit');
   };
 
   const selectOrganization = (organizationID) => {
     const firstGateway = gatewaysForOrganization(organizationID)[0]?.id || '';
+    setModalError('');
     setForm({ ...form, organization_id: organizationID, gateway_id: firstGateway });
   };
 
   const selectType = (type) => {
-    const option = typeOptions.find((item) => item.value === type);
-    setForm({ ...form, type, port: option?.defaultPort || form.port || 0 });
+    const defaultPort = defaultPortForType(type);
+    setModalError('');
+    setForm({
+      ...form,
+      type,
+      external_port: form.external_port || defaultPort,
+      internal_port: form.internal_port || defaultPort,
+    });
+  };
+
+  const isResourceFormFilled = () => Boolean(
+    form.name?.trim()
+      && form.type
+      && form.organization_id
+      && form.gateway_id
+      && form.host?.trim()
+      && form.external_url?.trim()
+      && String(form.external_port || '').trim()
+      && String(form.internal_port || '').trim()
+  );
+
+  const validateAndSanitizeResourceForm = () => {
+    if (!form.organization_id) return { error: 'Organization is required.' };
+    if (!form.gateway_id) return { error: 'Gateway is required.' };
+    if (!form.type) return { error: 'Type is required.' };
+    if (!isValidPort(form.external_port)) return { error: 'External Port must be between 1 and 65535.' };
+    if (!isValidPort(form.internal_port)) return { error: 'Internal Port must be between 1 and 65535.' };
+    if (!form.name?.trim()) return { error: 'Name is required.' };
+
+    const internalHost = sanitizeInternalHost(form.host);
+    if (internalHost.error) return internalHost;
+
+    const externalAddress = sanitizeExternalAddress(form.external_url);
+    if (externalAddress.error) return externalAddress;
+
+    return {
+      data: {
+        name: form.name.trim(),
+        description: form.description?.trim(),
+        type: form.type,
+        organization_id: form.organization_id,
+        gateway_id: form.gateway_id,
+        host: internalHost.value,
+        external_port: parseInt(form.external_port, 10),
+        internal_port: parseInt(form.internal_port, 10),
+        external_url: externalAddress.value,
+        enabled: form.enabled !== false,
+        metadata: { ...(form.metadata || {}) },
+      },
+    };
   };
 
   const handleSave = async () => {
+    setModalError('');
+    const validation = validateAndSanitizeResourceForm();
+    if (validation.error) {
+      setModalError(validation.error);
+      return;
+    }
     setSaving(true);
-    setError('');
-    const metadata = { ...(form.metadata || {}) };
-    delete metadata.catalog_fqdn;
-
-    const data = {
-      name: form.name?.trim(),
-      description: form.description?.trim(),
-      type: form.type,
-      organization_id: form.organization_id,
-      gateway_id: form.gateway_id,
-      host: form.host?.trim(),
-      port: parseInt(form.port, 10) || 0,
-      external_url: form.external_url?.trim(),
-      enabled: form.enabled !== false,
-      metadata,
-    };
+    const data = validation.data;
 
     try {
       if (modal === 'create') {
@@ -196,7 +324,7 @@ export default function Resources() {
       setModal(null);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to save resource');
+      setModalError(e.message || 'Failed to save resource');
     } finally {
       setSaving(false);
     }
@@ -204,14 +332,13 @@ export default function Resources() {
 
   const confirmDeleteResource = async () => {
     if (!deleteResourceTarget) return;
-    setError('');
     setDeleting(true);
     try {
       await deleteResource(deleteResourceTarget.id);
       setDeleteResourceTarget(null);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to delete resource');
+      console.error(e);
     } finally {
       setDeleting(false);
     }
@@ -219,14 +346,13 @@ export default function Resources() {
 
   const confirmRevokeResource = async () => {
     if (!revokeResourceTarget) return;
-    setError('');
     setRevoking(true);
     try {
       await updateResource(revokeResourceTarget.id, { enabled: false });
       setRevokeResourceTarget(null);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to revoke resource');
+      console.error(e);
     } finally {
       setRevoking(false);
     }
@@ -234,14 +360,13 @@ export default function Resources() {
 
   const confirmReactivateResource = async () => {
     if (!reactivateResourceTarget) return;
-    setError('');
     setReactivating(true);
     try {
       await updateResource(reactivateResourceTarget.id, { enabled: true });
       setReactivateResourceTarget(null);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to reactivate resource');
+      console.error(e);
     } finally {
       setReactivating(false);
     }
@@ -259,14 +384,15 @@ export default function Resources() {
     },
     { key: 'type', label: 'Type', render: (value) => <ResourceTypeText type={value} /> },
     { key: 'organization_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
-    { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || value || '-' },
+    { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || '-' },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
+    { key: 'internal_port', label: 'Internal Port', render: (_, row) => <span className="text-mono text-xs">{resourceInternalPort(row) || '-'}</span> },
     {
       key: 'metadata',
-      label: 'External FQDN',
+      label: 'External Host',
       render: (_, row) => <span className="text-mono text-xs">{catalogHost(row)}</span>,
     },
-    { key: 'port', label: 'Port', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
+    { key: 'external_port', label: 'External Port', render: (_, row) => <span className="text-mono text-xs">{resourceExternalPort(row) || '-'}</span> },
     { key: 'enabled', label: 'Status', render: (value) => <StatusText variant={value ? 'success' : 'danger'}>{value ? 'Enabled' : 'Disabled'}</StatusText> },
     {
       key: 'actions',
@@ -334,12 +460,6 @@ export default function Resources() {
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <PageHeader title="Resources" subtitle="Attach WEB, SSH, and RDP resources to an organization gateway" createLabel="Add Resource" onCreate={() => openCreate()} />
 
-      {error && (
-        <div className="bg-danger-muted border border-danger rounded-md p-3 mb-4 text-sm text-danger">
-          {error}
-        </div>
-      )}
-
       <ListToolbar
         query={query}
         onQueryChange={handleQueryChange}
@@ -389,18 +509,37 @@ export default function Resources() {
 
       <Modal
         open={!!modal}
-        onClose={() => setModal(null)}
+        onClose={() => {
+          setModalError('');
+          setModal(null);
+        }}
         title={modal === 'create' ? 'Add Resource' : 'Edit Resource'}
         size="3xl"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setModal(null)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !form.organization_id || !form.gateway_id}>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setModalError('');
+                setModal(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving || !isResourceFormFilled()}>
               {saving ? 'Saving...' : modal === 'create' ? 'Create Resource' : 'Save Changes'}
             </Button>
           </>
         }
       >
+        <div className="mb-4 min-h-6">
+          {modalError ? (
+            <div className="flex items-center gap-2 text-sm font-semibold text-danger">
+              <AlertCircle size={17} />
+              <span>{modalError}</span>
+            </div>
+          ) : null}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-x-4 gap-y-3">
           <FormField label="Organization" className="mb-0 md:col-span-2">
             <FormSelect value={form.organization_id || ''} onChange={(e) => selectOrganization(e.target.value)}>
@@ -409,7 +548,10 @@ export default function Resources() {
             </FormSelect>
           </FormField>
           <FormField label="Gateway" className="mb-0 md:col-span-2">
-            <FormSelect value={form.gateway_id || ''} onChange={(e) => setForm({ ...form, gateway_id: e.target.value })}>
+            <FormSelect value={form.gateway_id || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, gateway_id: e.target.value });
+            }}>
               <option value="">Select gateway</option>
               {gatewaysForOrganization(form.organization_id).map((gateway) => (
                 <option key={gateway.id} value={gateway.id}>{gateway.name}</option>
@@ -422,22 +564,43 @@ export default function Resources() {
               {typeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </FormSelect>
           </FormField>
-          <FormField label="Port" className="mb-0">
-            <FormInput type="number" value={form.port || ''} onChange={(e) => setForm({ ...form, port: e.target.value })} />
+          <FormField label="External Port" className="mb-0">
+            <FormInput type="number" value={form.external_port || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, external_port: e.target.value });
+            }} />
           </FormField>
-          <FormField label="Name" className="mb-0 md:col-span-2">
-            <FormInput value={form.name || ''} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Production Admin Portal" />
+          <FormField label="Internal Port" className="mb-0">
+            <FormInput type="number" value={form.internal_port || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, internal_port: e.target.value });
+            }} />
+          </FormField>
+          <FormField label="Name" className="mb-0">
+            <FormInput value={form.name || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, name: e.target.value });
+            }} placeholder="Production Admin Portal" />
           </FormField>
 
           <FormField label="Internal Host" className="mb-0 md:col-span-2">
-            <FormInput value={form.host || ''} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="10.0.0.5 or server.internal" />
+            <FormInput value={form.host || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, host: e.target.value });
+            }} placeholder="10.0.0.5 or server.internal" />
           </FormField>
-          <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
-            <FormInput value={form.external_url || ''} onChange={(e) => setForm({ ...form, external_url: e.target.value })} placeholder="https://app.company.com or ssh.company.com" />
+          <FormField label="External Host" className="mb-0 md:col-span-2">
+            <FormInput value={form.external_url || ''} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, external_url: e.target.value });
+            }} placeholder="https://app.company.com or ssh.company.com" />
           </FormField>
 
           <div className="md:col-span-4 flex flex-wrap items-center gap-x-8 gap-y-3 pt-2">
-            <FormCheckbox id="res-enabled" checked={form.enabled !== false} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} label="Enabled" />
+            <FormCheckbox id="res-enabled" checked={form.enabled !== false} onChange={(e) => {
+              setModalError('');
+              setForm({ ...form, enabled: e.target.checked });
+            }} label="Enabled" />
           </div>
         </div>
       </Modal>

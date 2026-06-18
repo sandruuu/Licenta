@@ -103,7 +103,6 @@ type EnrollmentRecord struct {
 	DeviceCertificateChainPEM string              `json:"device_certificate_chain_pem,omitempty"`
 	CertificateExpiry         time.Time           `json:"certificate_expiry,omitempty"`
 	PDPEndpoint               string              `json:"pdp_endpoint,omitempty"`
-	GatewayEndpoints          []string            `json:"gateway_endpoints,omitempty"`
 	EnrolledByIDPProfileID    string              `json:"enrolled_by_idp_profile_id,omitempty"`
 	UpdatedAt                 time.Time           `json:"updated_at"`
 }
@@ -172,7 +171,6 @@ type EnrollmentCompleteSessionResponse struct {
 	CertificateThumbprint  string
 	ExpiresAt              time.Time
 	PDPEndpoint            string
-	GatewayEndpoints       []string
 	EnrolledByIDPProfileID string
 }
 

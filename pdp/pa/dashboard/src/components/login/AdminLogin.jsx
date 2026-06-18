@@ -7,7 +7,7 @@ import {
   finishPasskeyAuthentication,
   finishPasskeyRegistration,
   login,
-  setToken,
+  setAuthSession,
   verifyMFA,
 } from '../../api';
 import { applyTheme, getCurrentTheme } from '../../theme';
@@ -290,7 +290,7 @@ function AdminLogin() {
           setPassword('');
           setError(PASSKEY_PURPOSE_REQUIRED_ERROR);
         } else {
-          setToken(data.token || data.auth_token);
+          setAuthSession(data);
           navigate('/');
         }
       } else {
@@ -336,7 +336,7 @@ function AdminLogin() {
       if (!credential) throw new Error('Passkey registration was cancelled');
       const data = await finishPasskeyRegistration(token, credentialToJSON(credential));
       if (data.token || data.auth_token) {
-        setToken(data.token || data.auth_token);
+        setAuthSession(data);
         navigate('/');
       } else {
         setError(data.message || data.error || 'Passkey registration failed');
@@ -364,7 +364,7 @@ function AdminLogin() {
       if (!credential) throw new Error('Passkey sign-in was cancelled');
       const data = await finishPasskeyAuthentication(email, challengeID, credentialToJSON(credential));
       if (data.token || data.auth_token) {
-        setToken(data.token || data.auth_token);
+        setAuthSession(data);
         navigate('/');
       } else {
         setError(PASSKEY_SIGN_IN_GENERIC_ERROR);
@@ -410,7 +410,7 @@ function AdminLogin() {
             setError(PASSKEY_PURPOSE_REQUIRED_ERROR);
           }
         } else {
-          setToken(data.token || data.auth_token);
+          setAuthSession(data);
           navigate('/');
         }
       } else {

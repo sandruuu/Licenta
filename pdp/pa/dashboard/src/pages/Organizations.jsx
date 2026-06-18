@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { getGateways, getResources } from '../api';
 import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
 import OrganizationFormModal from '../components/organizations/OrganizationFormModal';
 import OrganizationTable from '../components/organizations/OrganizationTable';
@@ -16,11 +17,30 @@ export default function Organizations() {
   const navigate = useNavigate();
   const location = useLocation();
   const organizationDirectory = useOrganizationDirectory();
-  const gatewayCreate = useGatewayCreate(organizationDirectory.load);
+  const [gateways, setGateways] = useState([]);
+  const [resources, setResources] = useState([]);
+  const loadRelatedInfrastructure = useCallback(() => {
+    Promise.all([
+      getGateways().catch(() => []),
+      getResources().catch(() => []),
+    ]).then(([gatewayData, resourceData]) => {
+      setGateways(Array.isArray(gatewayData) ? gatewayData : []);
+      setResources(Array.isArray(resourceData) ? resourceData : []);
+    });
+  }, []);
+  const refreshOrganizationData = useCallback(() => {
+    organizationDirectory.load();
+    loadRelatedInfrastructure();
+  }, [loadRelatedInfrastructure, organizationDirectory.load]);
+  const gatewayCreate = useGatewayCreate(refreshOrganizationData);
   const [query, setQuery] = useState('');
   const [deleteOrganizationTarget, setDeleteOrganizationTarget] = useState(null);
   const [revokeOrganizationTarget, setRevokeOrganizationTarget] = useState(null);
   const [reactivateOrganizationTarget, setReactivateOrganizationTarget] = useState(null);
+
+  useEffect(() => {
+    loadRelatedInfrastructure();
+  }, [loadRelatedInfrastructure]);
 
   const openOrganization = (organization) => {
     if (organization?.id) navigateWithReturn(navigate, `/organizations/${encodeURIComponent(organization.id)}`, location);
@@ -38,6 +58,38 @@ export default function Organizations() {
       ].some((value) => String(value || '').toLowerCase().includes(needle));
     });
   }, [organizationDirectory.organizations, query]);
+
+  const organizationStats = useMemo(() => {
+    const gatewayCounts = new Map();
+    const resourceCounts = new Map();
+    const gatewayOrganizationIDs = new Map();
+
+    gateways.forEach((gateway) => {
+      const organizationIDs = new Set([
+        gateway.organization_id,
+        ...(Array.isArray(gateway.organization_ids) ? gateway.organization_ids : []),
+      ].filter(Boolean));
+
+      gatewayOrganizationIDs.set(gateway.id, organizationIDs);
+      organizationIDs.forEach((organizationID) => {
+        gatewayCounts.set(organizationID, (gatewayCounts.get(organizationID) || 0) + 1);
+      });
+    });
+
+    resources.forEach((resource) => {
+      const organizationIDs = new Set();
+      if (resource.organization_id) organizationIDs.add(resource.organization_id);
+
+      const gatewayOrganizations = gatewayOrganizationIDs.get(resource.gateway_id);
+      gatewayOrganizations?.forEach((organizationID) => organizationIDs.add(organizationID));
+
+      organizationIDs.forEach((organizationID) => {
+        resourceCounts.set(organizationID, (resourceCounts.get(organizationID) || 0) + 1);
+      });
+    });
+
+    return { gatewayCounts, resourceCounts };
+  }, [gateways, resources]);
 
   const hasFilters = query.trim();
   const organizationPagination = usePaginatedTable(filteredOrganizations);
@@ -81,6 +133,8 @@ export default function Organizations() {
         <OrganizationTable
           loading={organizationDirectory.loading}
           organizations={organizationPagination.pageItems}
+          gatewayCounts={organizationStats.gatewayCounts}
+          resourceCounts={organizationStats.resourceCounts}
           pageSize={organizationPagination.pageSize}
           onCreateGateway={gatewayCreate.openGatewayCreate}
           onOpen={openOrganization}

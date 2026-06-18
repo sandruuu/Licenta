@@ -429,7 +429,6 @@ func (manager *Manager) completeEnrollmentSession(ctx context.Context, client Cl
 		DeviceCertificateChainPEM: strings.TrimSpace(response.CertificateChainPEM),
 		CertificateExpiry:         expiresAt,
 		PDPEndpoint:               strings.TrimSpace(response.PDPEndpoint),
-		GatewayEndpoints:          response.GatewayEndpoints,
 		EnrolledByIDPProfileID:    firstNonEmpty(response.EnrolledByIDPProfileID, response.IDPProfileID),
 		UpdatedAt:                 manager.clock().UTC(),
 	}

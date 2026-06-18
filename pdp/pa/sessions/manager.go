@@ -72,14 +72,15 @@ func (sm *SessionManager) CreateSession(decision *models.AccessDecision, req mod
 		Resource:       req.Resource,
 		GatewayID:      req.GatewayID,
 		Protocol:       req.Protocol,
-		RiskScore:      decision.RiskScore,
 		OrganizationID: req.OrganizationID,
 		CreatedAt:      now,
 		LastActivity:   now,
 	}
 	sm.applyDecisionSessionState(session, decision, now, true)
 
-	sm.store.SaveSession(session)
+	if err := sm.store.SaveSession(session); err != nil {
+		return nil, fmt.Errorf("save session: %w", err)
+	}
 
 	// Record device-user binding (user role — this user accessed via this device)
 	sm.saveDeviceUserBinding(req, now)
@@ -99,19 +100,11 @@ func (sm *SessionManager) CreateOrRenewSession(decision *models.AccessDecision, 
 	}
 	now := time.Now()
 	if session := sm.findReusableSession(req, now); session != nil {
-		if sm.shouldRevokeForRiskIncrease(session, decision) {
-			sm.revokeSessionSnapshot(session, "risk_increased")
-			session, err := sm.CreateSession(decision, req)
-			return session, false, err
-		}
 		session.Username = req.Username
 		session.SourceIP = req.SourceIP
 		session.LastActivity = now
 		previousExpiresAt := session.ExpiresAt
 		sm.applyDecisionSessionState(session, decision, now, false)
-		if decision != nil {
-			session.RiskScore = decision.RiskScore
-		}
 		if renewBefore < 0 {
 			renewBefore = 0
 		}
@@ -125,7 +118,9 @@ func (sm *SessionManager) CreateOrRenewSession(decision *models.AccessDecision, 
 			log.Printf("[PA] Session reused: %s (user=%s, resource=%s, expires=%s)",
 				session.ID, session.Username, session.Resource, session.ExpiresAt.Format(time.RFC3339))
 		}
-		sm.store.SaveSession(session)
+		if err := sm.store.SaveSession(session); err != nil {
+			return nil, false, fmt.Errorf("save renewed session: %w", err)
+		}
 		sm.saveDeviceUserBinding(req, now)
 		return session, true, nil
 	}
@@ -158,12 +153,12 @@ func (sm *SessionManager) applyDecisionSessionState(session *models.Session, dec
 	}
 	if decision != nil {
 		session.PolicyID = strings.TrimSpace(decision.MatchedRule)
-		session.RiskScore = decision.RiskScore
+		session.RiskSignals = append([]string(nil), decision.RiskSignals...)
+		applyDecisionStepUpState(session, decision)
 		controls := normalizedSessionControls(decision.SessionControls)
 		session.SessionMaxAgeSeconds = controls.MaxAgeSeconds
 		session.RevalidateEverySeconds = controls.RevalidateEverySeconds
 		session.RevokeOnPostureChange = controls.RevokeOnPostureChange
-		session.RevokeOnRiskIncrease = controls.RevokeOnRiskIncrease
 	}
 	if session.RevalidateEverySeconds > 0 {
 		session.RevalidateAfter = now.Add(time.Duration(session.RevalidateEverySeconds) * time.Second)
@@ -172,6 +167,38 @@ func (sm *SessionManager) applyDecisionSessionState(session *models.Session, dec
 	}
 	if forceExpiry || session.ExpiresAt.IsZero() {
 		session.ExpiresAt = sm.nextSessionExpiry(session, now)
+	}
+}
+
+func applyDecisionStepUpState(session *models.Session, decision *models.AccessDecision) {
+	if session == nil {
+		return
+	}
+	session.StepUpACR = ""
+	session.StepUpMethod = ""
+	session.StepUpStrength = ""
+	session.StepUpAAGUID = ""
+	session.StepUpAttachment = ""
+	session.StepUpVerifiedAt = time.Time{}
+	session.StepUpExpiresAt = time.Time{}
+	if decision == nil || decision.StepUp == nil || !decision.StepUp.AlreadySatisfied {
+		return
+	}
+	stepUp := decision.StepUp
+	session.StepUpACR = models.StepUpACR(stepUp.RequiredACR)
+	session.StepUpMethod = strings.TrimSpace(stepUp.CompletedMethod)
+	session.StepUpStrength = strings.TrimSpace(stepUp.CompletedStrength)
+	session.StepUpAAGUID = strings.TrimSpace(stepUp.CompletedAAGUID)
+	session.StepUpAttachment = strings.TrimSpace(stepUp.CompletedAttachment)
+	if stepUp.CompletedAtUnix > 0 {
+		session.StepUpVerifiedAt = time.Unix(stepUp.CompletedAtUnix, 0).UTC()
+	}
+	if !stepUp.ExpiresAt.IsZero() {
+		session.StepUpExpiresAt = stepUp.ExpiresAt.UTC()
+	}
+	if session.StepUpExpiresAt.IsZero() && !session.StepUpVerifiedAt.IsZero() {
+		maxAge := time.Duration(models.StepUpMaxAgeSeconds(stepUp.MaxAgeSeconds)) * time.Second
+		session.StepUpExpiresAt = session.StepUpVerifiedAt.Add(maxAge)
 	}
 }
 
@@ -210,17 +237,6 @@ func (sm *SessionManager) nextSessionExpiry(session *models.Session, now time.Ti
 		}
 	}
 	return expiresAt
-}
-
-func (sm *SessionManager) shouldRevokeForRiskIncrease(session *models.Session, decision *models.AccessDecision) bool {
-	if session == nil || decision == nil {
-		return false
-	}
-	controls := normalizedSessionControls(decision.SessionControls)
-	if !session.RevokeOnRiskIncrease && !controls.RevokeOnRiskIncrease {
-		return false
-	}
-	return decision.RiskScore > session.RiskScore
 }
 
 func (sm *SessionManager) revokeSessionSnapshot(session *models.Session, reason string) bool {
@@ -279,7 +295,9 @@ func (sm *SessionManager) ValidateSession(sessionID string) (*models.Session, er
 
 	// Update last activity
 	session.LastActivity = time.Now()
-	sm.store.SaveSession(session)
+	if err := sm.store.SaveSession(session); err != nil {
+		return nil, fmt.Errorf("save session activity: %w", err)
+	}
 
 	return session, nil
 }
@@ -410,9 +428,8 @@ func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, organizationID, re
 	})
 }
 
-// RevokeSessionsForOrganization terminates all active sessions in an organization. It is a
-// conservative fallback for policy changes whose blast radius cannot be narrowed
-// to a resource, device, user, or gateway.
+// RevokeSessionsForOrganization terminates all active sessions in an organization
+// when a policy change cannot be narrowed to a resource, device, user, or gateway.
 func (sm *SessionManager) RevokeSessionsForOrganization(organizationID, reason string) int {
 	organizationID = strings.TrimSpace(organizationID)
 	if organizationID == "" {

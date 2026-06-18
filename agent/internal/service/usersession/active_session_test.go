@@ -295,6 +295,60 @@ func TestAuthenticatedSessionExpiryRevokesAndClears(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedSessionRenewalRotatesToken(t *testing.T) {
+	client := &recordingSessionClient{
+		renew: RenewSessionResponse{
+			AgentSessionID:    "sess-renew",
+			AgentSessionToken: "agent-token-renewed",
+			ExpiresAt:         time.Now().Add(time.Hour),
+		},
+	}
+	manager := NewManager(Config{SessionRenewRetryInterval: 10 * time.Millisecond}, Dependencies{
+		Client: client,
+		Clock:  time.Now,
+	})
+	peer := ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1001",
+		WindowsLogonSessionID: "00000000:000003e8",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	}
+	key, err := localUserKey(peer)
+	if err != nil {
+		t.Fatalf("localUserKey returned error: %v", err)
+	}
+	manager.sessions[key] = &sessionState{
+		key:               key,
+		peer:              peer,
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionID:    "sess-renew",
+		agentSessionToken: "agent-token-old",
+		expiresAt:         time.Now().Add(80 * time.Millisecond),
+	}
+
+	manager.startAuthenticatedSessionExpiryWatcher(key)
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("session token was not renewed")
+		default:
+			session, found, err := manager.ActiveAuthenticatedSession()
+			if err != nil {
+				t.Fatalf("ActiveAuthenticatedSession() error = %v", err)
+			}
+			if found && session.AgentSessionToken == "agent-token-renewed" {
+				if len(client.revokeRequests()) != 0 {
+					t.Fatalf("unexpected revoke requests = %+v", client.revokeRequests())
+				}
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func TestRemoteRevokeSignsOutAndClearsAccess(t *testing.T) {
 	cleared := make(chan ipc.PeerIdentity, 1)
 	manager := NewManager(Config{}, Dependencies{
@@ -400,9 +454,12 @@ func TestRefreshCatalogAppliesUpdatedCatalog(t *testing.T) {
 }
 
 type recordingSessionClient struct {
-	mu      sync.Mutex
-	revokes []RevokeSessionRequest
-	catalog CatalogResponse
+	mu       sync.Mutex
+	revokes  []RevokeSessionRequest
+	renews   []RenewSessionRequest
+	renew    RenewSessionResponse
+	renewErr error
+	catalog  CatalogResponse
 }
 
 func (client *recordingSessionClient) StartSession(context.Context, StartSessionRequest) (StartSessionResponse, error) {
@@ -419,6 +476,13 @@ func (client *recordingSessionClient) ClaimSession(context.Context, ClaimSession
 
 func (client *recordingSessionClient) GetCatalog(context.Context, GetCatalogRequest) (CatalogResponse, error) {
 	return client.catalog, nil
+}
+
+func (client *recordingSessionClient) RenewSession(_ context.Context, request RenewSessionRequest) (RenewSessionResponse, error) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.renews = append(client.renews, request)
+	return client.renew, client.renewErr
 }
 
 func (client *recordingSessionClient) RevokeSession(_ context.Context, request RevokeSessionRequest) error {

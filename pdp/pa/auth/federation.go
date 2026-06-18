@@ -508,7 +508,6 @@ func (fp *FederationProvider) mapExternalMapClaims(mapClaims jwt.MapClaims, clai
 			claims.Username = v
 		}
 	}
-	// Fallback: use sub if no username mapped
 	if claims.Username == "" {
 		claims.Username = claims.Subject
 	}

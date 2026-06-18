@@ -22,6 +22,7 @@ const (
 	agentSessionGRPCSessionStatusPath = "/trustagent.session.AgentSessionService/SessionStatus"
 	agentSessionGRPCClaimSessionPath  = "/trustagent.session.AgentSessionService/ClaimSession"
 	agentSessionGRPCGetCatalogPath    = "/trustagent.session.AgentSessionService/GetCatalog"
+	agentSessionGRPCRenewSessionPath  = "/trustagent.session.AgentSessionService/RenewSession"
 	agentSessionGRPCRevokeSessionPath = "/trustagent.session.AgentSessionService/RevokeSession"
 )
 
@@ -30,6 +31,7 @@ type agentSessionGRPCServer interface {
 	SessionStatus(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ClaimSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	GetCatalog(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	RenewSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RevokeSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
@@ -46,12 +48,10 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 	if requested := strings.TrimSpace(structFieldString(request, "device_id")); requested != "" && requested != deviceID {
 		return nil, status.Error(codes.PermissionDenied, "device_id does not match mTLS device identity")
 	}
-	organizationID := strings.TrimSpace(enrollment.OrganizationID)
-	if organizationID == "" {
-		if _, organization, ok := service.server.singleOrganizationIdentityProvider(); ok && organization != nil {
-			organizationID = organization.ID
-		}
+	if !structFieldBool(request, "session_renewal_required") {
+		return nil, status.Error(codes.FailedPrecondition, "session renewal is required")
 	}
+	organizationID := strings.TrimSpace(enrollment.OrganizationID)
 	if organizationID == "" {
 		return nil, status.Error(codes.FailedPrecondition, "enrolled device has no organization context for user authentication")
 	}
@@ -80,20 +80,21 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		expiresAt = now.Add(5 * time.Minute)
 	}
 	session := &agentSessionTransaction{
-		ID:                    sessionID,
-		OrganizationID:        organizationID,
-		DeviceID:              deviceID,
-		DeviceCertThumbprint:  peerThumbprint,
-		LocalUserSIDHash:      localUserSIDHash,
-		WindowsLogonSessionID: windowsLogonSessionID,
-		WindowsSessionID:      windowsSessionID,
-		DeviceDataRevision:    strings.TrimSpace(structFieldString(request, "device_data_revision")),
-		ClaimSecretHash:       hashSessionSecret(claimSecret),
-		AuthURL:               publicOrigin + "/browser/session/" + sessionID,
-		Status:                agentSessionStatusWaitingForUserLogin,
-		PolicyEpoch:           1,
-		CreatedAt:             now,
-		ExpiresAt:             expiresAt,
+		ID:                     sessionID,
+		OrganizationID:         organizationID,
+		DeviceID:               deviceID,
+		DeviceCertThumbprint:   peerThumbprint,
+		LocalUserSIDHash:       localUserSIDHash,
+		WindowsLogonSessionID:  windowsLogonSessionID,
+		WindowsSessionID:       windowsSessionID,
+		DeviceDataRevision:     strings.TrimSpace(structFieldString(request, "device_data_revision")),
+		SessionRenewalRequired: true,
+		ClaimSecretHash:        hashSessionSecret(claimSecret),
+		AuthURL:                publicOrigin + "/browser/session/" + sessionID,
+		Status:                 agentSessionStatusWaitingForUserLogin,
+		PolicyEpoch:            1,
+		CreatedAt:              now,
+		ExpiresAt:              expiresAt,
 	}
 	service.server.agentSessions.save(session)
 	if service.server.pa.Audit != nil {
@@ -136,6 +137,9 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 	if session.SingleUseConsumed {
 		return nil, status.Error(codes.FailedPrecondition, "session request was already claimed")
 	}
+	if !session.SessionRenewalRequired || !structFieldBool(request, "session_renewal_required") {
+		return nil, status.Error(codes.FailedPrecondition, "session renewal is required")
+	}
 	localUser := structFieldStruct(request, "local_user")
 	localUserSIDHash := strings.TrimSpace(structFieldString(localUser, "sid_hash"))
 	windowsLogonSessionID := strings.TrimSpace(structFieldString(localUser, "windows_logon_session_id"))
@@ -156,26 +160,15 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "generate agent session id: %v", err)
 	}
-	role := strings.TrimSpace(session.AuthenticatedUserRole)
-	if role == "" {
-		role = "user"
-	}
-	token, tokenExpiresAt, err := service.server.pa.Auth.JWT.GenerateAgentSessionToken(auth.AgentSessionTokenRequest{
-		SessionID:                   agentSessionID,
-		UserID:                      session.AuthenticatedUserID,
-		Username:                    firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
-		Role:                        role,
-		OrganizationID:              session.OrganizationID,
-		DeviceID:                    session.DeviceID,
-		LocalUserSIDHash:            session.LocalUserSIDHash,
-		WindowsLogonSessionID:       session.WindowsLogonSessionID,
-		WindowsSessionID:            session.WindowsSessionID,
-		CertificateThumbprintSHA256: session.DeviceCertThumbprint,
-		DeviceDataRevision:          session.DeviceDataRevision,
-		PolicyEpoch:                 session.PolicyEpoch,
-		ACR:                         "urn:trustcloud:loa:1",
-		AMR:                         []string{"idp"},
-	})
+	now := time.Now().UTC()
+	idleExpiresAt, absoluteExpiresAt, serverExpiresAt := service.agentSessionExpiryBounds(now)
+	tokenSession := *session
+	tokenSession.AgentSessionID = agentSessionID
+	tokenSession.LastActivityAt = now
+	tokenSession.IdleExpiresAt = idleExpiresAt
+	tokenSession.AbsoluteExpiresAt = absoluteExpiresAt
+	tokenSession.ExpiresAt = serverExpiresAt
+	token, tokenExpiresAt, err := service.issueAgentSessionToken(&tokenSession, agentSessionID, now)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "issue agent session token: %v", err)
 	}
@@ -184,8 +177,10 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 			return fmt.Errorf("session cannot be claimed")
 		}
 		live.AgentSessionID = agentSessionID
-		live.AgentSessionToken = token
-		live.AgentSessionTokenExpiresAt = tokenExpiresAt
+		live.LastActivityAt = now
+		live.IdleExpiresAt = idleExpiresAt
+		live.AbsoluteExpiresAt = absoluteExpiresAt
+		live.ExpiresAt = serverExpiresAt
 		live.SingleUseConsumed = true
 		live.Status = agentSessionStatusClaimed
 		return nil
@@ -193,19 +188,7 @@ func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, reques
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return structpb.NewStruct(map[string]interface{}{
-		"status":              claimed.Status,
-		"agent_session_id":    agentSessionID,
-		"agent_session_token": token,
-		"expires_at":          tokenExpiresAt.UTC().Format(time.RFC3339Nano),
-		"policy_epoch":        float64(claimed.PolicyEpoch),
-		"user": map[string]interface{}{
-			"idp_issuer":   session.AuthenticatedUserIssuer,
-			"subject":      session.AuthenticatedUserSubject,
-			"email":        firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
-			"display_name": firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
-		},
-	})
+	return service.agentSessionTokenResponse(claimed, token, tokenExpiresAt)
 }
 
 func (service *agentSessionGRPCService) GetCatalog(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
@@ -224,8 +207,8 @@ func (service *agentSessionGRPCService) GetCatalog(ctx context.Context, request 
 	return catalogSnapshotStruct(service.server.deviceCatalogSnapshot(claims))
 }
 
-func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	_, peerThumbprint, err := service.authenticatedAgentDevice(ctx)
+func (service *agentSessionGRPCService) RenewSession(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	enrollment, peerThumbprint, err := service.authenticatedAgentDevice(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +216,54 @@ func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, reque
 	if tokenErr != nil {
 		return nil, status.Error(codes.Unauthenticated, tokenErr.Error())
 	}
-	claims, err := service.server.pa.ValidateDeviceUserTokenBoundForScope(token, "", peerThumbprint, "session:revoke")
+	claims, err := service.server.pa.ValidateDeviceUserTokenBoundForScope(token, enrollment.DeviceID, peerThumbprint, "session:renew")
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
+	sessionID := strings.TrimSpace(structFieldString(request, "session_id"))
+	if sessionID != "" && strings.TrimSpace(claims.SessionID) != "" && sessionID != strings.TrimSpace(claims.SessionID) {
+		return nil, status.Error(codes.PermissionDenied, "session_id does not match agent session token")
+	}
+	if strings.TrimSpace(claims.SessionID) == "" {
+		return nil, status.Error(codes.Unauthenticated, "agent session token has no session_id")
+	}
+	session, ok := service.server.agentSessions.getByAgentSessionID(claims.SessionID)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "agent session is no longer active")
+	}
+	now := time.Now().UTC()
+	if err := validateClaimedAgentSessionForToken(session, claims, peerThumbprint, now); err != nil {
+		return nil, err
+	}
+	renewed, err := service.server.agentSessions.updateByAgentSessionID(claims.SessionID, func(live *agentSessionTransaction) error {
+		if err := validateClaimedAgentSessionForToken(live, claims, peerThumbprint, now); err != nil {
+			return err
+		}
+		if claims.ID != "" && claims.ExpiresAt != nil {
+			service.server.pa.Store.RevokeToken(claims.ID, claims.ExpiresAt.Time)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	renewedToken, renewedExpiresAt, err := service.issueAgentSessionToken(renewed, renewed.AgentSessionID, now)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "renew agent session token: %v", err)
+	}
+	return service.agentSessionTokenResponse(renewed, renewedToken, renewedExpiresAt)
+}
+
+func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	enrollment, peerThumbprint, err := service.authenticatedAgentDevice(ctx)
+	if err != nil {
+		return nil, err
+	}
+	token, tokenErr := catalogBearerTokenFromGRPC(ctx, request)
+	if tokenErr != nil {
+		return nil, status.Error(codes.Unauthenticated, tokenErr.Error())
+	}
+	claims, err := service.server.pa.ValidateDeviceUserTokenBoundForScope(token, enrollment.DeviceID, peerThumbprint, "session:revoke")
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
@@ -255,6 +285,141 @@ func (service *agentSessionGRPCService) RevokeSession(ctx context.Context, reque
 		"revoked":                   true,
 		"revoked_resource_sessions": float64(revokedResourceSessions),
 	})
+}
+
+func (service *agentSessionGRPCService) issueAgentSessionToken(session *agentSessionTransaction, agentSessionID string, now time.Time) (string, time.Time, error) {
+	if session == nil {
+		return "", time.Time{}, fmt.Errorf("agent session is required")
+	}
+	ttl := service.server.appConfig().Runtime.AgentSessionAccessTokenTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	serverExpiresAt := minNonZeroTime(session.IdleExpiresAt, session.AbsoluteExpiresAt)
+	if serverExpiresAt.IsZero() {
+		return "", time.Time{}, fmt.Errorf("agent session has no server-side idle and absolute timeout")
+	}
+	if !serverExpiresAt.IsZero() {
+		remaining := serverExpiresAt.UTC().Sub(now)
+		if remaining <= 0 {
+			return "", time.Time{}, fmt.Errorf("agent session expired")
+		}
+		if ttl > remaining {
+			ttl = remaining
+		}
+	}
+	role := strings.TrimSpace(session.AuthenticatedUserRole)
+	if role == "" {
+		role = "user"
+	}
+	return service.server.pa.Auth.JWT.GenerateAgentSessionToken(auth.AgentSessionTokenRequest{
+		SessionID:                   agentSessionID,
+		UserID:                      session.AuthenticatedUserID,
+		Username:                    firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
+		Role:                        role,
+		OrganizationID:              session.OrganizationID,
+		DeviceID:                    session.DeviceID,
+		LocalUserSIDHash:            session.LocalUserSIDHash,
+		WindowsLogonSessionID:       session.WindowsLogonSessionID,
+		WindowsSessionID:            session.WindowsSessionID,
+		CertificateThumbprintSHA256: session.DeviceCertThumbprint,
+		DeviceDataRevision:          session.DeviceDataRevision,
+		PolicyEpoch:                 session.PolicyEpoch,
+		ACR:                         "urn:trustcloud:loa:1",
+		AMR:                         []string{"idp"},
+		TTL:                         ttl,
+	})
+}
+
+func (service *agentSessionGRPCService) agentSessionExpiryBounds(now time.Time) (time.Time, time.Time, time.Time) {
+	absoluteTTL := service.server.appConfig().Runtime.AgentSessionAbsoluteTTL
+	if absoluteTTL <= 0 {
+		absoluteTTL = 8 * time.Hour
+	}
+	absoluteExpiresAt := now.Add(absoluteTTL)
+	idleExpiresAt := service.agentSessionNextIdleExpiry(now, absoluteExpiresAt)
+	return idleExpiresAt, absoluteExpiresAt, minNonZeroTime(idleExpiresAt, absoluteExpiresAt)
+}
+
+func (service *agentSessionGRPCService) agentSessionNextIdleExpiry(now, absoluteExpiresAt time.Time) time.Time {
+	idleTTL := service.server.appConfig().Runtime.AgentSessionIdleTTL
+	if idleTTL <= 0 {
+		idleTTL = 30 * time.Minute
+	}
+	idleExpiresAt := now.Add(idleTTL).UTC()
+	if !absoluteExpiresAt.IsZero() && absoluteExpiresAt.UTC().Before(idleExpiresAt) {
+		return absoluteExpiresAt.UTC()
+	}
+	return idleExpiresAt
+}
+
+func (service *agentSessionGRPCService) agentSessionTokenResponse(session *agentSessionTransaction, token string, tokenExpiresAt time.Time) (*structpb.Struct, error) {
+	return structpb.NewStruct(map[string]interface{}{
+		"status":              session.Status,
+		"agent_session_id":    session.AgentSessionID,
+		"agent_session_token": token,
+		"expires_at":          tokenExpiresAt.UTC().Format(time.RFC3339Nano),
+		"idle_expires_at":     session.IdleExpiresAt.UTC().Format(time.RFC3339Nano),
+		"absolute_expires_at": session.AbsoluteExpiresAt.UTC().Format(time.RFC3339Nano),
+		"policy_epoch":        float64(session.PolicyEpoch),
+		"user": map[string]interface{}{
+			"idp_issuer":   session.AuthenticatedUserIssuer,
+			"subject":      session.AuthenticatedUserSubject,
+			"email":        firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
+			"display_name": firstNonEmptyAgentSession(session.AuthenticatedUserEmail, session.AuthenticatedUsername),
+		},
+	})
+}
+
+func validateClaimedAgentSessionForToken(session *agentSessionTransaction, claims *auth.CustomClaims, peerThumbprint string, now time.Time) error {
+	if session == nil {
+		return status.Error(codes.Unauthenticated, "agent session is no longer active")
+	}
+	if session.Status != agentSessionStatusClaimed || strings.TrimSpace(session.AgentSessionID) == "" {
+		return status.Error(codes.Unauthenticated, "agent session is not active")
+	}
+	if strings.TrimSpace(session.AgentSessionID) != strings.TrimSpace(claims.SessionID) {
+		return status.Error(codes.PermissionDenied, "session_id does not match agent session state")
+	}
+	if strings.TrimSpace(session.DeviceID) != strings.TrimSpace(claims.DeviceID) {
+		return status.Error(codes.PermissionDenied, "device_id does not match agent session state")
+	}
+	if strings.TrimSpace(session.OrganizationID) != strings.TrimSpace(claims.OrganizationID) {
+		return status.Error(codes.PermissionDenied, "organization_id does not match agent session state")
+	}
+	if strings.TrimSpace(session.DeviceCertThumbprint) != strings.TrimSpace(peerThumbprint) {
+		return status.Error(codes.PermissionDenied, "certificate thumbprint does not match agent session state")
+	}
+	if strings.TrimSpace(session.LocalUserSIDHash) != strings.TrimSpace(claims.LocalUserSIDHash) {
+		return status.Error(codes.PermissionDenied, "local user does not match agent session state")
+	}
+	if strings.TrimSpace(session.WindowsLogonSessionID) != strings.TrimSpace(claims.WindowsLogonSessionID) {
+		return status.Error(codes.PermissionDenied, "Windows logon session does not match agent session state")
+	}
+	if strings.TrimSpace(session.WindowsSessionID) != strings.TrimSpace(claims.WindowsSessionID) {
+		return status.Error(codes.PermissionDenied, "Windows session does not match agent session state")
+	}
+	if session.IdleExpiresAt.IsZero() || !now.Before(session.IdleExpiresAt.UTC()) {
+		return status.Error(codes.Unauthenticated, "agent session idle timeout expired")
+	}
+	if session.AbsoluteExpiresAt.IsZero() || !now.Before(session.AbsoluteExpiresAt.UTC()) {
+		return status.Error(codes.Unauthenticated, "agent session absolute timeout expired")
+	}
+	return nil
+}
+
+func minNonZeroTime(values ...time.Time) time.Time {
+	var result time.Time
+	for _, value := range values {
+		if value.IsZero() {
+			continue
+		}
+		value = value.UTC()
+		if result.IsZero() || value.Before(result) {
+			result = value
+		}
+	}
+	return result
 }
 
 func (service *agentSessionGRPCService) authenticatedAgentDevice(ctx context.Context) (deviceEnrollment, string, error) {
@@ -394,6 +559,21 @@ func agentSessionCatalogHandler(srv interface{}, ctx context.Context, decoder fu
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentSessionRenewHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	request := &structpb.Struct{}
+	if err := decoder(request); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(agentSessionGRPCServer).RenewSession(ctx, request)
+	}
+	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: agentSessionGRPCRenewSessionPath}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(agentSessionGRPCServer).RenewSession(ctx, req.(*structpb.Struct))
+	}
+	return interceptor(ctx, request, info, handler)
+}
+
 func agentSessionRevokeHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	request := &structpb.Struct{}
 	if err := decoder(request); err != nil {
@@ -417,6 +597,7 @@ var agentSessionGRPCServiceDesc = grpc.ServiceDesc{
 		{MethodName: "SessionStatus", Handler: agentSessionStatusHandler},
 		{MethodName: "ClaimSession", Handler: agentSessionClaimHandler},
 		{MethodName: "GetCatalog", Handler: agentSessionCatalogHandler},
+		{MethodName: "RenewSession", Handler: agentSessionRenewHandler},
 		{MethodName: "RevokeSession", Handler: agentSessionRevokeHandler},
 	},
 	Streams:  []grpc.StreamDesc{},

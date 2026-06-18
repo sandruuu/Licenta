@@ -134,7 +134,7 @@ Probe expuse de PDP:
 - Initializarea cheilor si a certificatului PDP foloseste lock-uri Redis.
 - Certificatul PDP este reincarcat periodic de pe `/app/data`, astfel incat o replica poate prelua certificatul reinnoit de alta replica.
 - Scrierile de chei/certificate sunt atomice pe filesystem.
-- Redis tine state runtime cu TTL: sesiuni OIDC/WebAuthn/MFA/step-up, rate limit, lockout, enrollment interactiv, Pub/Sub intern si gateway control.
+- Redis tine state runtime cu TTL: sesiuni admin dashboard cu refresh token rotit, sesiuni OIDC/WebAuthn/MFA/step-up, rate limit, lockout, enrollment interactiv, Pub/Sub intern si gateway control.
 - PostgreSQL tine datele persistente: useri, organizatii, IdP-uri, SCIM directory, gateway-uri, resurse, politici, sesiuni, audit, revocari si clientii OIDC.
 
 ## Structura manifesturilor

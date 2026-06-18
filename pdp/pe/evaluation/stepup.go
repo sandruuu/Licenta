@@ -105,7 +105,6 @@ func mergeSessionControls(current, next models.SessionPolicyControls) models.Ses
 		current.RevalidateEverySeconds = next.RevalidateEverySeconds
 	}
 	current.RevokeOnPostureChange = current.RevokeOnPostureChange || next.RevokeOnPostureChange
-	current.RevokeOnRiskIncrease = current.RevokeOnRiskIncrease || next.RevokeOnRiskIncrease
 	return current
 }
 

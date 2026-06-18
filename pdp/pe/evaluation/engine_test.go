@@ -576,8 +576,10 @@ func TestPolicyAccessConditionCanMatchAnySelectedSignal(t *testing.T) {
 		Conditions: models.RuleConditions{
 			AccessMatchMode: "any",
 			AccessConditions: models.AccessConditions{
-				Location:   models.LocationAccessConditions{ImpossibleTravel: true},
-				Connection: models.ConnectionAccessConditions{SensitiveProtocol: true},
+				Location: models.LocationAccessConditions{
+					NewLocation:      true,
+					ImpossibleTravel: true,
+				},
 			},
 			Authentication: models.AuthenticationPolicyConditions{
 				Policy:        models.AuthenticationPolicyEnforceMFA,
@@ -595,8 +597,9 @@ func TestPolicyAccessConditionCanMatchAnySelectedSignal(t *testing.T) {
 			ResourcePort: 22,
 			Protocol:     "ssh",
 		},
-		Rules: []*models.PolicyRule{rule},
-		Now:   businessHoursTime(),
+		Rules:         []*models.PolicyRule{rule},
+		IsNewLocation: true,
+		Now:           businessHoursTime(),
 	})
 
 	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-any-access-condition" {
@@ -604,13 +607,13 @@ func TestPolicyAccessConditionCanMatchAnySelectedSignal(t *testing.T) {
 	}
 }
 
-func TestPolicyMatchesRiskLevelCondition(t *testing.T) {
+func TestPolicyMatchesRiskSignalCondition(t *testing.T) {
 	rule := &models.PolicyRule{
-		ID:      "rule-high-risk",
-		Name:    "High risk needs passkey",
+		ID:      "rule-impossible-travel",
+		Name:    "Impossible travel needs passkey",
 		Enabled: true,
 		Conditions: models.RuleConditions{
-			Risk: models.RiskPolicyConditions{Levels: []string{"high", "critical"}},
+			Risk: models.RiskPolicyConditions{Signals: []string{"unrealistic_travel"}},
 			Authentication: models.AuthenticationPolicyConditions{
 				Policy:        models.AuthenticationPolicyEnforceMFA,
 				StepUpMethods: []string{"webauthn"},
@@ -627,10 +630,9 @@ func TestPolicyMatchesRiskLevelCondition(t *testing.T) {
 			ResourcePort: 22,
 			Protocol:     "ssh",
 			DeviceHealth: &models.DeviceHealthReport{
-				OverallScore: 10,
-				ReportedAt:   time.Now().Add(-48 * time.Hour),
+				ReportedAt: time.Now().Add(-48 * time.Hour),
 			},
-			AnomalyScore: 20,
+			AnomalyAlerts: []string{"anonymous_network"},
 		},
 		Rules:              []*models.PolicyRule{rule},
 		FailedAttempts:     5,
@@ -640,45 +642,8 @@ func TestPolicyMatchesRiskLevelCondition(t *testing.T) {
 		Now:                businessHoursTime(),
 	})
 
-	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-high-risk" {
-		t.Fatalf("Decision = %+v, want step-up from high risk condition", decision)
-	}
-	if decision.StepUp == nil || !containsString(decision.StepUp.Methods, "webauthn") {
-		t.Fatalf("StepUp = %+v, want webauthn method", decision.StepUp)
-	}
-}
-
-func TestPolicyMatchesSensitiveProtocolCondition(t *testing.T) {
-	rule := &models.PolicyRule{
-		ID:      "rule-sensitive-protocol",
-		Name:    "Passkey for SSH/RDP",
-		Enabled: true,
-		Conditions: models.RuleConditions{
-			AccessConditions: models.AccessConditions{
-				Connection: models.ConnectionAccessConditions{SensitiveProtocol: true},
-			},
-			Authentication: models.AuthenticationPolicyConditions{
-				Policy:        models.AuthenticationPolicyEnforceMFA,
-				StepUpMethods: []string{"webauthn"},
-			},
-		},
-		Action: models.DecisionStepUpRequired,
-	}
-
-	decision := NewEngine().Evaluate(AccessContext{
-		Request: models.AccessRequest{
-			UserID:       "user-1",
-			Username:     "alice",
-			Resource:     "res-ssh",
-			ResourcePort: 22,
-			Protocol:     "ssh",
-		},
-		Rules: []*models.PolicyRule{rule},
-		Now:   businessHoursTime(),
-	})
-
-	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-sensitive-protocol" {
-		t.Fatalf("Decision = %+v, want step-up from sensitive protocol condition", decision)
+	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-impossible-travel" {
+		t.Fatalf("Decision = %+v, want step-up from explicit risk signal condition", decision)
 	}
 	if decision.StepUp == nil || !containsString(decision.StepUp.Methods, "webauthn") {
 		t.Fatalf("StepUp = %+v, want webauthn method", decision.StepUp)
@@ -695,7 +660,6 @@ func TestPolicyDecisionCarriesSessionControls(t *testing.T) {
 				MaxAgeSeconds:          900,
 				RevalidateEverySeconds: 120,
 				RevokeOnPostureChange:  true,
-				RevokeOnRiskIncrease:   true,
 			},
 		},
 		Action: models.DecisionAllow,
@@ -719,8 +683,8 @@ func TestPolicyDecisionCarriesSessionControls(t *testing.T) {
 	if decision.SessionControls.MaxAgeSeconds != 900 || decision.SessionControls.RevalidateEverySeconds != 120 {
 		t.Fatalf("SessionControls = %+v, want configured durations", decision.SessionControls)
 	}
-	if !decision.SessionControls.RevokeOnPostureChange || !decision.SessionControls.RevokeOnRiskIncrease {
-		t.Fatalf("SessionControls = %+v, want revocation controls enabled", decision.SessionControls)
+	if !decision.SessionControls.RevokeOnPostureChange {
+		t.Fatalf("SessionControls = %+v, want posture revocation enabled", decision.SessionControls)
 	}
 }
 
@@ -1169,7 +1133,6 @@ func TestPolicyMatchesNestedDevicePostureHealth(t *testing.T) {
 			ResourcePort: 443,
 			Protocol:     "https",
 			DeviceHealth: &models.DeviceHealthReport{
-				OverallScore: 90,
 				Checks: []models.HealthCheck{
 					{Name: "Firewall", Status: "good"},
 				},

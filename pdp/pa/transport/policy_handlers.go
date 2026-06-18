@@ -332,13 +332,6 @@ func (s *Server) policyRuleFromPayload(payload policyRulePayload, existing *mode
 }
 
 func validatePolicyConditions(action string, conditions models.RuleConditions) string {
-	if conditions.Risk.MinScore < 0 || conditions.Risk.MinScore > 100 ||
-		conditions.Risk.MaxScore < 0 || conditions.Risk.MaxScore > 100 {
-		return "risk score bounds must be between 0 and 100"
-	}
-	if conditions.Risk.MinScore > 0 && conditions.Risk.MaxScore > 0 && conditions.Risk.MinScore > conditions.Risk.MaxScore {
-		return "minimum risk score cannot be greater than maximum risk score"
-	}
 	if policy := strings.TrimSpace(conditions.User.NewUserPolicy); policy != "" {
 		if _, ok := models.NormalizeNewUserPolicy(policy); !ok {
 			return "new user policy must be require_enrollment, allow_without_mfa, or deny"

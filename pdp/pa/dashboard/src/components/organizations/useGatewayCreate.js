@@ -28,6 +28,9 @@ function useGatewayCreate(onChanged) {
     setOrganization(null);
     setForm({ name: '', fqdn: '' });
     setError('');
+  };
+
+  const clearEnrollment = () => {
     setEnrollment(null);
   };
 
@@ -57,15 +60,17 @@ function useGatewayCreate(onChanged) {
       });
       if (result?.enrollment_token) {
         setEnrollment({
-          token: result.enrollment_token,
+          enrollment_token: result.enrollment_token,
           gateway_id: result.id,
           organization_id: result.organization_id,
           fqdn,
-          expires_at: result.token_expires_at,
+          token_expires_at: result.token_expires_at,
         });
       }
       setForm({ name: '', fqdn: '' });
-      onChanged();
+      setOpen(false);
+      setOrganization(null);
+      await onChanged?.();
     } catch (e) {
       setError(e.message || 'Failed to create gateway');
     } finally {
@@ -81,6 +86,7 @@ function useGatewayCreate(onChanged) {
     saving,
     error,
     enrollment,
+    clearEnrollment,
     openGatewayCreate,
     setGatewayOrganization,
     closeGatewayCreate,

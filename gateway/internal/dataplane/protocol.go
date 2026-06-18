@@ -4,7 +4,6 @@ type ConnectRequest struct {
 	Type         string           `json:"type"`
 	RemoteAddr   string           `json:"remote_addr"`
 	RemotePort   int              `json:"remote_port"`
-	Token        string           `json:"token,omitempty"`
 	SessionID    string           `json:"session_id,omitempty"`
 	SessionToken string           `json:"session_token,omitempty"`
 	ResourceID   string           `json:"resource_id,omitempty"`

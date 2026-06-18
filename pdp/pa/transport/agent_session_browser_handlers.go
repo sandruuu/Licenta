@@ -224,7 +224,7 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 	if len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
 		role = auth.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
 	}
-	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.Issuer, claims.Username, claims.Email, role, session.OrganizationID)
+	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.ID, claims.Username, claims.Email, role, session.OrganizationID)
 	if err != nil {
 		log.Printf("[AGENT-SESSION] Federated user provisioning failed: session=%s err=%v", session.ID, err)
 		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", claims.Username, stepUpRemoteIP(r), models.DecisionDeny, "User account could not be prepared after organization sign-in", false)

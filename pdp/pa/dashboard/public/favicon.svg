@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TrustCloud">
+  <rect x="2" y="2" width="60" height="60" rx="8" fill="#ffffff" />
+  <path
+    d="M10 35v8c0 2 1.6 3.6 3.6 3.6h36.8c2 0 3.6-1.6 3.6-3.6v-8"
+    fill="none"
+    stroke="#2a2a2a"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M27 46.6v4M37 46.6v4M24.5 50.6h15"
+    fill="none"
+    stroke="#2a2a2a"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M10 31.5h11M43 31.5h11M14 14v10M50 14v10M32 9v11M14 24l9 3.6M50 24l-9 3.6"
+    fill="none"
+    stroke="#2a2a2a"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <rect x="7" y="28.5" width="6" height="6" rx="1.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <rect x="51" y="28.5" width="6" height="6" rx="1.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <rect x="11" y="9.5" width="6" height="6" rx="1.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <rect x="47" y="9.5" width="6" height="6" rx="1.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <rect x="29" y="5.5" width="6" height="6" rx="1.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <circle cx="14" cy="24" r="3.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <circle cx="50" cy="24" r="3.2" fill="#ffffff" stroke="#2a2a2a" stroke-width="2.4" />
+  <path
+    d="M32 18c4 3.2 8.5 4.8 13.5 4.8v10c0 8.5-5.5 13.8-13.5 17.2-8-3.4-13.5-8.7-13.5-17.2v-10c5 0 9.5-1.6 13.5-4.8z"
+    fill="#ffffff"
+    stroke="#2c6164"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="32" cy="30.5" r="3" fill="#2c6164" />
+  <path d="M30 33.5h4l2.2 10h-8.4z" fill="#2c6164" />
+</svg>

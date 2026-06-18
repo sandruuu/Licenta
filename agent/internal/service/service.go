@@ -39,6 +39,8 @@ type Config struct {
 	CertificateRenewTimeout          time.Duration
 	LoginTimeout                     time.Duration
 	LoginPollInterval                time.Duration
+	SessionRenewBefore               time.Duration
+	SessionRenewRetryInterval        time.Duration
 	DeviceDataSyncInterval           time.Duration
 	DeviceDataSyncChangeScanInterval time.Duration
 	EnrollmentStatePath              string
@@ -145,6 +147,8 @@ const (
 	defaultCertificateRenewTimeout          = enrollment.DefaultCertificateRenewTimeout
 	defaultLoginTimeout                     = usersession.DefaultTimeout
 	defaultLoginPollInterval                = usersession.DefaultPollInterval
+	defaultSessionRenewBefore               = usersession.DefaultSessionRenewBefore
+	defaultSessionRenewRetryInterval        = usersession.DefaultSessionRenewRetry
 	defaultDeviceDataSyncInterval           = devicedatasync.DefaultInterval
 	defaultDeviceDataSyncChangeScanInterval = devicedatasync.DefaultChangeScanInterval
 )

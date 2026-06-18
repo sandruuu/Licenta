@@ -20,7 +20,7 @@ type agentAuthorizeRequest struct {
 type agentAuthorizeResponse struct {
 	Decision          string   `json:"decision"`
 	Reason            string   `json:"reason"`
-	RiskScore         int      `json:"risk_score"`
+	RiskSignals       []string `json:"risk_signals,omitempty"`
 	MatchedRule       string   `json:"matched_rule,omitempty"`
 	Policies          []string `json:"policies,omitempty"`
 	SessionID         string   `json:"session_id,omitempty"`
@@ -68,6 +68,9 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 	if result.SessionID != "" && result.GatewayID != "" {
 		s.rememberGatewaySession(result.SessionID, result.GatewayID)
 	}
+	if result.Decision == models.DecisionAllow {
+		s.touchAgentSessionActivity(token, deviceID, certificateThumbprint)
+	}
 	return agentAuthorizeResponseFromPA(result), http.StatusOK, nil
 }
 
@@ -75,7 +78,7 @@ func agentAuthorizeResponseFromPA(response pa.AgentAuthorizationResponse) agentA
 	result := agentAuthorizeResponse{
 		Decision:          response.Decision,
 		Reason:            response.Reason,
-		RiskScore:         response.RiskScore,
+		RiskSignals:       append([]string(nil), response.RiskSignals...),
 		MatchedRule:       response.MatchedRule,
 		Policies:          response.Policies,
 		SessionID:         response.SessionID,

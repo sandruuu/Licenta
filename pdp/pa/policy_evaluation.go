@@ -19,9 +19,8 @@ func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.
 func (pa *PolicyAdministrator) EvaluateAccessWithAuth(req models.AccessRequest, authCtx models.AuthContext) *models.AccessDecision {
 	if pa == nil || pa.Engine == nil {
 		return &models.AccessDecision{
-			Decision:  models.DecisionDeny,
-			Reason:    "Policy Engine unavailable",
-			RiskScore: 100,
+			Decision: models.DecisionDeny,
+			Reason:   "Policy Engine unavailable",
 		}
 	}
 
@@ -107,8 +106,7 @@ func (pa *PolicyAdministrator) isNewUserDevice(userID, deviceID string, now time
 
 func denyOrganizationMismatch(reason string) *models.AccessDecision {
 	return &models.AccessDecision{
-		Decision:  models.DecisionDeny,
-		Reason:    reason,
-		RiskScore: 100,
+		Decision: models.DecisionDeny,
+		Reason:   reason,
 	}
 }

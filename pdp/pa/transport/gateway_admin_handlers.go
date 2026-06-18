@@ -33,6 +33,8 @@ func (s *Server) writeGatewayAdminError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, pagateway.ErrInvalidRequest):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": gatewayClientMessage(err)})
+	case errors.Is(err, pagateway.ErrGatewayAlreadyEnrolled):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "gateway is already enrolled"})
 	case errors.Is(err, pagateway.ErrGatewayNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "gateway not found"})
 	case errors.Is(err, pagateway.ErrGatewayTokenGeneration):

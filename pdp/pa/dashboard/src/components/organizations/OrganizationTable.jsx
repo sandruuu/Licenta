@@ -5,6 +5,8 @@ import StatusBadge from './StatusBadge';
 export default function OrganizationTable({
   loading,
   organizations,
+  gatewayCounts,
+  resourceCounts,
   onOpen,
   onEdit,
   onRevoke,
@@ -34,6 +36,24 @@ export default function OrganizationTable({
       render: (value) => (
         <span className="inline-flex min-w-0 items-center gap-2">
           <span className="truncate font-mono text-sm">{value || '-'}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'gateways',
+      label: 'Gateways',
+      render: (_, organization) => (
+        <span className="font-mono text-sm font-semibold text-text-primary">
+          {gatewayCounts?.get(organization.id) || 0}
+        </span>
+      ),
+    },
+    {
+      key: 'resources',
+      label: 'Resources',
+      render: (_, organization) => (
+        <span className="font-mono text-sm font-semibold text-text-primary">
+          {resourceCounts?.get(organization.id) || 0}
         </span>
       ),
     },

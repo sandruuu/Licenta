@@ -39,6 +39,7 @@ type Server struct {
 	externalCAPEM []byte
 
 	agentSessions *agentSessionStore
+	adminSessions *adminSessionStore
 	stepUpAuth    *stepUpBrowserAuthStore
 	adminMFA      *adminMFAStore
 
@@ -63,6 +64,7 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 		addr:           addr,
 		gatewayControl: NewGatewayControlRegistry(policyAdmin.Runtime),
 		agentSessions:  newAgentSessionStore(policyAdmin.Runtime),
+		adminSessions:  newAdminSessionStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.AdminAccessTokenTTL, policyAdmin.Cfg.Runtime.AdminSessionIdleTTL, policyAdmin.Cfg.Runtime.AdminSessionAbsoluteTTL),
 		stepUpAuth:     newStepUpBrowserAuthStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
 		adminMFA:       newAdminMFAStore(policyAdmin.Runtime),
 		events:         events.NewBroker(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.EventBufferSize),
@@ -153,6 +155,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/auth/passkey/login/finish", s.handleAdminPasskeyLoginFinish)
 	s.mux.HandleFunc("/api/auth/passkey/register/begin", s.handleAdminPasskeyRegisterBegin)
 	s.mux.HandleFunc("/api/auth/passkey/register/finish", s.handleAdminPasskeyRegisterFinish)
+	s.mux.HandleFunc("/api/auth/session/refresh", s.handleAdminSessionRefresh)
+	s.mux.HandleFunc("/api/auth/logout", s.handleAdminLogout)
 	s.mux.HandleFunc("/api/config/public", s.handlePublicConfig)
 	s.mux.HandleFunc("/live", s.handleLiveCheck)
 	s.mux.HandleFunc("/ready", s.handleReadyCheck)

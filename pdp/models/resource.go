@@ -9,7 +9,8 @@ type Resource struct {
 	Description    string            `json:"description,omitempty"`
 	Type           string            `json:"type"`
 	Host           string            `json:"host"`
-	Port           int               `json:"port"`
+	ExternalPort   int               `json:"external_port"`
+	InternalPort   int               `json:"internal_port"`
 	ExternalURL    string            `json:"external_url,omitempty"`
 	Enabled        bool              `json:"enabled"`
 	Tags           []string          `json:"tags,omitempty"`

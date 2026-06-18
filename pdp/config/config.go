@@ -34,6 +34,12 @@ type RuntimeConfig struct {
 	FederationCacheTTL         time.Duration `json:"federation_cache_ttl"`
 	FederationHTTPTimeout      time.Duration `json:"federation_http_timeout"`
 	BrowserAuthSessionTTL      time.Duration `json:"browser_auth_session_ttl"`
+	AdminAccessTokenTTL        time.Duration `json:"admin_access_token_ttl"`
+	AdminSessionIdleTTL        time.Duration `json:"admin_session_idle_ttl"`
+	AdminSessionAbsoluteTTL    time.Duration `json:"admin_session_absolute_ttl"`
+	AgentSessionAccessTokenTTL time.Duration `json:"agent_session_access_token_ttl"`
+	AgentSessionIdleTTL        time.Duration `json:"agent_session_idle_ttl"`
+	AgentSessionAbsoluteTTL    time.Duration `json:"agent_session_absolute_ttl"`
 	CSRFCookieMaxAgeSeconds    int           `json:"csrf_cookie_max_age_seconds"`
 	EnrollRateLimitWindow      time.Duration `json:"enroll_rate_limit_window"`
 	EnrollRateLimitMax         int           `json:"enroll_rate_limit_max"`
@@ -70,45 +76,6 @@ type GeoConfig struct {
 	SameAreaDistanceKM       float64       `json:"same_area_distance_km"`
 	SuspiciousTravelSpeedKMH float64       `json:"suspicious_travel_speed_kmh"`
 	ImpossibleTravelSpeedKMH float64       `json:"impossible_travel_speed_kmh"`
-}
-
-// RiskConfig controls the numeric risk-score model used by PE.
-type RiskConfig struct {
-	DeviceDataCriticalAfter     time.Duration  `json:"device_data_critical_after"`
-	DeviceDataStaleAfter        time.Duration  `json:"device_data_stale_after"`
-	DeviceDataCriticalPoints    int            `json:"device_data_critical_points"`
-	DeviceDataStalePoints       int            `json:"device_data_stale_points"`
-	NoDeviceHealthPoints        int            `json:"no_device_health_points"`
-	HealthExcellentMin          int            `json:"health_excellent_min"`
-	HealthGoodMin               int            `json:"health_good_min"`
-	HealthFairMin               int            `json:"health_fair_min"`
-	HealthGoodPoints            int            `json:"health_good_points"`
-	HealthFairPoints            int            `json:"health_fair_points"`
-	HealthPoorPoints            int            `json:"health_poor_points"`
-	CriticalCheckPoints         map[string]int `json:"critical_check_points"`
-	FailedAttemptsHigh          int            `json:"failed_attempts_high"`
-	FailedAttemptsMedium        int            `json:"failed_attempts_medium"`
-	FailedAttemptsLow           int            `json:"failed_attempts_low"`
-	FailedAttemptsHighPoints    int            `json:"failed_attempts_high_points"`
-	FailedAttemptsMediumPoints  int            `json:"failed_attempts_medium_points"`
-	FailedAttemptsLowPoints     int            `json:"failed_attempts_low_points"`
-	BusinessHoursStart          int            `json:"business_hours_start"`
-	BusinessHoursEnd            int            `json:"business_hours_end"`
-	BusinessDays                []string       `json:"business_days"`
-	OutsideBusinessPoints       int            `json:"outside_business_points"`
-	NightHoursStart             int            `json:"night_hours_start"`
-	NightHoursEnd               int            `json:"night_hours_end"`
-	NightHoursPoints            int            `json:"night_hours_points"`
-	NewDevicePoints             int            `json:"new_device_points"`
-	NewLocationPoints           int            `json:"new_location_points"`
-	UserBaselineAnomalyPoints   int            `json:"user_baseline_anomaly_points"`
-	ProtocolPoints              map[string]int `json:"protocol_points"`
-	UnknownProtocolPoints       int            `json:"unknown_protocol_points"`
-	ImpossibleTravelPoints      int            `json:"impossible_travel_points"`
-	SuspiciousGeoVelocityKMH    float64        `json:"suspicious_geo_velocity_kmh"`
-	SuspiciousGeoVelocityPoints int            `json:"suspicious_geo_velocity_points"`
-	MaxAnomalyPoints            int            `json:"max_anomaly_points"`
-	MaxScore                    int            `json:"max_score"`
 }
 
 // Config holds all PDP service configuration
@@ -170,7 +137,6 @@ type Config struct {
 	Gateway    GatewayConfig         `json:"gateway"`
 	Enrollment EnrollmentConfig      `json:"enrollment"`
 	Geo        GeoConfig             `json:"geo"`
-	Risk       RiskConfig            `json:"risk"`
 }
 
 // LoadFromFile loads configuration from the PDP JSON configuration file.

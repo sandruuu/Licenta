@@ -217,6 +217,17 @@ func structFieldString(value *structpb.Struct, key string) string {
 	return field.GetStringValue()
 }
 
+func structFieldBool(value *structpb.Struct, key string) bool {
+	if value == nil {
+		return false
+	}
+	field, ok := value.GetFields()[key]
+	if !ok || field == nil {
+		return false
+	}
+	return field.GetBoolValue()
+}
+
 func isGRPCRequest(request *http.Request) bool {
 	if request == nil {
 		return false

@@ -1,7 +1,5 @@
-import { Copy, Router, X } from 'lucide-react';
-import { copyText } from './organizationUtils';
+import { Router, X } from 'lucide-react';
 import { FormSelect } from '../ui/FormField';
-import { formatDateTime } from '../../utils/format';
 
 export default function GatewayCreateModal({
   organization,
@@ -10,14 +8,15 @@ export default function GatewayCreateModal({
   form,
   setForm,
   error,
-  enrollment,
   saving,
   onClose,
   onCreate,
 }) {
   if (!organization) return null;
 
+  const gatewayName = (form.name || '').trim();
   const gatewayFQDN = (form.fqdn || '').trim();
+  const canCreate = Boolean(organization?.id && gatewayName && gatewayFQDN);
 
   return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-graphite/45 backdrop-blur-sm p-4">
@@ -63,7 +62,7 @@ export default function GatewayCreateModal({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">FQDN</label>
+                <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">FQDN *</label>
                 <input
                   type="text"
                   value={form.fqdn || ''}
@@ -71,49 +70,16 @@ export default function GatewayCreateModal({
                   placeholder="e.g. gateway.example.com"
                   className="w-full px-3 py-2 bg-surface border border-border rounded-md font-mono text-[13px] text-text-primary focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted transition" />
               </div>
-
-              {enrollment?.token ? (
-                <div className="rounded-md border border-warning/30 bg-warning-muted p-3">
-                  <div className="mb-3 text-xs font-bold text-text-primary">Enrollment token</div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <code className="text-mono min-w-0 flex-1 [overflow-wrap:anywhere] text-text-primary">{enrollment.token}</code>
-                      <button
-                        type="button"
-                        onClick={() => copyText(enrollment.token)}
-                        title="Copy enrollment token"
-                        aria-label="Copy enrollment token"
-                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-warning/10 hover:text-accent"
-                      >
-                        <Copy size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-                    Expires
-                    <span className="mt-1 block text-mono normal-case tracking-normal text-text-secondary">{formatDateTime(enrollment.expires_at)}</span>
-                  </p>
-                </div>
-              ) : null}
             </div>
 
             <div className="flex justify-end gap-2 px-6 py-4 border-t border-border bg-surface-secondary">
-              {enrollment?.token ? (
-                <button onClick={onClose}
-                  className="px-4 py-2 text-xs font-semibold bg-accent text-white-smoke rounded-md hover:bg-accent-hover transition-colors">
-                  Done
-                </button>
-              ) : (
-                <>
-                  <button onClick={onClose}
-                    className="px-4 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary">Cancel</button>
-                  <button onClick={onCreate}
-                    disabled={saving || !organization?.id || !gatewayFQDN}
-                    className="px-4 py-2 text-xs font-semibold bg-accent text-white-smoke rounded-md hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1.5">
-                    <Router size={14} /> {saving ? 'Creating...' : 'Create Gateway'}
-                  </button>
-                </>
-              )}
+              <button onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold text-text-secondary hover:text-text-primary">Cancel</button>
+              <button onClick={onCreate}
+                disabled={saving || !canCreate}
+                className="px-4 py-2 text-xs font-semibold bg-accent text-white-smoke rounded-md hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-1.5">
+                <Router size={14} /> {saving ? 'Creating...' : 'Create Gateway'}
+              </button>
             </div>
           </div>
         </div>

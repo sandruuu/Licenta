@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"log"
 	"time"
 
 	"pdp/models"
@@ -14,40 +13,45 @@ import (
 
 func (s *Store) GetSession(id string) (*models.Session, bool) {
 	row := s.db.QueryRow(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
-		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
-		revoke_on_posture_change, revoke_on_risk_increase, revoked
+		gateway_id, protocol, risk_signals_json, organization_id, policy_id, created_at, expires_at, last_activity,
+		revalidate_after, step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
+		session_max_age_seconds, revalidate_every_seconds,
+		revoke_on_posture_change, revoked
 		FROM sessions WHERE id = ?`, id)
 
 	sess := &models.Session{}
-	var revoked, revokeOnPostureChange, revokeOnRiskIncrease int
-	var createdAt, expiresAt, lastActivity, revalidateAfter string
+	var revoked, revokeOnPostureChange int
+	var createdAt, expiresAt, lastActivity, revalidateAfter, riskSignalsJSON, stepUpVerifiedAt, stepUpExpiresAt string
 
 	err := row.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-		&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.OrganizationID, &sess.PolicyID,
-		&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.SessionMaxAgeSeconds,
-		&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revokeOnRiskIncrease, &revoked)
+		&sess.Resource, &sess.GatewayID, &sess.Protocol, &riskSignalsJSON, &sess.OrganizationID, &sess.PolicyID,
+		&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.StepUpACR, &sess.StepUpMethod,
+		&sess.StepUpStrength, &sess.StepUpAAGUID, &sess.StepUpAttachment, &stepUpVerifiedAt, &stepUpExpiresAt, &sess.SessionMaxAgeSeconds,
+		&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revoked)
 	if err != nil {
 		return nil, false
 	}
 
 	sess.Revoked = i2b(revoked)
 	sess.RevokeOnPostureChange = i2b(revokeOnPostureChange)
-	sess.RevokeOnRiskIncrease = i2b(revokeOnRiskIncrease)
+	sess.RiskSignals = fromJSON[[]string](riskSignalsJSON)
 	sess.CreatedAt = parseTime(createdAt)
 	sess.ExpiresAt = parseTime(expiresAt)
 	sess.LastActivity = parseTime(lastActivity)
 	sess.RevalidateAfter = parseTime(revalidateAfter)
+	sess.StepUpVerifiedAt = parseTime(stepUpVerifiedAt)
+	sess.StepUpExpiresAt = parseTime(stepUpExpiresAt)
 	return sess, true
 }
 
-func (s *Store) SaveSession(session *models.Session) {
+func (s *Store) SaveSession(session *models.Session) error {
 	_, err := s.db.Exec(`INSERT INTO sessions
-		(id, user_id, username, device_id, source_ip, resource, gateway_id, protocol, risk_score,
+		(id, user_id, username, device_id, source_ip, resource, gateway_id, protocol, risk_signals_json,
 		 organization_id, policy_id, created_at, expires_at, last_activity, revalidate_after,
+		 step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
 		 session_max_age_seconds, revalidate_every_seconds, revoke_on_posture_change,
-		 revoke_on_risk_increase, revoked)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 revoked)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			username = EXCLUDED.username,
@@ -56,34 +60,41 @@ func (s *Store) SaveSession(session *models.Session) {
 			resource = EXCLUDED.resource,
 			gateway_id = EXCLUDED.gateway_id,
 			protocol = EXCLUDED.protocol,
-			risk_score = EXCLUDED.risk_score,
+			risk_signals_json = EXCLUDED.risk_signals_json,
 			organization_id = EXCLUDED.organization_id,
 			policy_id = EXCLUDED.policy_id,
 			created_at = EXCLUDED.created_at,
 			expires_at = EXCLUDED.expires_at,
 			last_activity = EXCLUDED.last_activity,
 			revalidate_after = EXCLUDED.revalidate_after,
+			step_up_acr = EXCLUDED.step_up_acr,
+			step_up_method = EXCLUDED.step_up_method,
+			step_up_strength = EXCLUDED.step_up_strength,
+			step_up_aaguid = EXCLUDED.step_up_aaguid,
+			step_up_attachment = EXCLUDED.step_up_attachment,
+			step_up_verified_at = EXCLUDED.step_up_verified_at,
+			step_up_expires_at = EXCLUDED.step_up_expires_at,
 			session_max_age_seconds = EXCLUDED.session_max_age_seconds,
 			revalidate_every_seconds = EXCLUDED.revalidate_every_seconds,
 			revoke_on_posture_change = EXCLUDED.revoke_on_posture_change,
-			revoke_on_risk_increase = EXCLUDED.revoke_on_risk_increase,
 			revoked = EXCLUDED.revoked`,
 		session.ID, session.UserID, session.Username, session.DeviceID, session.SourceIP,
-		session.Resource, session.GatewayID, session.Protocol, session.RiskScore, session.OrganizationID, session.PolicyID,
+		session.Resource, session.GatewayID, session.Protocol, toJSON(session.RiskSignals), session.OrganizationID, session.PolicyID,
 		fmtTime(session.CreatedAt), fmtTime(session.ExpiresAt),
 		fmtTime(session.LastActivity), fmtTime(session.RevalidateAfter),
+		session.StepUpACR, session.StepUpMethod, session.StepUpStrength, session.StepUpAAGUID, session.StepUpAttachment,
+		fmtTime(session.StepUpVerifiedAt), fmtTime(session.StepUpExpiresAt),
 		session.SessionMaxAgeSeconds, session.RevalidateEverySeconds,
-		b2i(session.RevokeOnPostureChange), b2i(session.RevokeOnRiskIncrease), b2i(session.Revoked))
-	if err != nil {
-		log.Printf("[STORE] Failed to save session %s: %v", session.ID, err)
-	}
+		b2i(session.RevokeOnPostureChange), b2i(session.Revoked))
+	return err
 }
 
 func (s *Store) ListSessions() []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
-		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
-		revoke_on_posture_change, revoke_on_risk_increase, revoked
+		gateway_id, protocol, risk_signals_json, organization_id, policy_id, created_at, expires_at, last_activity,
+		revalidate_after, step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
+		session_max_age_seconds, revalidate_every_seconds,
+		revoke_on_posture_change, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at > ?`, fmtTime(time.Now()))
 	if err != nil {
 		return nil
@@ -94,9 +105,10 @@ func (s *Store) ListSessions() []*models.Session {
 
 func (s *Store) ListUserSessions(userID string) []*models.Session {
 	rows, err := s.db.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
-		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
-		revoke_on_posture_change, revoke_on_risk_increase, revoked
+		gateway_id, protocol, risk_signals_json, organization_id, policy_id, created_at, expires_at, last_activity,
+		revalidate_after, step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
+		session_max_age_seconds, revalidate_every_seconds,
+		revoke_on_posture_change, revoked
 		FROM sessions WHERE user_id = ? AND revoked = 0 AND expires_at > ?`, userID, fmtTime(time.Now()))
 	if err != nil {
 		return nil
@@ -109,23 +121,26 @@ func (s *Store) scanSessions(rows *sql.Rows) []*models.Session {
 	var sessions []*models.Session
 	for rows.Next() {
 		sess := &models.Session{}
-		var revoked, revokeOnPostureChange, revokeOnRiskIncrease int
-		var createdAt, expiresAt, lastActivity, revalidateAfter string
+		var revoked, revokeOnPostureChange int
+		var createdAt, expiresAt, lastActivity, revalidateAfter, riskSignalsJSON, stepUpVerifiedAt, stepUpExpiresAt string
 
 		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-			&sess.Resource, &sess.GatewayID, &sess.Protocol, &sess.RiskScore, &sess.OrganizationID, &sess.PolicyID,
-			&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.SessionMaxAgeSeconds,
-			&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revokeOnRiskIncrease, &revoked); err != nil {
+			&sess.Resource, &sess.GatewayID, &sess.Protocol, &riskSignalsJSON, &sess.OrganizationID, &sess.PolicyID,
+			&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.StepUpACR, &sess.StepUpMethod,
+			&sess.StepUpStrength, &sess.StepUpAAGUID, &sess.StepUpAttachment, &stepUpVerifiedAt, &stepUpExpiresAt, &sess.SessionMaxAgeSeconds,
+			&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revoked); err != nil {
 			continue
 		}
 
 		sess.Revoked = i2b(revoked)
 		sess.RevokeOnPostureChange = i2b(revokeOnPostureChange)
-		sess.RevokeOnRiskIncrease = i2b(revokeOnRiskIncrease)
+		sess.RiskSignals = fromJSON[[]string](riskSignalsJSON)
 		sess.CreatedAt = parseTime(createdAt)
 		sess.ExpiresAt = parseTime(expiresAt)
 		sess.LastActivity = parseTime(lastActivity)
 		sess.RevalidateAfter = parseTime(revalidateAfter)
+		sess.StepUpVerifiedAt = parseTime(stepUpVerifiedAt)
+		sess.StepUpExpiresAt = parseTime(stepUpExpiresAt)
 		sessions = append(sessions, sess)
 	}
 	return sessions
@@ -153,9 +168,10 @@ func (s *Store) CleanExpiredSessionsWithSnapshot(now time.Time) ([]*models.Sessi
 	defer tx.Rollback()
 
 	rows, err := tx.Query(`SELECT id, user_id, username, device_id, source_ip, resource,
-		gateway_id, protocol, risk_score, organization_id, policy_id, created_at, expires_at, last_activity,
-		revalidate_after, session_max_age_seconds, revalidate_every_seconds,
-		revoke_on_posture_change, revoke_on_risk_increase, revoked
+		gateway_id, protocol, risk_signals_json, organization_id, policy_id, created_at, expires_at, last_activity,
+		revalidate_after, step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
+		session_max_age_seconds, revalidate_every_seconds,
+		revoke_on_posture_change, revoked
 		FROM sessions WHERE revoked = 0 AND expires_at < ?`, fmtTime(now))
 	if err != nil {
 		return nil, 0

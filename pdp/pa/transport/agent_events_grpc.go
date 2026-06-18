@@ -144,7 +144,7 @@ func agentEventPayload(eventType string, claims *auth.CustomClaims, fields map[s
 	return payload
 }
 
-func agentEventMessage(eventType, reason, fallback string) string {
+func agentEventMessage(eventType, reason, defaultMessage string) string {
 	switch strings.TrimSpace(reason) {
 	case "agent_logout":
 		return "You signed out. Protected resource access was removed."
@@ -165,8 +165,8 @@ func agentEventMessage(eventType, reason, fallback string) string {
 	case "expired":
 		return "Your protected resource session expired."
 	}
-	if strings.TrimSpace(fallback) != "" {
-		return fallback
+	if strings.TrimSpace(defaultMessage) != "" {
+		return defaultMessage
 	}
 	if eventType == agentEventCatalogInvalidated {
 		return "Protected resource catalog changed."

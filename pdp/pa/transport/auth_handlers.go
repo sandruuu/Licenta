@@ -2,6 +2,7 @@ package transport
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -132,14 +133,124 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims, ok := adminClaimsFromContext(r)
+	if !ok || claims == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "admin session claims unavailable"})
+		return
+	}
+	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
+	if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return
+	}
+	session, _ := adminSessionFromContext(r)
+	expiresAt := time.Time{}
+	if claims.ExpiresAt != nil {
+		expiresAt = claims.ExpiresAt.Time.UTC()
+	}
+	expiresIn := int64(0)
+	expiresAtValue := ""
+	if !expiresAt.IsZero() {
+		expiresAtValue = expiresAt.Format(time.RFC3339)
+		expiresIn = int64(time.Until(expiresAt).Seconds())
+		if expiresIn < 0 {
+			expiresIn = 0
+		}
+	}
+
 	writeJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
-		Data: map[string]string{
-			"status":   "authenticated",
-			"user_id":  r.Header.Get("X-User-ID"),
-			"username": r.Header.Get("X-Username"),
-			"role":     r.Header.Get("X-User-Role"),
+		Data: map[string]interface{}{
+			"status":     "authenticated",
+			"user_id":    user.ID,
+			"username":   user.Username,
+			"role":       user.Role,
+			"session_id": claims.SessionID,
+			"expires_at": expiresAtValue,
+			"expires_in": expiresIn,
+			"idle_expires_at": func() string {
+				if session == nil || session.IdleExpiresAt.IsZero() {
+					return ""
+				}
+				return session.IdleExpiresAt.UTC().Format(time.RFC3339)
+			}(),
+			"absolute_expires_at": func() string {
+				if session == nil || session.AbsoluteExpiresAt.IsZero() {
+					return ""
+				}
+				return session.AbsoluteExpiresAt.UTC().Format(time.RFC3339)
+			}(),
 		},
+	})
+}
+
+type adminSessionRefreshRequest struct {
+	SessionID    string `json:"session_id"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (s *Server) handleAdminSessionRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.checkAuthRateLimit(w, r) {
+		return
+	}
+	var req adminSessionRefreshRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	session, refreshToken, err := s.adminSessions.refresh(req.SessionID, req.RefreshToken, s.lookupAdminSessionUser)
+	if err != nil {
+		if errors.Is(err, errAdminSessionNotFound) || errors.Is(err, errAdminSessionExpired) || errors.Is(err, errAdminSessionRefreshMismatch) {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired session"})
+			return
+		}
+		log.Printf("[AUTH] Admin session refresh failed: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session refresh failed"})
+		return
+	}
+	user, ok := s.lookupAdminSessionUser(session.UserID)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return
+	}
+	response, err := s.adminSessionLoginResponse(user, session, refreshToken, "Session refreshed")
+	if err != nil {
+		log.Printf("[AUTH] Admin session token issue failed: user=%s err=%v", session.UserID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session refresh failed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	var req adminSessionRefreshRequest
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req)
+
+	if token, err := bearerToken(r); err == nil {
+		if claims, err := s.pa.Auth.ValidateToken(token); err == nil && claims != nil {
+			if strings.TrimSpace(claims.SessionID) != "" {
+				s.adminSessions.revoke(claims.SessionID)
+			}
+			if claims.ID != "" && claims.ExpiresAt != nil {
+				s.pa.Store.RevokeToken(claims.ID, claims.ExpiresAt.Time)
+			}
+		}
+	}
+	if strings.TrimSpace(req.SessionID) != "" && strings.TrimSpace(req.RefreshToken) != "" {
+		s.adminSessions.revokeWithRefresh(req.SessionID, req.RefreshToken)
+	}
+
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data:    map[string]bool{"revoked": true},
 	})
 }
 
@@ -188,12 +299,6 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	s.adminMFA.consume(challenge.ID)
 	_ = s.pa.Runtime.ResetLoginAttempts(user.Username)
-	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, challenge.Purpose)
-	if err != nil {
-		log.Printf("[AUTH] JWT issue after MFA failed: %v", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
-		return
-	}
 	if s.pa.Audit != nil {
 		details := "Dashboard MFA completed"
 		if challenge.Purpose == paauth.PasskeyEnrollmentPurpose {
@@ -201,14 +306,73 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		s.pa.Audit.LogEvent("admin_mfa_completed", user.ID, user.Username, r.RemoteAddr, "", "", details, true)
 	}
-	writeJSON(w, http.StatusOK, models.LoginResponse{
-		Status:      "authenticated",
-		Message:     "Authentication successful",
-		AuthToken:   authToken,
-		UserID:      user.ID,
-		Purpose:     challenge.Purpose,
-		MFARequired: true,
-	})
+	if challenge.Purpose == paauth.PasskeyEnrollmentPurpose {
+		authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, "platform_admin", "", "", true, challenge.Purpose)
+		if err != nil {
+			log.Printf("[AUTH] JWT issue after MFA failed: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, models.LoginResponse{
+			Status:      "authenticated",
+			Message:     "Authentication successful",
+			AuthToken:   authToken,
+			UserID:      user.ID,
+			Purpose:     challenge.Purpose,
+			MFARequired: true,
+		})
+		return
+	}
+	response, err := s.startAdminSession(user, "Authentication successful")
+	if err != nil {
+		log.Printf("[AUTH] Admin session start after MFA failed: user=%s err=%v", user.ID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
+		return
+	}
+	response.MFARequired = true
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) startAdminSession(user *models.User, message string) (*models.LoginResponse, error) {
+	session, refreshToken, err := s.adminSessions.create(user)
+	if err != nil {
+		return nil, err
+	}
+	return s.adminSessionLoginResponse(user, session, refreshToken, message)
+}
+
+func (s *Server) adminSessionLoginResponse(user *models.User, session *adminSessionRecord, refreshToken, message string) (*models.LoginResponse, error) {
+	if user == nil || session == nil {
+		return nil, errors.New("admin session response requires user and session")
+	}
+	ttl := s.adminSessions.accessTokenTTL(session)
+	if ttl <= 0 {
+		return nil, errAdminSessionExpired
+	}
+	authToken, err := s.pa.Auth.JWT.GenerateAuthTokenWithSession(user.ID, user.Username, user.Role, "", "", true, "", session.ID, ttl)
+	if err != nil {
+		return nil, err
+	}
+	expiresAt := time.Now().UTC().Add(ttl)
+	return &models.LoginResponse{
+		Status:           "authenticated",
+		Message:          message,
+		AuthToken:        authToken,
+		RefreshToken:     refreshToken,
+		SessionID:        session.ID,
+		ExpiresAt:        expiresAt.Format(time.RFC3339),
+		ExpiresIn:        int64(ttl.Seconds()),
+		RefreshExpiresAt: minTime(session.IdleExpiresAt, session.AbsoluteExpiresAt).UTC().Format(time.RFC3339),
+		UserID:           user.ID,
+	}, nil
+}
+
+func (s *Server) lookupAdminSessionUser(userID string) (*models.User, bool) {
+	user, ok := s.pa.Auth.Users.GetUser(strings.TrimSpace(userID))
+	if !ok || user == nil || user.Disabled || user.Role != "platform_admin" {
+		return nil, false
+	}
+	return user, true
 }
 
 func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request, req models.LoginRequest) (*models.User, bool) {

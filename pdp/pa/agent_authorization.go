@@ -30,7 +30,7 @@ type AgentAuthorizationRequest struct {
 type AgentAuthorizationResponse struct {
 	Decision          string
 	Reason            string
-	RiskScore         int
+	RiskSignals       []string
 	MatchedRule       string
 	Policies          []string
 	SessionID         string
@@ -53,10 +53,11 @@ type AgentGatewayProvisioner interface {
 }
 
 type resolvedAgentAuthorization struct {
-	resource *models.Resource
-	gateway  *models.Gateway
-	protocol string
-	port     int
+	resource     *models.Resource
+	gateway      *models.Gateway
+	protocol     string
+	externalPort int
+	internalPort int
 }
 
 func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req AgentAuthorizationRequest, provisioner AgentGatewayProvisioner) (AgentAuthorizationResponse, error) {
@@ -81,7 +82,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		Resource:       resolved.resource.ID,
 		OrganizationID: resolved.resource.OrganizationID,
 		GatewayID:      resolved.gateway.ID,
-		ResourcePort:   resolved.port,
+		ResourcePort:   resolved.externalPort,
 		Protocol:       resolved.protocol,
 		AuthToken:      strings.TrimSpace(req.UserToken),
 		AppID:          resolved.resource.ID,
@@ -142,7 +143,8 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		ResourceID:    resolved.resource.ID,
 		ResourceName:  resolved.resource.Name,
 		InternalHost:  resolved.resource.Host,
-		InternalPort:  resolved.port,
+		ExternalPort:  resolved.externalPort,
+		InternalPort:  resolved.internalPort,
 		Protocol:      resolved.protocol,
 		ExpiresAt:     session.ExpiresAt,
 		Constraints:   agentAuthorizationConstraints(decision),
@@ -169,7 +171,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	response.GatewayServerName = strings.TrimSpace(gateway.FQDN)
 	response.ResourceID = resolved.resource.ID
 	response.Protocol = resolved.protocol
-	response.Port = resolved.port
+	response.Port = resolved.externalPort
 	response.ExpiresAt = session.ExpiresAt
 	return response, nil
 }
@@ -340,7 +342,11 @@ func (pa *PolicyAdministrator) resolveAgentAuthorization(req AgentAuthorizationR
 	if port <= 0 || resourcePort <= 0 || port != resourcePort {
 		return resolvedAgentAuthorization{}, newAccessError(AccessErrorInvalidRequest, fmt.Sprintf("port must be %d", resourcePort), nil)
 	}
-	return resolvedAgentAuthorization{resource: resource, gateway: gateway, protocol: protocol, port: port}, nil
+	internalPort := ResourceInternalPort(resource, resourceProtocol)
+	if internalPort <= 0 {
+		return resolvedAgentAuthorization{}, newAccessError(AccessErrorConflict, "resource internal_port is not configured", nil)
+	}
+	return resolvedAgentAuthorization{resource: resource, gateway: gateway, protocol: protocol, externalPort: port, internalPort: internalPort}, nil
 }
 
 func (pa *PolicyAdministrator) connectedGatewayForResource(resource *models.Resource, provisioner AgentGatewayProvisioner) (*models.Gateway, string, error) {
@@ -375,29 +381,11 @@ func DeviceHealthFromData(report *models.DeviceDataReport) *models.DeviceHealthR
 	if report == nil {
 		return nil
 	}
-	score := 100
-	if len(report.Checks) > 0 {
-		points := 0
-		for _, check := range report.Checks {
-			switch strings.ToLower(strings.TrimSpace(check.Status)) {
-			case "good", "ok", "pass", "passed", "healthy":
-				points += 100
-			case "warning":
-				points += 70
-			case "unavailable", "unknown":
-				points += 50
-			default:
-				points += 0
-			}
-		}
-		score = points / len(report.Checks)
-	}
 	return &models.DeviceHealthReport{
 		DeviceID:       report.DeviceID,
 		Hostname:       report.Hostname,
 		OS:             report.OS,
 		Checks:         append([]models.HealthCheck(nil), report.Checks...),
-		OverallScore:   score,
 		ReportedAt:     report.ReportedAt,
 		OrganizationID: report.OrganizationID,
 	}
@@ -409,6 +397,10 @@ func ResourceProtocol(resource *models.Resource) string {
 
 func ResourcePort(resource *models.Resource, protocol string) int {
 	return catalog.ResourcePort(resource, protocol)
+}
+
+func ResourceInternalPort(resource *models.Resource, protocol string) int {
+	return catalog.ResourceInternalPort(resource, protocol)
 }
 
 func GatewayServesResource(gateway *models.Gateway, resourceID string) bool {
@@ -433,7 +425,7 @@ func agentAuthorizationResponseFromDecision(decision *models.AccessDecision) Age
 	return AgentAuthorizationResponse{
 		Decision:    decision.Decision,
 		Reason:      decision.Reason,
-		RiskScore:   decision.RiskScore,
+		RiskSignals: append([]string(nil), decision.RiskSignals...),
 		MatchedRule: decision.MatchedRule,
 		Policies:    decision.Policies,
 		StepUp:      decision.StepUp,

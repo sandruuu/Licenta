@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Ban, Copy, Edit2, RotateCcw, Router, Trash2 } from 'lucide-react';
+import { Ban, Edit2, RotateCcw, Router, Trash2 } from 'lucide-react';
 import {
   deleteGateway,
   getGateways,
@@ -10,6 +10,7 @@ import {
   updateGateway,
 } from '../api';
 import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
+import GatewayTokenModal from '../components/organizations/GatewayTokenModal';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable, { TableActions, TableIconButton } from '../components/ui/DataTable';
@@ -37,6 +38,11 @@ function isRevokedGateway(gateway) {
   return String(gateway?.status || '').toLowerCase() === 'revoked';
 }
 
+function isEnrolledGateway(gateway) {
+  const status = String(gateway?.status || '').toLowerCase();
+  return status === 'enrolled' || status === 'active';
+}
+
 function invalidatedValue(row, value) {
   if (isRevokedGateway(row)) {
     return <StatusText variant="danger">Invalidated</StatusText>;
@@ -54,14 +60,14 @@ export default function Gateways() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [revoking, setRevoking] = useState(false);
-  const [reactivating, setReactivating] = useState(false);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [deleteGatewayTarget, setDeleteGatewayTarget] = useState(null);
   const [revokeGatewayTarget, setRevokeGatewayTarget] = useState(null);
-  const [reactivateGatewayTarget, setReactivateGatewayTarget] = useState(null);
-  const [reactivationEnrollment, setReactivationEnrollment] = useState(null);
+  const [gatewayTokenModal, setGatewayTokenModal] = useState(null);
+  const [refreshAfterTokenModal, setRefreshAfterTokenModal] = useState(false);
+  const [regeneratingGatewayID, setRegeneratingGatewayID] = useState('');
   const [query, setQuery] = useState(() => searchParams.get('q') || '');
   const [statusFilter, setStatusFilter] = useState('all');
   const [organizationFilter, setOrganizationFilter] = useState(() => searchParams.get('organization_id') || 'all');
@@ -150,31 +156,45 @@ export default function Gateways() {
     }
   };
 
-  const confirmReactivateGateway = async () => {
-    if (!reactivateGatewayTarget) return;
+  const regenerateTokenForGateway = async (gateway) => {
+    if (!gateway?.id) return;
+    if (isEnrolledGateway(gateway)) {
+      setError('Gateway is already enrolled. Enrollment token regeneration is no longer available.');
+      return;
+    }
     setError('');
-    setReactivating(true);
+    setRegeneratingGatewayID(gateway.id);
+    setGatewayTokenModal({
+      loading: true,
+      name: gateway.name,
+      fqdn: gateway.fqdn,
+    });
     try {
-      const result = await regenerateGatewayToken(reactivateGatewayTarget.id);
-      setReactivationEnrollment({
+      const result = await regenerateGatewayToken(gateway.id);
+      setGatewayTokenModal({
         ...result,
-        name: reactivateGatewayTarget.name,
-        fqdn: reactivateGatewayTarget.fqdn,
+        name: gateway.name,
+        fqdn: gateway.fqdn,
       });
-      setReactivateGatewayTarget(null);
-      await load();
+      setRefreshAfterTokenModal(true);
     } catch (e) {
-      setError(e.message || 'Failed to reactivate gateway');
+      const message = e.message || 'Failed to regenerate gateway token';
+      setError(message);
+      setGatewayTokenModal({
+        error: message,
+        name: gateway.name,
+        fqdn: gateway.fqdn,
+      });
     } finally {
-      setReactivating(false);
+      setRegeneratingGatewayID('');
     }
   };
 
-  const copyText = async (value) => {
-    try {
-      await navigator.clipboard?.writeText(value || '');
-    } catch {
-      // Clipboard support is best-effort in local development browsers.
+  const closeGatewayTokenModal = () => {
+    setGatewayTokenModal(null);
+    if (refreshAfterTokenModal) {
+      setRefreshAfterTokenModal(false);
+      load();
     }
   };
 
@@ -203,14 +223,21 @@ export default function Gateways() {
       align: 'right',
       render: (_, row) => {
         const revoked = isRevokedGateway(row);
+        const enrolled = isEnrolledGateway(row);
         return (
           <TableActions>
             <TableIconButton icon={Edit2} label="Edit gateway" onClick={() => openEdit(row)} />
-            {revoked ? (
-              <TableIconButton icon={RotateCcw} label="Reactivate gateway" onClick={() => setReactivateGatewayTarget(row)} />
-            ) : (
+            {!enrolled ? (
+              <TableIconButton
+                icon={RotateCcw}
+                label="Regenerate token"
+                onClick={() => regenerateTokenForGateway(row)}
+                disabled={regeneratingGatewayID === row.id}
+              />
+            ) : null}
+            {!revoked ? (
               <TableIconButton icon={Ban} label="Revoke gateway" danger onClick={() => setRevokeGatewayTarget(row)} />
-            )}
+            ) : null}
             <TableIconButton
               icon={Trash2}
               label="Delete gateway"
@@ -395,53 +422,12 @@ export default function Gateways() {
         loading={revoking}
       />
 
-      <ConfirmDialog
-        open={!!reactivateGatewayTarget}
-        onClose={() => setReactivateGatewayTarget(null)}
-        onConfirm={confirmReactivateGateway}
-        title="Reactivate gateway"
-        message={
-          reactivateGatewayTarget
-            ? `Reactivate "${reactivateGatewayTarget.name || reactivateGatewayTarget.fqdn || reactivateGatewayTarget.id}"? A new enrollment token will be generated and the gateway will need to enroll again.`
-            : ''
-        }
-        confirmLabel="Reactivate gateway"
-        confirmVariant="primary"
-        loadingLabel="Reactivating..."
-        loading={reactivating}
+      <GatewayTokenModal
+        open={!!gatewayTokenModal}
+        tokenInfo={gatewayTokenModal}
+        title="Gateway enrollment token"
+        onClose={closeGatewayTokenModal}
       />
-
-      <Modal
-        open={!!reactivationEnrollment}
-        onClose={() => setReactivationEnrollment(null)}
-        title="Gateway reactivation token"
-        size="lg"
-        footer={(
-          <Button onClick={() => setReactivationEnrollment(null)}>Done</Button>
-        )}
-      >
-        <div className="rounded-md border border-warning/30 bg-warning-muted p-3">
-          <div className="text-xs font-bold text-text-primary">Enrollment token</div>
-          <div className="mt-3 flex items-center gap-2">
-            <code className="text-mono min-w-0 flex-1 [overflow-wrap:anywhere] text-text-primary">
-              {reactivationEnrollment?.enrollment_token || '-'}
-            </code>
-            <button
-              type="button"
-              onClick={() => copyText(reactivationEnrollment?.enrollment_token)}
-              title="Copy enrollment token"
-              aria-label="Copy enrollment token"
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-transparent text-text-secondary transition-colors hover:bg-warning/10 hover:text-accent"
-            >
-              <Copy size={14} />
-            </button>
-          </div>
-          <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-text-muted">
-            Expires
-            <span className="mt-1 block text-mono normal-case tracking-normal text-text-secondary">{formatDateTime(reactivationEnrollment?.token_expires_at)}</span>
-          </p>
-        </div>
-      </Modal>
 
       {gatewayCreate.open ? (
         <GatewayCreateModal
@@ -451,12 +437,18 @@ export default function Gateways() {
           form={gatewayCreate.form}
           setForm={gatewayCreate.setForm}
           error={gatewayCreate.error}
-          enrollment={gatewayCreate.enrollment}
           saving={gatewayCreate.saving}
           onClose={gatewayCreate.closeGatewayCreate}
           onCreate={gatewayCreate.handleGatewayCreate}
         />
       ) : null}
+
+      <GatewayTokenModal
+        open={!!gatewayCreate.enrollment}
+        tokenInfo={gatewayCreate.enrollment}
+        title="Gateway enrollment token"
+        onClose={gatewayCreate.clearEnrollment}
+      />
     </div>
   );
 }

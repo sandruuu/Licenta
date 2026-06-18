@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -12,10 +11,10 @@ import (
 )
 
 const (
-	FileName           = "config.json"
-	PAURLEnv           = "GATEWAY_PA_URL"
-	EnrollmentTokenEnv = "GATEWAY_ENROLLMENT_TOKEN"
-	PublicEndpointEnv  = "GATEWAY_PUBLIC_ENDPOINT"
+	PAURLEnv                       = "GATEWAY_PA_URL"
+	EnrollmentTokenEnv             = "GATEWAY_ENROLLMENT_TOKEN"
+	PublicEndpointEnv              = "GATEWAY_PUBLIC_ENDPOINT"
+	SessionRevalidationIntervalEnv = "GATEWAY_SESSION_REVALIDATION_INTERVAL"
 
 	PACAPath        = "certs/pa-ca.crt"
 	GatewayCertPath = "certs/gateway.crt"
@@ -24,17 +23,17 @@ const (
 )
 
 type Config struct {
-	PAURL                       string              `json:"pa_url"`
-	PublicEndpoint              string              `json:"public_endpoint,omitempty"`
-	SessionRevalidationInterval time.Duration       `json:"session_revalidation_interval,omitempty"`
-	EnrollmentToken             string              `json:"-"`
-	ControlPlane                *ControlPlaneConfig `json:"control_plane,omitempty"`
+	PAURL                       string
+	PublicEndpoint              string
+	SessionRevalidationInterval time.Duration
+	EnrollmentToken             string
+	ControlPlane                *ControlPlaneConfig
 }
 
 type ControlPlaneConfig struct {
-	GatewayID      string `json:"-"`
-	OrganizationID string `json:"-"`
-	FQDN           string `json:"-"`
+	GatewayID      string
+	OrganizationID string
+	FQDN           string
 }
 
 func DefaultConfig() *Config {
@@ -46,13 +45,6 @@ func DefaultConfig() *Config {
 
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
-	data, err := os.ReadFile(FileName)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, err
-	}
 	if err := cfg.ApplyEnvironment(); err != nil {
 		return nil, err
 	}
@@ -79,15 +71,14 @@ func (cfg *Config) Validate() error {
 		}
 	}
 
-	requiredString("pa_url", cfg.PAURL)
+	requiredString(PAURLEnv, cfg.PAURL)
+	requiredString(PublicEndpointEnv, cfg.PublicEndpoint)
 	if cfg.SessionRevalidationInterval <= 0 {
 		cfg.SessionRevalidationInterval = 30 * time.Second
 	}
 	cfg.PublicEndpoint = strings.TrimSpace(cfg.PublicEndpoint)
-	if cfg.PublicEndpoint != "" {
-		if err := validatePublicEndpoint(cfg.PublicEndpoint); err != nil {
-			addValidationError(err.Error())
-		}
+	if err := validatePublicEndpoint(cfg.PublicEndpoint); err != nil {
+		addValidationError(err.Error())
 	}
 
 	if len(validationErrors) > 0 {
@@ -102,6 +93,13 @@ func (cfg *Config) ApplyEnvironment() error {
 	}
 	if endpoint := strings.TrimSpace(os.Getenv(PublicEndpointEnv)); endpoint != "" {
 		cfg.PublicEndpoint = endpoint
+	}
+	if rawInterval := strings.TrimSpace(os.Getenv(SessionRevalidationIntervalEnv)); rawInterval != "" {
+		interval, err := time.ParseDuration(rawInterval)
+		if err != nil {
+			return fmt.Errorf("%s must be a Go duration, for example 30s or 1m: %w", SessionRevalidationIntervalEnv, err)
+		}
+		cfg.SessionRevalidationInterval = interval
 	}
 	token := strings.TrimSpace(os.Getenv(EnrollmentTokenEnv))
 	if token == "" {
@@ -158,14 +156,14 @@ func resolveSecretRef(value string) (string, error) {
 func validatePublicEndpoint(endpoint string) error {
 	host, portValue, err := net.SplitHostPort(strings.TrimSpace(endpoint))
 	if err != nil {
-		return fmt.Errorf("public_endpoint must be host:port")
+		return fmt.Errorf("%s must be host:port", PublicEndpointEnv)
 	}
 	if strings.TrimSpace(host) == "" {
-		return fmt.Errorf("public_endpoint host is required")
+		return fmt.Errorf("%s host is required", PublicEndpointEnv)
 	}
 	port, err := strconv.Atoi(portValue)
 	if err != nil || port <= 0 || port > 65535 {
-		return fmt.Errorf("public_endpoint port must be between 1 and 65535")
+		return fmt.Errorf("%s port must be between 1 and 65535", PublicEndpointEnv)
 	}
 	return nil
 }

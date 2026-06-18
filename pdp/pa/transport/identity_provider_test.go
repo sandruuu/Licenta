@@ -126,6 +126,44 @@ func TestResolveIdentityProviderUsesOrganizationDomainForDefaultIdP(t *testing.T
 	}
 }
 
+func TestResolveIdentityProviderRequiresExplicitOrganizationContext(t *testing.T) {
+	dataStore := newIdentityProviderTestStore(t)
+	now := time.Now()
+	dataStore.SaveOrganization(&models.Organization{
+		ID:        "organization-1",
+		Name:      "Organization 1",
+		Domain:    "company-a.test",
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SaveIdentityProviderConfig(&models.IdentityProviderConfig{
+		ID:             "idp-1",
+		OrganizationID: "organization-1",
+		Name:           "Organization 1 IdP",
+		Type:           "oidc",
+		Enabled:        true,
+		Issuer:         "https://idp1.example.test",
+		ClientID:       "client-1",
+		Scopes:         "openid profile email",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	organization, _ := dataStore.GetOrganization("organization-1")
+	organization.DefaultIdPID = "idp-1"
+	dataStore.SaveOrganization(organization)
+
+	server := newIdentityProviderTestServer(dataStore)
+	request := httptest.NewRequest(http.MethodGet, "/auth/authorize", nil)
+	idpCfg, resolvedOrganization, err := server.resolveIdentityProvider(request, "trustagent-endpoint")
+	if err != nil {
+		t.Fatalf("resolveIdentityProvider returned error: %v", err)
+	}
+	if idpCfg != nil || resolvedOrganization != nil {
+		t.Fatalf("implicit IdP selection should not resolve: idp=%+v organization=%+v", idpCfg, resolvedOrganization)
+	}
+}
+
 func TestAdminIdentityProvidersAllowOnePerOrganization(t *testing.T) {
 	dataStore := newIdentityProviderTestStore(t)
 	now := time.Now()

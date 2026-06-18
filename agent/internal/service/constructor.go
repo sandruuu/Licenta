@@ -55,6 +55,12 @@ func normalizeConfig(config Config) Config {
 	if config.LoginPollInterval <= 0 {
 		config.LoginPollInterval = defaultLoginPollInterval
 	}
+	if config.SessionRenewBefore <= 0 {
+		config.SessionRenewBefore = defaultSessionRenewBefore
+	}
+	if config.SessionRenewRetryInterval <= 0 {
+		config.SessionRenewRetryInterval = defaultSessionRenewRetryInterval
+	}
 	if config.DeviceDataSyncInterval <= 0 {
 		config.DeviceDataSyncInterval = defaultDeviceDataSyncInterval
 	}
@@ -318,9 +324,11 @@ func enrollmentConfig(config Config) enrollment.Config {
 
 func userSessionConfig(config Config) usersession.Config {
 	return usersession.Config{
-		LoginTimeout:       config.LoginTimeout,
-		LoginPollInterval:  config.LoginPollInterval,
-		TrustedStepUpHosts: trustedStepUpHosts(config),
+		LoginTimeout:              config.LoginTimeout,
+		LoginPollInterval:         config.LoginPollInterval,
+		SessionRenewBefore:        config.SessionRenewBefore,
+		SessionRenewRetryInterval: config.SessionRenewRetryInterval,
+		TrustedStepUpHosts:        trustedStepUpHosts(config),
 	}
 }
 

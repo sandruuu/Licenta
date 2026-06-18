@@ -176,6 +176,10 @@ func sessionFromCommand(command *structpb.Struct) (provisioning.Session, string,
 	if err != nil {
 		return provisioning.Session{}, "", err
 	}
+	externalPort, err := intField(sessionStruct, "external_port")
+	if err != nil {
+		return provisioning.Session{}, "", err
+	}
 	maxBandwidth, err := optionalIntField(sessionStruct, "max_bandwidth_mbps")
 	if err != nil {
 		return provisioning.Session{}, "", err
@@ -192,6 +196,7 @@ func sessionFromCommand(command *structpb.Struct) (provisioning.Session, string,
 		ResourceID:       structFieldString(sessionStruct, "resource_id"),
 		ResourceName:     structFieldString(sessionStruct, "resource_name"),
 		InternalHost:     structFieldString(sessionStruct, "internal_host"),
+		ExternalPort:     externalPort,
 		InternalPort:     internalPort,
 		Protocol:         structFieldString(sessionStruct, "protocol"),
 		ExpiresAt:        expiresAt,

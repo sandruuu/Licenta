@@ -70,13 +70,10 @@ type RuleConditions struct {
 	BlockedProcessHashes   []string `json:"blocked_process_hashes,omitempty"`
 }
 
-// RiskPolicyConditions lets a policy match calculated risk rather than only
-// raw context signals. Levels are intentionally coarse for admin-facing rules.
+// RiskPolicyConditions lets a policy match explicit contextual risk signals.
+// Risk conditions match concrete signals observed during the access request.
 type RiskPolicyConditions struct {
-	MinScore int      `json:"min_score,omitempty"`
-	MaxScore int      `json:"max_score,omitempty"`
-	Levels   []string `json:"levels,omitempty"`
-	Signals  []string `json:"signals,omitempty"`
+	Signals []string `json:"signals,omitempty"`
 }
 
 // RiskBasedAuthPolicyConditions enables adaptive MFA based on internal risk
@@ -139,15 +136,13 @@ type SessionPolicyControls struct {
 	MaxAgeSeconds          int  `json:"max_age_seconds,omitempty"`
 	RevalidateEverySeconds int  `json:"revalidate_every_seconds,omitempty"`
 	RevokeOnPostureChange  bool `json:"revoke_on_posture_change,omitempty"`
-	RevokeOnRiskIncrease   bool `json:"revoke_on_risk_increase,omitempty"`
 }
 
 // AccessConditions are the contextual conditions that can trigger a policy.
 // Keep this intentionally small so policy authors only configure the access
 // contexts supported by the product.
 type AccessConditions struct {
-	Location   LocationAccessConditions   `json:"location,omitempty"`
-	Connection ConnectionAccessConditions `json:"connection,omitempty"`
+	Location LocationAccessConditions `json:"location,omitempty"`
 }
 
 type LocationAccessConditions struct {
@@ -156,15 +151,10 @@ type LocationAccessConditions struct {
 	UserBaselineAnomaly bool `json:"user_baseline_anomaly,omitempty"`
 }
 
-type ConnectionAccessConditions struct {
-	SensitiveProtocol bool `json:"sensitive_protocol,omitempty"`
-}
-
 func (c AccessConditions) Empty() bool {
 	return !c.Location.NewLocation &&
 		!c.Location.ImpossibleTravel &&
-		!c.Location.UserBaselineAnomaly &&
-		!c.Connection.SensitiveProtocol
+		!c.Location.UserBaselineAnomaly
 }
 
 func (c AccessConditions) IsZero() bool {

@@ -17,6 +17,8 @@ func TestBuildForOrganizationUserDerivesFQDNFromExternalURL(t *testing.T) {
 		Name:           "Internal Web",
 		Type:           "web",
 		ExternalURL:    "https://internal-web.trustcloud.test/app",
+		ExternalPort:   443,
+		InternalPort:   443,
 		OrganizationID: "organization-1",
 		Enabled:        true,
 		CreatedAt:      now,
@@ -61,10 +63,10 @@ func TestBuildForOrganizationUserIncludesOnlyPolicyAllowedResources(t *testing.T
 
 	now := time.Now()
 	for _, resource := range []*models.Resource{
-		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-users", Name: "Users App", Type: "web", ExternalURL: "https://users.trustcloud.test", ExternalPort: 443, InternalPort: 443, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-all", Name: "All App", Type: "web", ExternalURL: "https://all.trustcloud.test", ExternalPort: 443, InternalPort: 443, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-denied", Name: "Denied App", Type: "web", ExternalURL: "https://denied.trustcloud.test", ExternalPort: 443, InternalPort: 443, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-unassigned", Name: "Unassigned App", Type: "web", ExternalURL: "https://unassigned.trustcloud.test", ExternalPort: 443, InternalPort: 443, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SaveResource(resource)
 	}
@@ -111,9 +113,9 @@ func TestBuildForOrganizationUserDoesNotPublishResourcesFromOrganizationPolicies
 
 	now := time.Now()
 	for _, resource := range []*models.Resource{
-		{ID: "res-web", Name: "Web", Type: "web", ExternalURL: "https://web.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-ssh", Name: "SSH", Type: "ssh", ExternalURL: "ssh.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
-		{ID: "res-rdp", Name: "RDP", Type: "rdp", ExternalURL: "rdp.trustcloud.test", OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-web", Name: "Web", Type: "web", ExternalURL: "https://web.trustcloud.test", ExternalPort: 443, InternalPort: 443, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-ssh", Name: "SSH", Type: "ssh", ExternalURL: "ssh.trustcloud.test", ExternalPort: 22, InternalPort: 22, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
+		{ID: "res-rdp", Name: "RDP", Type: "rdp", ExternalURL: "rdp.trustcloud.test", ExternalPort: 3389, InternalPort: 3389, OrganizationID: "organization-1", Enabled: true, CreatedAt: now, UpdatedAt: now},
 	} {
 		dataStore.SaveResource(resource)
 	}

@@ -78,44 +78,6 @@ func TestDeviceDataGRPCReportDeviceDataStoresRawData(t *testing.T) {
 	}
 }
 
-func TestDeviceDataGRPCReportDeviceDataRejectsLocalScore(t *testing.T) {
-	server, dataStore := newDeviceAPITestServer(t)
-	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
-	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
-		ID:              "enroll-1",
-		DeviceID:        "device-1",
-		Component:       "endpoint",
-		Status:          "approved",
-		CertPEM:         string(certPEM),
-		CertFingerprint: clientCertificateFingerprint(cert),
-		EnrolledAt:      time.Now().Add(-time.Minute),
-		ExpiresAt:       time.Now().Add(time.Hour),
-	})
-
-	request, err := structpb.NewStruct(map[string]interface{}{
-		"device_id":     "device-1",
-		"overall_score": float64(90),
-		"checks":        []interface{}{},
-	})
-	if err != nil {
-		t.Fatalf("NewStruct returned error: %v", err)
-	}
-	grpcContext := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
-		PeerCertificates: []*x509.Certificate{cert},
-		VerifiedChains:   [][]*x509.Certificate{{cert}},
-	}}})
-	service := &deviceDataGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("status code = %s, want %s (err=%v)", status.Code(err), codes.InvalidArgument, err)
-	}
-	if _, ok := dataStore.GetDeviceData("device-1"); ok {
-		t.Fatalf("scored device data report should not be stored")
-	}
-}
-
 func TestDeviceDataGRPCReportDeviceDataRejectsDeviceMismatch(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))

@@ -325,7 +325,7 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		// SPA fallback: serve index.html for client-side routing
+		// Serve index.html for client-side routing.
 		fullPath = filepath.Join(distDir, "index.html")
 	}
 

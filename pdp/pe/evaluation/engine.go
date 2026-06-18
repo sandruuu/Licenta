@@ -5,9 +5,7 @@ import (
 	"log"
 	"time"
 
-	"pdp/config"
 	"pdp/models"
-	perisk "pdp/pe/risk"
 )
 
 // AccessContext is the normalized, side-effect-free input evaluated by PE.
@@ -39,17 +37,10 @@ type AccessContext struct {
 // Engine is the Policy Engine. It evaluates normalized access context and
 // returns a deterministic decision without creating sessions, provisioning
 // Gateways, signing certificates, or writing audit records.
-type Engine struct {
-	riskConfig config.RiskConfig
-}
+type Engine struct{}
 
-func NewEngine(riskConfigs ...config.RiskConfig) *Engine {
-	cfg := &config.Config{}
-	if len(riskConfigs) > 0 {
-		cfg.Risk = riskConfigs[0]
-	}
-	cfg.ApplyDefaults()
-	return &Engine{riskConfig: cfg.Risk}
+func NewEngine() *Engine {
+	return &Engine{}
 }
 
 // Evaluate processes a normalized access context against enabled policy rules.
@@ -65,23 +56,8 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 	log.Printf("[PE] Evaluating access: user=%s resource=%s:%d protocol=%s",
 		req.Username, req.Resource, req.ResourcePort, req.Protocol)
 
-	riskCtx := models.RiskContext{
-		UserID:                req.UserID,
-		SourceIP:              req.SourceIP,
-		DeviceHealth:          req.DeviceHealth,
-		FailedAttempts:        ctx.FailedAttempts,
-		IsNewDevice:           ctx.IsNewDevice,
-		IsNewLocation:         ctx.IsNewLocation,
-		TimeOfDay:             now,
-		Protocol:              req.Protocol,
-		GeoVelocity:           ctx.GeoVelocity,
-		IsImpossibleTravel:    ctx.IsImpossibleTravel,
-		IsUserBaselineAnomaly: ctx.IsUserBaselineAnomaly,
-		AnomalyAlerts:         req.AnomalyAlerts,
-		AnomalyScore:          req.AnomalyScore,
-	}
-	riskScore := perisk.CalculateRiskScore(riskCtx, e.riskConfig)
 	observedAccess := accessConditionsFromContext(ctx)
+	riskSignals := riskSignalsFromContext(ctx, observedAccess, req)
 
 	matchedRules := make([]*models.PolicyRule, 0)
 	stepUpRules := make([]*models.PolicyRule, 0)
@@ -93,7 +69,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			continue
 		}
 
-		if !e.matchesRuleScope(rule, ctx, now, riskScore, observedAccess) {
+		if !e.matchesRuleScope(rule, ctx, now, observedAccess) {
 			continue
 		}
 
@@ -105,7 +81,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			return &models.AccessDecision{
 				Decision:         models.DecisionDeny,
 				Reason:           fmt.Sprintf("Device health requirements failed by policy: %s", rule.Name),
-				RiskScore:        riskScore,
+				RiskSignals:      riskSignals,
 				AccessConditions: observedAccess,
 				SessionControls:  sessionControls,
 				MatchedRule:      rule.ID,
@@ -120,7 +96,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			return &models.AccessDecision{
 				Decision:         models.DecisionDeny,
 				Reason:           fmt.Sprintf("Blocked by policy: %s", rule.Name),
-				RiskScore:        riskScore,
+				RiskSignals:      riskSignals,
 				AccessConditions: observedAccess,
 				SessionControls:  sessionControls,
 				MatchedRule:      rule.ID,
@@ -135,7 +111,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 	}
 
 	if len(matchedRules) == 0 {
-		return e.defaultDecision(req, riskScore, observedAccess)
+		return e.defaultDecision(req, observedAccess, riskSignals)
 	}
 
 	if len(stepUpRules) > 0 {
@@ -143,7 +119,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 		decision := &models.AccessDecision{
 			Decision:         models.DecisionStepUpRequired,
 			Reason:           fmt.Sprintf("Step-up verification required by %d matching policy rule(s)", len(stepUpRules)),
-			RiskScore:        riskScore,
+			RiskSignals:      riskSignals,
 			AccessConditions: observedAccess,
 			SessionControls:  sessionControls,
 			MatchedRule:      requirement.PolicyID,
@@ -153,16 +129,21 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			decision.Reason = fmt.Sprintf("Step-up verification already satisfies %d matching policy rule(s)", len(stepUpRules))
 			decision.Policies = []string{req.Resource}
 			decision.StepUp = &models.StepUpRequirement{
-				AlreadySatisfied:  true,
-				Methods:           append([]string(nil), requirement.Methods...),
-				RequiredACR:       requirement.RequiredACR,
-				MinStrength:       requirement.MinStrength,
-				MaxAgeSeconds:     requirement.MaxAgeSeconds,
-				CompletedMethod:   ctx.Auth.StepUpMethod,
-				CompletedStrength: effectiveStepUpStrength(ctx.Auth),
+				AlreadySatisfied:    true,
+				Methods:             append([]string(nil), requirement.Methods...),
+				RequiredACR:         requirement.RequiredACR,
+				MinStrength:         requirement.MinStrength,
+				MaxAgeSeconds:       requirement.MaxAgeSeconds,
+				CompletedMethod:     ctx.Auth.StepUpMethod,
+				CompletedStrength:   effectiveStepUpStrength(ctx.Auth),
+				CompletedAAGUID:     ctx.Auth.StepUpAAGUID,
+				CompletedAttachment: ctx.Auth.StepUpAttachment,
 			}
 			if !ctx.Auth.StepUpVerifiedAt.IsZero() {
 				decision.StepUp.CompletedAtUnix = ctx.Auth.StepUpVerifiedAt.UTC().Unix()
+			}
+			if !ctx.Auth.StepUpExpiresAt.IsZero() {
+				decision.StepUp.ExpiresAt = ctx.Auth.StepUpExpiresAt.UTC()
 			}
 		} else {
 			decision.StepUp = requirement
@@ -174,7 +155,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 		return &models.AccessDecision{
 			Decision:         models.DecisionAllow,
 			Reason:           fmt.Sprintf("Allowed by %d matching policy rule(s)", len(matchedRules)),
-			RiskScore:        riskScore,
+			RiskSignals:      riskSignals,
 			AccessConditions: observedAccess,
 			SessionControls:  sessionControls,
 			MatchedRule:      allowRule.ID,
@@ -182,5 +163,5 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 		}
 	}
 
-	return e.defaultDecision(req, riskScore, observedAccess)
+	return e.defaultDecision(req, observedAccess, riskSignals)
 }

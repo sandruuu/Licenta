@@ -125,6 +125,7 @@ func (server *testControlServer) ControlStream(stream grpc.ServerStream) error {
 			"device_id":     "device-1",
 			"resource_id":   "res-ssh",
 			"internal_host": "10.10.0.10",
+			"external_port": float64(2222),
 			"internal_port": float64(22),
 			"protocol":      "ssh",
 			"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano),

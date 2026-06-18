@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"log"
 
 	"pdp/models"
 )
@@ -12,7 +11,7 @@ import (
 // ─────────────────────────────────────────────
 
 func (s *Store) GetResource(id string) (*models.Resource, bool) {
-	row := s.db.QueryRow(`SELECT id, name, description, type, host, port, external_url, enabled,
+	row := s.db.QueryRow(`SELECT id, name, description, type, host, external_port, internal_port, external_url, enabled,
 		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at
 		FROM resources WHERE id = ?`, id)
 	return s.scanResource(row)
@@ -23,7 +22,7 @@ func (s *Store) scanResource(row *sql.Row) (*models.Resource, bool) {
 	var enabled int
 	var tagsJSON, metaJSON, createdAt, updatedAt string
 
-	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
+	err := row.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.ExternalPort, &r.InternalPort, &r.ExternalURL,
 		&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
@@ -37,7 +36,7 @@ func (s *Store) scanResource(row *sql.Row) (*models.Resource, bool) {
 	return r, true
 }
 
-func (s *Store) SaveResource(res *models.Resource) {
+func (s *Store) SaveResource(res *models.Resource) error {
 	tags := res.Tags
 	if tags == nil {
 		tags = []string{}
@@ -48,15 +47,16 @@ func (s *Store) SaveResource(res *models.Resource) {
 	}
 
 	_, err := s.db.Exec(`INSERT INTO resources
-		(id, name, description, type, host, port, external_url, enabled,
+		(id, name, description, type, host, external_port, internal_port, external_url, enabled,
 		 tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			type = EXCLUDED.type,
 			host = EXCLUDED.host,
-			port = EXCLUDED.port,
+			external_port = EXCLUDED.external_port,
+			internal_port = EXCLUDED.internal_port,
 			external_url = EXCLUDED.external_url,
 			enabled = EXCLUDED.enabled,
 			tags_json = EXCLUDED.tags_json,
@@ -65,16 +65,14 @@ func (s *Store) SaveResource(res *models.Resource) {
 			gateway_id = EXCLUDED.gateway_id,
 			created_at = EXCLUDED.created_at,
 			updated_at = EXCLUDED.updated_at`,
-		res.ID, res.Name, res.Description, res.Type, res.Host, res.Port, res.ExternalURL,
+		res.ID, res.Name, res.Description, res.Type, res.Host, res.ExternalPort, res.InternalPort, res.ExternalURL,
 		b2i(res.Enabled), toJSON(tags), toJSON(meta), res.OrganizationID, res.GatewayID,
 		fmtTime(res.CreatedAt), fmtTime(res.UpdatedAt))
-	if err != nil {
-		log.Printf("[STORE] Failed to save resource %s: %v", res.ID, err)
-	}
+	return err
 }
 
 func (s *Store) ListResources() []*models.Resource {
-	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
+	rows, err := s.db.Query(`SELECT id, name, description, type, host, external_port, internal_port, external_url, enabled,
 		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at FROM resources`)
 	if err != nil {
 		return nil
@@ -87,7 +85,7 @@ func (s *Store) ListResources() []*models.Resource {
 		var enabled int
 		var tagsJSON, metaJSON, createdAt, updatedAt string
 
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.ExternalPort, &r.InternalPort, &r.ExternalURL,
 			&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt); err != nil {
 			continue
 		}
@@ -103,7 +101,7 @@ func (s *Store) ListResources() []*models.Resource {
 }
 
 func (s *Store) ListResourcesByOrganization(organizationID string) []*models.Resource {
-	rows, err := s.db.Query(`SELECT id, name, description, type, host, port, external_url, enabled,
+	rows, err := s.db.Query(`SELECT id, name, description, type, host, external_port, internal_port, external_url, enabled,
 		tags_json, metadata_json, organization_id, gateway_id, created_at, updated_at FROM resources
 		WHERE organization_id = ?`, organizationID)
 	if err != nil {
@@ -119,7 +117,7 @@ func (s *Store) scanResources(rows *sql.Rows) []*models.Resource {
 		r := &models.Resource{}
 		var enabled int
 		var tagsJSON, metaJSON, createdAt, updatedAt string
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.Port, &r.ExternalURL,
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.ExternalPort, &r.InternalPort, &r.ExternalURL,
 			&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt); err != nil {
 			continue
 		}

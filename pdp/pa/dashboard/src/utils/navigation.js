@@ -7,7 +7,7 @@ export function navigateWithReturn(navigate, to, location) {
   navigate(to, { state: { returnTo: currentLocationPath(location) } });
 }
 
-export function navigateBack(navigate, fallback, location) {
+export function navigateBack(navigate, defaultPath, location) {
   const returnTo = safeInternalPath(location?.state?.returnTo);
   const currentPath = currentLocationPath(location);
 
@@ -21,7 +21,7 @@ export function navigateBack(navigate, fallback, location) {
     return;
   }
 
-  navigate(fallback || '/', { replace: true });
+  navigate(defaultPath || '/', { replace: true });
 }
 
 function safeInternalPath(value) {

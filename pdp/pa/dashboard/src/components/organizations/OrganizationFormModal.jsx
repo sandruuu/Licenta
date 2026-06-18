@@ -23,6 +23,12 @@ export default function OrganizationFormModal({ mode, form, setForm, saving, onC
                   placeholder="e.g. Company HQ" />
               </div>
               <div>
+                <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">Domain</label>
+                <input type="text" value={form.domain || ''} onChange={(e) => setForm({ ...form, domain: e.target.value })}
+                  className="w-full px-3 py-2 bg-surface border border-border rounded-md text-[13px] text-text-primary focus:outline-none focus:border-accent focus:ring-[3px] focus:ring-accent-muted transition font-mono"
+                  placeholder="e.g. company.example" />
+              </div>
+              <div>
                 <label className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">Description</label>
                 <textarea value={form.description || ''} onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}

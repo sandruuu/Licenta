@@ -47,7 +47,7 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store, runtimeState *re
 	auditLogger := audit.NewAuditLogger(s)
 	pa := &PolicyAdministrator{
 		Auth:    auth.New(cfg, s, runtimeState),
-		Engine:  evaluation.NewEngine(cfg.Risk),
+		Engine:  evaluation.NewEngine(),
 		Geo:     policies.NewGeoLocator(s, runtimeState, cfg.Geo),
 		Catalog: catalog.NewService(s, cfg.Runtime.CatalogTTLSeconds),
 		Devices: devices.NewService(s, auditLogger),

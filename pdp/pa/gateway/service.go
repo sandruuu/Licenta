@@ -292,6 +292,9 @@ func (s *Service) RegenerateEnrollmentToken(id string) (*RegenerateTokenResult, 
 	if err != nil {
 		return nil, err
 	}
+	if status := strings.ToLower(strings.TrimSpace(gateway.Status)); status == "enrolled" || status == "active" {
+		return nil, ErrGatewayAlreadyEnrolled
+	}
 	enrollmentToken, err := randomHex(gatewayEnrollmentTokenBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%w: generate enrollment token: %v", ErrGatewayTokenGeneration, err)

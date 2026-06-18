@@ -141,15 +141,30 @@ function ArchitectureNode({ data }) {
 
 const nodeTypes = { architecture: ArchitectureNode };
 
+function endpointLabel(host, port) {
+  const base = host || '-';
+  return port ? `${base} : ${port}` : base;
+}
+
+function externalHost(resource) {
+  return resource?.external_url || resource?.host || '';
+}
+
+function resourceExternalPort(resource) {
+  return resource?.external_port || '';
+}
+
+function resourceInternalPort(resource) {
+  return resource?.internal_port || '';
+}
+
 function resourceSubtitle(resource) {
-  const type = String(resource.type || 'resource').toUpperCase();
-  if (resource.external_url) return resource.external_url;
-  return resource.host ? `${type} target` : type;
+  return endpointLabel(externalHost(resource), resourceExternalPort(resource));
 }
 
 function resourceProtocolLabel(resource) {
   const type = String(resource.type || 'resource').toUpperCase();
-  return resource.port ? `${type} : ${resource.port}` : type;
+  return `${type} - ${endpointLabel(resource.host, resourceInternalPort(resource))}`;
 }
 
 function resourceMeta(resource) {
@@ -190,46 +205,20 @@ function buildTree({ organization, gateways, resources }) {
       icon: 'gateway',
       tone: 'gateway',
       href: `/gateways/${encode(gateway.id)}`,
-      children: gatewayResources.length > 0
-        ? gatewayResources.map((resource) => ({
-            id: `resource:${resource.id}`,
-            kicker: resourceProtocolLabel(resource),
-            label: resource.name,
-            subtitle: resourceSubtitle(resource),
-            meta: resourceMeta(resource),
-            metric: '',
-            badge: resource.enabled ? 'enabled' : 'disabled',
-            icon: 'resource',
-            tone: 'resource',
-            href: `/resources/${encode(resource.id)}`,
-          }))
-        : [
-            {
-              id: `gateway:${gateway.id}:empty`,
-              kicker: 'Resource',
-              label: 'No resources',
-              subtitle: 'Attach a protected target',
-              meta: 'Open gateway details',
-              icon: 'empty',
-              tone: 'neutral',
-              href: `/gateways/${encode(gateway.id)}`,
-            },
-          ],
+      children: gatewayResources.map((resource) => ({
+        id: `resource:${resource.id}`,
+        kicker: resourceProtocolLabel(resource),
+        label: resource.name,
+        subtitle: resourceSubtitle(resource),
+        meta: resourceMeta(resource),
+        metric: '',
+        badge: resource.enabled ? 'enabled' : 'disabled',
+        icon: 'resource',
+        tone: 'resource',
+        href: `/resources/${encode(resource.id)}`,
+      })),
     };
   });
-
-  if (children.length === 0) {
-    children.push({
-      id: `empty:${organization.id}`,
-      kicker: 'Gateway',
-      label: 'No gateways',
-      subtitle: 'Create the first connector',
-      meta: 'Then attach protected resources',
-      icon: 'empty',
-      tone: 'neutral',
-      href: organizationHref,
-    });
-  }
 
   return withNodeFlags({
     id: `organization:${organization.id}`,

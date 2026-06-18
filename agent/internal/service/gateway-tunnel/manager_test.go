@@ -107,9 +107,14 @@ func TestOpenResourceStreamIncludesProvisionedSessionFields(t *testing.T) {
 				return "device-1"
 			},
 		},
-		logger:  loggerOrDefault(nil),
-		status:  Status{State: StatusReady},
-		session: clientSession,
+		logger: loggerOrDefault(nil),
+		status: Status{State: StatusReady},
+		sessions: map[tunnelKey]*tunnelConnection{
+			{address: "gateway.example.test:9443", serverName: "gateway.example.test"}: {
+				conn:    clientConn,
+				session: clientSession,
+			},
+		},
 	}
 	stream, err := manager.OpenResourceStream(context.Background(), ResourceStreamRequest{
 		TargetHost:      "100.64.0.42",

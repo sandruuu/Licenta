@@ -104,14 +104,56 @@ function Copy-AgentConfig {
     return $destinationConfigPath
 }
 
+function Copy-WfpDriverPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$AgentRoot,
+        [Parameter(Mandatory = $true)][string]$DestinationDir
+    )
+
+    $releaseDir = Join-Path $AgentRoot "wfp-driver\x64\Release"
+    $driverPackageDir = Join-Path $releaseDir "trustagent_wfp"
+    $destinationDriverDir = Join-Path $DestinationDir "wfp-driver"
+    $requiredFiles = @(
+        (Join-Path $driverPackageDir "trustagent_wfp.inf"),
+        (Join-Path $driverPackageDir "trustagent_wfp.sys"),
+        (Join-Path $driverPackageDir "trustagent_wfp.cat"),
+        (Join-Path $releaseDir "trustagent_wfp.cer")
+    )
+
+    foreach ($requiredFile in $requiredFiles) {
+        if (-not (Test-Path -LiteralPath $requiredFile)) {
+            throw "TrustAgent WFP driver package is missing '$requiredFile'. Build the WFP driver before creating the installer."
+        }
+    }
+
+    New-Item -ItemType Directory -Path $destinationDriverDir -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $driverPackageDir "trustagent_wfp.inf") -Destination (Join-Path $destinationDriverDir "trustagent_wfp.inf") -Force
+    Copy-Item -LiteralPath (Join-Path $driverPackageDir "trustagent_wfp.sys") -Destination (Join-Path $destinationDriverDir "trustagent_wfp.sys") -Force
+    Copy-Item -LiteralPath (Join-Path $driverPackageDir "trustagent_wfp.cat") -Destination (Join-Path $destinationDriverDir "trustagent_wfp.cat") -Force
+    Copy-Item -LiteralPath (Join-Path $releaseDir "trustagent_wfp.cer") -Destination (Join-Path $destinationDriverDir "trustagent_wfp.cer") -Force
+    Copy-Item -LiteralPath (Join-Path $scriptDir "install-wfp-driver.ps1") -Destination (Join-Path $destinationDriverDir "install-wfp-driver.ps1") -Force
+
+    $devcon = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Tools" -Recurse -Filter "devcon.exe" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\x64\\devcon\.exe$' } |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($null -ne $devcon) {
+        Copy-Item -LiteralPath $devcon.FullName -Destination (Join-Path $destinationDriverDir "devcon.exe") -Force
+    } else {
+        Write-Warning "devcon.exe was not found in the Windows Kits tools directory. The installer will use the SetupAPI fallback for WFP driver installation."
+    }
+}
+
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 $staleOutputs = @(
     "trust-agent.exe",
     "trust-agent.ico",
     "TrustAgent-Setup.exe",
+    "TrustAgent.exe",
     "config.json",
     "pdp-ca.pem",
     "install-service.ps1",
+    "install-wfp-driver.ps1",
     "Test-AgentConfig.ps1"
 )
 foreach ($staleOutput in $staleOutputs) {
@@ -119,6 +161,10 @@ foreach ($staleOutput in $staleOutputs) {
     if (Test-Path -LiteralPath $stalePath) {
         Remove-Item -LiteralPath $stalePath -Force
     }
+}
+$staleDriverDir = Join-Path $OutputDir "wfp-driver"
+if (Test-Path -LiteralPath $staleDriverDir) {
+    Remove-Item -LiteralPath $staleDriverDir -Recurse -Force
 }
 
 Push-Location $agentRoot
@@ -147,7 +193,9 @@ if (Test-Path -LiteralPath $agentIconPath) {
 }
 
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination (Join-Path $OutputDir "install-service.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $scriptDir "install-wfp-driver.ps1") -Destination (Join-Path $OutputDir "install-wfp-driver.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $scriptDir "Test-AgentConfig.ps1") -Destination (Join-Path $OutputDir "Test-AgentConfig.ps1") -Force
+Copy-WfpDriverPackage -AgentRoot $agentRoot -DestinationDir $OutputDir
 
 $resolvedConfigPath = $ConfigPath.Trim()
 if ($resolvedConfigPath -eq "") {
@@ -166,10 +214,10 @@ Copy-AgentConfig -SourceConfigPath $resolvedConfigPath -DestinationDir $OutputDi
 $iscc = Find-InnoSetupCompiler
 if ($iscc.Trim() -ne "") {
     $installerScript = Join-Path $scriptDir "trust-agent-setup.iss"
-    & $iscc "/DSourceDir=$OutputDir" "/O$OutputDir" "/FTrustAgent-Setup" $installerScript
-    Write-Host "Windows setup created at $(Join-Path $OutputDir 'TrustAgent-Setup.exe')"
+    & $iscc "/DSourceDir=$OutputDir" "/O$OutputDir" "/FTrustAgent" $installerScript
+    Write-Host "Windows setup created at $(Join-Path $OutputDir 'TrustAgent.exe')"
 } else {
-    Write-Host "Inno Setup compiler (ISCC.exe) was not found. Skipping TrustAgent-Setup.exe."
+    Write-Host "Inno Setup compiler (ISCC.exe) was not found. Skipping TrustAgent.exe."
     Write-Host "Install Inno Setup 6 to generate the custom Windows installer."
 }
 

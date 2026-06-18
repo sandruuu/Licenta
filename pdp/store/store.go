@@ -59,6 +59,11 @@ func (s *Store) InitDB() error {
 		s.db = nil
 		return fmt.Errorf("create tables: %w", err)
 	}
+	if err := s.normalizePolicyRuleConditions(); err != nil {
+		_ = s.db.Close()
+		s.db = nil
+		return fmt.Errorf("normalize policy rule conditions: %w", err)
+	}
 	s.EnsureDefaultGlobalPoliciesForOrganizations()
 
 	log.Printf("[STORE] PostgreSQL database initialized")

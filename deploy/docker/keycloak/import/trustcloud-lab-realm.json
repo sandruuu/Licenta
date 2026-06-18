@@ -1,0 +1,116 @@
+{
+  "realm": "trustcloud-lab",
+  "displayName": "TrustCloud Lab",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "groups": [
+    {
+      "name": "TrustCloud-Admins"
+    },
+    {
+      "name": "TrustCloud-Users"
+    }
+  ],
+  "clientScopes": [
+    {
+      "name": "groups",
+      "description": "OIDC scope that exposes Keycloak group memberships in tokens and userinfo.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "claim.name": "groups",
+            "multivalued": "true",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "trustcloud",
+      "name": "TrustCloud Auth Broker",
+      "description": "OIDC client registration used by the PDP/PA auth broker for organization federation tests.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "trustcloud-dev-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "implicitFlowEnabled": false,
+      "frontchannelLogout": false,
+      "redirectUris": [
+        "https://trust-cloud.dev/auth/federated/callback",
+        "https://localhost:8443/auth/federated/callback"
+      ],
+      "webOrigins": [
+        "https://trust-cloud.dev",
+        "https://localhost:8443"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "optionalClientScopes": [
+        "groups"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin@trust-cloud.dev",
+      "email": "admin@trust-cloud.dev",
+      "firstName": "TrustCloud",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "groups": [
+        "/TrustCloud-Admins"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Admin123!",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "user@trust-cloud.dev",
+      "email": "user@trust-cloud.dev",
+      "firstName": "TrustCloud",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "groups": [
+        "/TrustCloud-Users"
+      ],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "User123!",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

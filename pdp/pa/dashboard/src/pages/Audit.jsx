@@ -244,7 +244,7 @@ export default function Audit() {
         auditDetailsText(entry.details),
         entry.organization_id,
       ].some((value) => normalize(value).includes(needle));
-    });
+    }).sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
   }, [visibleEntries, query, activeEventFilter, outcomeFilter]);
 
   const hasFilters = query.trim() || activeEventFilter !== 'all' || outcomeFilter !== 'all';
@@ -264,7 +264,10 @@ export default function Audit() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <PageHeader title="Audit events" subtitle="Security events and access decisions" />
+      <PageHeader
+        title="Audit events"
+        subtitle="Security events and access decisions"
+      />
 
       <ListToolbar
         query={query}

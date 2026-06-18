@@ -103,6 +103,12 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		if _, ok := raw["enabled"]; !ok {
 			cfg.Enabled = true
 		}
+		scimToken, err := util.GenerateSecretToken("tc_scim", 32)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate SCIM token"})
+			return
+		}
+		cfg.SCIMToken = scimToken
 		cfg.CreatedAt = time.Now()
 		cfg.UpdatedAt = cfg.CreatedAt
 
@@ -117,10 +123,13 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		}
 		log.Printf("[ADMIN] IdP config created: %s (%s) organization=%s", cfg.ID, cfg.Name, organizationID)
 
+		safe := s.sanitizeIdPConfigForOrganization(&cfg, organizationID)
+		safe["scim_token"] = scimToken
+
 		writeJSON(w, http.StatusCreated, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration created",
-			Data:    s.sanitizeIdPConfigForOrganization(&cfg, organizationID),
+			Data:    safe,
 		})
 
 	default:
@@ -172,6 +181,8 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		var raw map[string]json.RawMessage
 		_ = json.Unmarshal(body, &raw)
 		makeDefault := idpMakeDefaultRequested(raw)
+		regenerateSCIMToken := idpRegenerateSCIMTokenRequested(raw)
+		var scimToken string
 
 		if update.Name != "" {
 			existing.Name = update.Name
@@ -185,8 +196,14 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		if update.ClientSecret != "" {
 			existing.ClientSecret = update.ClientSecret
 		}
-		if update.SCIMToken != "" {
-			existing.SCIMToken = update.SCIMToken
+		if regenerateSCIMToken {
+			generatedToken, err := util.GenerateSecretToken("tc_scim", 32)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate SCIM token"})
+				return
+			}
+			scimToken = generatedToken
+			existing.SCIMToken = generatedToken
 		}
 		if update.Scopes != "" {
 			existing.Scopes = update.Scopes
@@ -219,10 +236,15 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		}
 		log.Printf("[ADMIN] IdP config updated: %s (%s)", existing.ID, existing.Name)
 
+		safe := s.sanitizeIdPConfigForOrganization(existing, existing.OrganizationID)
+		if scimToken != "" {
+			safe["scim_token"] = scimToken
+		}
+
 		writeJSON(w, http.StatusOK, models.APIResponse{
 			Success: true,
 			Message: "Identity Provider configuration updated",
-			Data:    s.sanitizeIdPConfigForOrganization(existing, existing.OrganizationID),
+			Data:    safe,
 		})
 
 	case http.MethodDelete:
@@ -300,6 +322,15 @@ func idpMakeDefaultRequested(raw map[string]json.RawMessage) bool {
 		}
 	}
 	return false
+}
+
+func idpRegenerateSCIMTokenRequested(raw map[string]json.RawMessage) bool {
+	value, ok := raw["regenerate_scim_token"]
+	if !ok {
+		return false
+	}
+	var requested bool
+	return json.Unmarshal(value, &requested) == nil && requested
 }
 
 func (s *Server) sanitizeIdPConfigForOrganization(cfg *models.IdentityProviderConfig, organizationID string) map[string]interface{} {

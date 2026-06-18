@@ -1,0 +1,17 @@
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:-laurasandru/trustcloud-gateway:latest}
+    container_name: ${GATEWAY_CONTAINER_NAME:-trustcloud-gateway}
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_HOST_PORT:-9443}:9443"
+    environment:
+      GATEWAY_PA_URL: ${GATEWAY_PA_URL:-https://mtls.trust-cloud.dev}
+      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:?GATEWAY_ENROLLMENT_TOKEN is required}
+      GATEWAY_PUBLIC_ENDPOINT: ${GATEWAY_PUBLIC_ENDPOINT:?GATEWAY_PUBLIC_ENDPOINT is required}
+    volumes:
+      - ./pa-ca.crt:/bootstrap/pa-ca.crt:ro
+      - gateway-certs:/app/certs
+
+volumes:
+  gateway-certs:

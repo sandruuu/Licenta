@@ -8,7 +8,6 @@ type DeviceHealthReport struct {
 	Hostname       string        `json:"hostname"`
 	OS             string        `json:"os"`
 	Checks         []HealthCheck `json:"checks"`
-	OverallScore   int           `json:"overall_score"`
 	ReportedAt     time.Time     `json:"reported_at"`
 	OrganizationID string        `json:"organization_id,omitempty"`
 }

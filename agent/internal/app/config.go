@@ -25,6 +25,8 @@ type configFile struct {
 	CertificateRenewBefore           string `json:"certificate_renew_before,omitempty"`
 	CertificateRenewCheckInterval    string `json:"certificate_renew_check_interval,omitempty"`
 	CertificateRenewTimeout          string `json:"certificate_renew_timeout,omitempty"`
+	SessionRenewBefore               string `json:"session_renew_before,omitempty"`
+	SessionRenewRetryInterval        string `json:"session_renew_retry_interval,omitempty"`
 	DeviceDataSyncInterval           string `json:"device_data_sync_interval,omitempty"`
 	DeviceDataSyncChangeScanInterval string `json:"device_data_sync_change_scan_interval,omitempty"`
 	EnrollmentStatePath              string `json:"enrollment_state_path,omitempty"`
@@ -86,6 +88,12 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 		return options, err
 	}
 	if options.CertificateRenewTimeout, err = optionalConfigDuration("certificate_renew_timeout", config.CertificateRenewTimeout); err != nil {
+		return options, err
+	}
+	if options.SessionRenewBefore, err = optionalConfigDuration("session_renew_before", config.SessionRenewBefore); err != nil {
+		return options, err
+	}
+	if options.SessionRenewRetryInterval, err = optionalConfigDuration("session_renew_retry_interval", config.SessionRenewRetryInterval); err != nil {
 		return options, err
 	}
 	if options.DeviceDataSyncInterval, err = optionalConfigDuration("device_data_sync_interval", config.DeviceDataSyncInterval); err != nil {

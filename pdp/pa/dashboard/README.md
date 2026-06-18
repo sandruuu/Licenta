@@ -36,13 +36,9 @@ Rutele canonice definite in `src/App.jsx`:
 - `/policies`: politici si assignments.
 - `/gateways`: Gateway-uri.
 - `/gateways/:gatewayId`: detalii Gateway.
-- `/protect-app`: flow ghidat pentru protejarea unei aplicatii.
 - `/sessions`: sesiuni active.
 - `/device-data`: rapoarte device-data/device-health.
 - `/audit`: audit log.
-
-Rutele vechi `/dashboard...` sunt pastrate ca redirect catre URL-urile
-canonice de la radacina.
 
 ## API Client
 

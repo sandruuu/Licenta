@@ -216,7 +216,7 @@ func (service *Service) sessionStillAllowed(session *models.Session) (bool, stri
 		req.DeviceHealth = paadmin.DeviceHealthFromData(deviceData)
 	}
 
-	decision := service.pa.EvaluateAccess(req)
+	decision := service.pa.EvaluateAccessWithAuth(req, sessionStepUpAuthContext(session))
 	if decision == nil {
 		return false, "policy evaluation failed"
 	}
@@ -224,6 +224,25 @@ func (service *Service) sessionStillAllowed(session *models.Session) (bool, stri
 		return false, firstNonEmpty(decision.Reason, fmt.Sprintf("policy returned %s", decision.Decision))
 	}
 	return true, ""
+}
+
+func sessionStepUpAuthContext(session *models.Session) models.AuthContext {
+	if session == nil || session.StepUpVerifiedAt.IsZero() {
+		return models.AuthContext{}
+	}
+	auth := models.AuthContext{
+		ACR:              strings.TrimSpace(session.StepUpACR),
+		StepUpVerifiedAt: session.StepUpVerifiedAt,
+		StepUpExpiresAt:  session.StepUpExpiresAt,
+		StepUpMethod:     strings.TrimSpace(session.StepUpMethod),
+		StepUpStrength:   strings.TrimSpace(session.StepUpStrength),
+		StepUpAAGUID:     strings.TrimSpace(session.StepUpAAGUID),
+		StepUpAttachment: strings.TrimSpace(session.StepUpAttachment),
+	}
+	if auth.StepUpMethod != "" {
+		auth.AMR = []string{auth.StepUpMethod}
+	}
+	return auth
 }
 
 func (service *Service) resourceUnavailable(resourceID string) bool {

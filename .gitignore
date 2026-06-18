@@ -11,6 +11,11 @@
 deploy/kubernetes/**/secret.yaml
 deploy/kubernetes/**/tls-secret.yaml
 deploy/kubernetes/**/vault-ca-secret.yaml
+deploy/digitalocean/**/*.tfvars
+deploy/digitalocean/**/.env
+deploy/digitalocean/**/pa-ca.crt
+!deploy/digitalocean/**/*.tfvars.example
+!deploy/digitalocean/**/*.env.example
 !deploy/kubernetes/**/*.example.yaml
 
 # ── Certificates & Keys (sensitive material) ──
@@ -138,3 +143,16 @@ coverage.out
 
 # ── Docker (keep Dockerfiles, ignore runtime overrides) ──
 docker-compose.override.yml
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+.tmp-tunnel/
+.claude

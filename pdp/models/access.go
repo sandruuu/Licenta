@@ -1,7 +1,5 @@
 package models
 
-import "time"
-
 // ProcessIdentity is the local endpoint process context observed by TrustAgent.
 type ProcessIdentity struct {
 	PID    int    `json:"pid,omitempty"`
@@ -28,14 +26,13 @@ type AccessRequest struct {
 	DeviceHealth   *DeviceHealthReport `json:"device_health,omitempty"`
 
 	AnomalyAlerts []string `json:"anomaly_alerts,omitempty"`
-	AnomalyScore  int      `json:"anomaly_score,omitempty"`
 }
 
 // AccessDecision is the policy engine's response.
 type AccessDecision struct {
 	Decision         string                `json:"decision"`
 	Reason           string                `json:"reason"`
-	RiskScore        int                   `json:"risk_score"`
+	RiskSignals      []string              `json:"risk_signals,omitempty"`
 	AccessConditions AccessConditions      `json:"access_conditions,omitempty"`
 	SessionControls  SessionPolicyControls `json:"session_controls,omitempty"`
 	MatchedRule      string                `json:"matched_rule"`
@@ -43,22 +40,4 @@ type AccessDecision struct {
 	SessionID        string                `json:"session_id,omitempty"`
 	ExpiresAt        int64                 `json:"expires_at,omitempty"`
 	StepUp           *StepUpRequirement    `json:"step_up,omitempty"`
-}
-
-// RiskContext contains all contextual information used for risk scoring.
-type RiskContext struct {
-	UserID                string
-	SourceIP              string
-	DeviceHealth          *DeviceHealthReport
-	FailedAttempts        int
-	IsNewDevice           bool
-	IsNewLocation         bool
-	TimeOfDay             time.Time
-	Protocol              string
-	GeoVelocity           float64
-	IsImpossibleTravel    bool
-	IsUserBaselineAnomaly bool
-
-	AnomalyAlerts []string
-	AnomalyScore  int
 }

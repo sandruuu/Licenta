@@ -20,17 +20,22 @@ func (r LoginRequest) Identifier() string {
 
 // LoginResponse is returned after primary authentication succeeds.
 type LoginResponse struct {
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	AuthToken   string `json:"auth_token,omitempty"`
-	UserID      string `json:"user_id,omitempty"`
-	Purpose     string `json:"purpose,omitempty"`
-	ChallengeID string `json:"challenge_id,omitempty"`
-	MFARequired bool   `json:"mfa_required,omitempty"`
-	MFASetup    bool   `json:"mfa_setup,omitempty"`
-	Secret      string `json:"secret,omitempty"`
-	QRCodeURL   string `json:"qr_code_url,omitempty"`
-	QRCodeImage string `json:"qr_code_image,omitempty"`
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	AuthToken        string `json:"auth_token,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	ExpiresIn        int64  `json:"expires_in,omitempty"`
+	RefreshExpiresAt string `json:"refresh_expires_at,omitempty"`
+	UserID           string `json:"user_id,omitempty"`
+	Purpose          string `json:"purpose,omitempty"`
+	ChallengeID      string `json:"challenge_id,omitempty"`
+	MFARequired      bool   `json:"mfa_required,omitempty"`
+	MFASetup         bool   `json:"mfa_setup,omitempty"`
+	Secret           string `json:"secret,omitempty"`
+	QRCodeURL        string `json:"qr_code_url,omitempty"`
+	QRCodeImage      string `json:"qr_code_image,omitempty"`
 }
 
 // MFAEnrollResponse is returned when enrolling in MFA.

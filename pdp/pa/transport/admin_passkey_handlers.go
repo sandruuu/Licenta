@@ -100,18 +100,13 @@ func (s *Server) handleAdminPasskeyRegisterFinish(w http.ResponseWriter, r *http
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("admin_passkey_enrolled", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey enrolled after password and Authenticator app verification", true)
 	}
-	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+	response, err := s.startAdminSession(user, "Passkey registered")
 	if err != nil {
-		log.Printf("[AUTH] JWT issue after passkey enrollment failed: %v", err)
+		log.Printf("[AUTH] Admin session start after passkey enrollment failed: user=%s err=%v", user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, models.LoginResponse{
-		Status:    "authenticated",
-		Message:   "Passkey registered",
-		AuthToken: authToken,
-		UserID:    user.ID,
-	})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleAdminPasskeyLoginBegin(w http.ResponseWriter, r *http.Request) {
@@ -224,18 +219,13 @@ func (s *Server) handleAdminPasskeyLoginFinish(w http.ResponseWriter, r *http.Re
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("admin_passkey_login", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey sign-in completed", true)
 	}
-	authToken, err := s.pa.Auth.JWT.GenerateAuthToken(user.ID, user.Username, "platform_admin", "", "", true)
+	response, err := s.startAdminSession(user, "Authentication successful")
 	if err != nil {
-		log.Printf("[AUTH] JWT issue after passkey login failed: %v", err)
+		log.Printf("[AUTH] Admin session start after passkey login failed: user=%s err=%v", user.ID, err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, models.LoginResponse{
-		Status:    "authenticated",
-		Message:   "Authentication successful",
-		AuthToken: authToken,
-		UserID:    user.ID,
-	})
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) authenticatePasskeyEnrollmentRequest(w http.ResponseWriter, r *http.Request) (*models.User, *paauth.CustomClaims, bool) {

@@ -26,7 +26,6 @@ func TestResourceStreamConnectorAuthorizesAndOpensGatewayStream(t *testing.T) {
 	enrollmentProvider := &fakeEnrollmentRecordProvider{record: enrollment.EnrollmentRecord{
 		DeviceID:             "device-1",
 		DeviceCertThumbprint: "thumbprint",
-		GatewayEndpoints:     []string{"gateway-fallback.example.test:9443"},
 	}}
 	authorizer := &fakeFlowAuthorizer{response: flowauthorization.AuthorizeResponse{
 		Decision:          flowauthorization.DecisionAllow,

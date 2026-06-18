@@ -129,7 +129,7 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 	resp, err := g.httpClient.Get(g.lookupURL(ip))
 	if err != nil {
 		log.Printf("[GEO] provider request failed for %s: %v", ip, err)
-		return GeoLocation{}, nil // graceful fallback
+		return GeoLocation{}, nil
 	}
 	defer resp.Body.Close()
 

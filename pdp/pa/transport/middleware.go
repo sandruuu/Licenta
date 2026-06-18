@@ -13,13 +13,18 @@ import (
 	"time"
 
 	"pdp/models"
+	paauth "pdp/pa/auth"
 	paenrollment "pdp/pa/enrollment"
 )
 
 // contextKey is an unexported type for context keys in this package.
 type contextKey string
 
-const deviceEnrollmentContextKey contextKey = "authenticatedDeviceEnrollment"
+const (
+	deviceEnrollmentContextKey contextKey = "authenticatedDeviceEnrollment"
+	adminClaimsContextKey      contextKey = "authenticatedAdminClaims"
+	adminSessionContextKey     contextKey = "authenticatedAdminSession"
+)
 
 func deviceEnrollmentFromContext(r *http.Request) (*models.DeviceEnrollment, bool) {
 	enrollment, ok := r.Context().Value(deviceEnrollmentContextKey).(*models.DeviceEnrollment)
@@ -29,6 +34,22 @@ func deviceEnrollmentFromContext(r *http.Request) (*models.DeviceEnrollment, boo
 func deviceEnrollmentFromContextValue(ctx context.Context) (*models.DeviceEnrollment, bool) {
 	enrollment, ok := ctx.Value(deviceEnrollmentContextKey).(*models.DeviceEnrollment)
 	return enrollment, ok
+}
+
+func adminClaimsFromContext(r *http.Request) (*paauth.CustomClaims, bool) {
+	if r == nil {
+		return nil, false
+	}
+	claims, ok := r.Context().Value(adminClaimsContextKey).(*paauth.CustomClaims)
+	return claims, ok
+}
+
+func adminSessionFromContext(r *http.Request) (*adminSessionRecord, bool) {
+	if r == nil {
+		return nil, false
+	}
+	session, ok := r.Context().Value(adminSessionContextKey).(*adminSessionRecord)
+	return session, ok
 }
 
 // loggingMiddleware logs all HTTP requests with timing information
@@ -245,6 +266,29 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		if strings.TrimSpace(claims.SessionID) == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "dashboard session is required",
+			})
+			return
+		}
+
+		session, ok := s.adminSessions.validateAccess(claims)
+		if !ok {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "dashboard session is no longer active",
+			})
+			return
+		}
+
+		user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
+		if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{
+				"error": "user is not available",
+			})
+			return
+		}
+
 		// Check admin role for admin endpoints
 		if strings.HasPrefix(r.URL.Path, "/api/admin") && claims.Role != "platform_admin" {
 			writeJSON(w, http.StatusForbidden, map[string]string{
@@ -258,7 +302,9 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 		r.Header.Set("X-Username", claims.Username)
 		r.Header.Set("X-User-Role", claims.Role)
 
-		next.ServeHTTP(w, r)
+		ctx := context.WithValue(r.Context(), adminClaimsContextKey, claims)
+		ctx = context.WithValue(ctx, adminSessionContextKey, session)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

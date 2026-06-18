@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  AlertCircle,
   ArrowLeft,
   ChevronLeft,
   Edit2,
@@ -16,6 +17,7 @@ import {
   getResources,
   updateResource,
 } from '../api';
+import PageLoading from '../components/ui/PageLoading';
 import {
   DetailEmptyState as EmptyState,
   InlineBackButton,
@@ -73,15 +75,15 @@ function assignmentTargetText(resource, assignment, group) {
 }
 
 function externalHost(resource) {
-  const externalURL = resource?.external_url || '';
-  if (externalURL.includes('://')) {
-    try {
-      return new URL(externalURL).hostname || externalURL;
-    } catch {
-      return externalURL;
-    }
-  }
-  return externalURL || resource?.host || '';
+  return resource?.external_url || resource?.host || '';
+}
+
+function resourceExternalPort(resource) {
+  return resource?.external_port || '';
+}
+
+function resourceInternalPort(resource) {
+  return resource?.internal_port || '';
 }
 
 export default function ResourceDetail() {
@@ -100,6 +102,7 @@ export default function ResourceDetail() {
   const [error, setError] = useState('');
   const [editOpen, setEditOpen] = useState(false);
   const [editForm, setEditForm] = useState({});
+  const [editError, setEditError] = useState('');
   const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -148,15 +151,19 @@ export default function ResourceDetail() {
   const handleBack = () => navigateBack(navigate, backTarget, location);
 
   const openEdit = () => {
-    setEditForm({ ...resource });
+    setEditError('');
+    setEditForm({
+      ...resource,
+      external_port: resourceExternalPort(resource),
+      internal_port: resourceInternalPort(resource),
+    });
     setEditOpen(true);
   };
 
   const saveEdit = async () => {
     setEditSaving(true);
-    setError('');
+    setEditError('');
     const metadata = { ...(editForm.metadata || {}) };
-    delete metadata.catalog_fqdn;
 
     try {
       await updateResource(resource.id, {
@@ -166,7 +173,8 @@ export default function ResourceDetail() {
         organization_id: editForm.organization_id,
         gateway_id: editForm.gateway_id,
         host: editForm.host?.trim(),
-        port: parseInt(editForm.port, 10) || 0,
+        external_port: parseInt(editForm.external_port, 10) || 0,
+        internal_port: parseInt(editForm.internal_port, 10) || 0,
         external_url: editForm.external_url?.trim(),
         enabled: editForm.enabled !== false,
         metadata,
@@ -174,19 +182,14 @@ export default function ResourceDetail() {
       setEditOpen(false);
       await load();
     } catch (e) {
-      setError(e.message || 'Failed to update resource');
+      setEditError(e.message || 'Failed to update resource');
     } finally {
       setEditSaving(false);
     }
   };
 
   if (loading) {
-    return (
-      <div className="py-16 text-center text-text-muted">
-        <span className="spinner mr-2" />
-        Loading resource...
-      </div>
-    );
+    return <PageLoading />;
   }
 
   if (!resource) {
@@ -201,8 +204,9 @@ export default function ResourceDetail() {
     );
   }
 
-  const target = `${resource.host || '-'}${resource.port ? `:${resource.port}` : ''}`;
   const catalogFQDN = externalHost(resource);
+  const externalPort = resourceExternalPort(resource);
+  const internalPort = resourceInternalPort(resource);
   const policiesByID = new Map(policies.map((policy) => [policy.id, policy]));
   const resourceAssignments = assignments
     .filter((assignment) => assignment?.enabled !== false)
@@ -283,11 +287,12 @@ export default function ResourceDetail() {
           <h2 className={relatedSectionTitleClass}>Resources configuration</h2>
           <div className="mt-5 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
             <DetailField label="Type" value={String(resource.type || '-').toUpperCase()} />
-            <DetailField label="External host" value={catalogFQDN} mono />
-            <DetailField label="Port" value={resource.port} mono />
-            <DetailField label="Internal host" value={resource.host || target} mono />
+            <DetailField label="External Host" value={catalogFQDN} mono />
+            <DetailField label="External port" value={externalPort} mono />
+            <DetailField label="Internal host" value={resource.host} mono />
+            <DetailField label="Internal port" value={internalPort} mono />
             <DetailField label="Organization" value={organization?.name || resource.organization_id} />
-            <DetailField label="Gateway" value={gateway?.name || gateway?.id} />
+            <DetailField label="Gateway" value={gateway?.name || '-'} />
           </div>
         </section>
 
@@ -355,6 +360,14 @@ export default function ResourceDetail() {
           </>
         )}
       >
+        <div className="mb-4 min-h-6">
+          {editError ? (
+            <div className="flex items-center gap-2 text-sm font-semibold text-danger">
+              <AlertCircle size={17} />
+              <span>{editError}</span>
+            </div>
+          ) : null}
+        </div>
         <div className="grid gap-x-4 gap-y-3 md:grid-cols-2">
           <FormField label="Name" className="mb-0">
             <FormInput value={editForm.name || ''} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} />
@@ -372,10 +385,13 @@ export default function ResourceDetail() {
           <FormField label="Internal Host" className="mb-0">
             <FormInput value={editForm.host || ''} onChange={(event) => setEditForm({ ...editForm, host: event.target.value })} />
           </FormField>
-          <FormField label="Port" className="mb-0">
-            <FormInput type="number" value={editForm.port || ''} onChange={(event) => setEditForm({ ...editForm, port: event.target.value })} />
+          <FormField label="External Port" className="mb-0">
+            <FormInput type="number" value={editForm.external_port || ''} onChange={(event) => setEditForm({ ...editForm, external_port: event.target.value })} />
           </FormField>
-          <FormField label="External URL" className="mb-0 md:col-span-2">
+          <FormField label="Internal Port" className="mb-0">
+            <FormInput type="number" value={editForm.internal_port || ''} onChange={(event) => setEditForm({ ...editForm, internal_port: event.target.value })} />
+          </FormField>
+          <FormField label="External Host" className="mb-0 md:col-span-2">
             <FormInput value={editForm.external_url || ''} onChange={(event) => setEditForm({ ...editForm, external_url: event.target.value })} />
           </FormField>
           <div className="md:col-span-2">

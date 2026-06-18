@@ -1,9 +1,6 @@
 networks:
   gateway-net:
     driver: bridge
-  truststack-private:
-    external: true
-    name: truststack_private
 
 volumes:
   gateway-certs:
@@ -19,20 +16,12 @@ services:
     ports:
       - "${GATEWAY_HOST_PORT:-9443}:9443"
     environment:
-      GATEWAY_PA_URL: ${GATEWAY_PA_URL:-https://mtls.trust-cloud.dev}
-      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:-}
-      GATEWAY_PUBLIC_ENDPOINT: ${GATEWAY_PUBLIC_ENDPOINT:-localhost:9443}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        if [ ! -f /app/certs/pa-ca.crt ] && [ -f /bootstrap/vault-pki-ca-cert.pem ]; then
-          cp /bootstrap/vault-pki-ca-cert.pem /app/certs/pa-ca.crt
-        fi
-        exec ./gateway
+      GATEWAY_PA_URL: ${GATEWAY_PA_URL:?GATEWAY_PA_URL is required}
+      GATEWAY_ENROLLMENT_TOKEN: ${GATEWAY_ENROLLMENT_TOKEN:?GATEWAY_ENROLLMENT_TOKEN is required}
+      GATEWAY_PUBLIC_ENDPOINT: ${GATEWAY_PUBLIC_ENDPOINT:?GATEWAY_PUBLIC_ENDPOINT is required}
+      GATEWAY_SESSION_REVALIDATION_INTERVAL: ${GATEWAY_SESSION_REVALIDATION_INTERVAL:-30s}
     volumes:
-      - ./config.json:/app/config.json:ro
-      - ../pdp/data:/bootstrap:ro
+      - ./pa-ca.crt:/bootstrap/pa-ca.crt:ro
       - gateway-certs:/app/certs
     networks:
       - gateway-net
-      - truststack-private

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pdp/models"
+	"pdp/util"
 )
 
 // ─────────────────────────────────────────────
@@ -107,6 +108,7 @@ func (s *Store) FindOrganizationByDomain(domain string) (*models.Organization, b
 
 func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 	cfg.Domains = normalizeDomainAliases("", cfg.Domains)
+	cfg.SCIMToken = util.HashSecretToken(cfg.SCIMToken)
 	claimMapping := cfg.ClaimMapping
 	if claimMapping == nil {
 		claimMapping = map[string]string{}

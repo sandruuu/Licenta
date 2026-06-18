@@ -80,6 +80,7 @@ type AgentSessionTokenRequest struct {
 	Scopes                      []string
 	ACR                         string
 	AMR                         []string
+	TTL                         time.Duration
 }
 
 // JWK represents a JSON Web Key for the JWKS endpoint
@@ -146,10 +147,17 @@ func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce s
 }
 
 func (j *JWTManager) GenerateAuthTokenWithPurpose(userID, username, role, deviceID, nonce string, mfaDone bool, purpose string) (string, error) {
+	return j.GenerateAuthTokenWithSession(userID, username, role, deviceID, nonce, mfaDone, purpose, "", 0)
+}
+
+func (j *JWTManager) GenerateAuthTokenWithSession(userID, username, role, deviceID, nonce string, mfaDone bool, purpose, sessionID string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	jti, err := generateJTI()
 	if err != nil {
 		return "", fmt.Errorf("generate JTI: %w", err)
+	}
+	if ttl <= 0 {
+		ttl = j.tokenExpiry
 	}
 	acr := "urn:trustcloud:loa:1"
 	amr := []string{"pwd"}
@@ -164,19 +172,20 @@ func (j *JWTManager) GenerateAuthTokenWithPurpose(userID, username, role, device
 			Subject:   userID,
 			Audience:  jwt.ClaimStrings{AgentTokenAudience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(j.tokenExpiry)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 			NotBefore: jwt.NewNumericDate(now),
 			ID:        jti,
 		},
-		UserID:   userID,
-		Username: username,
-		Role:     role,
-		DeviceID: deviceID,
-		Purpose:  strings.TrimSpace(purpose),
-		Nonce:    nonce,
-		MFADone:  mfaDone,
-		ACR:      acr,
-		AMR:      amr,
+		UserID:    userID,
+		Username:  username,
+		Role:      role,
+		DeviceID:  deviceID,
+		SessionID: strings.TrimSpace(sessionID),
+		Purpose:   strings.TrimSpace(purpose),
+		Nonce:     nonce,
+		MFADone:   mfaDone,
+		ACR:       acr,
+		AMR:       amr,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
@@ -199,7 +208,11 @@ func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (st
 	}
 
 	now := time.Now()
-	expiresAt := now.Add(j.tokenExpiry)
+	ttl := req.TTL
+	if ttl <= 0 {
+		ttl = j.tokenExpiry
+	}
+	expiresAt := now.Add(ttl)
 	jti, err := generateJTI()
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("generate JTI: %w", err)

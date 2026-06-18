@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 
 	"pdp/models"
+	"pdp/util"
 )
 
 func (s *Server) authenticateSCIMRequest(w http.ResponseWriter, r *http.Request, organizationID string) (*models.Organization, *models.IdentityProviderConfig, bool) {
@@ -35,7 +35,7 @@ func (s *Server) authenticateSCIMRequest(w http.ResponseWriter, r *http.Request,
 		if cfg == nil || !cfg.Enabled || strings.TrimSpace(cfg.SCIMToken) == "" {
 			continue
 		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(cfg.SCIMToken)) == 1 {
+		if util.VerifySecretToken(cfg.SCIMToken, token) {
 			return organization, cfg, true
 		}
 	}
@@ -266,14 +266,14 @@ func scimLocation(r *http.Request, resourceType, id string) string {
 	return fmt.Sprintf("%s://%s/scim/v2/%s/%s/%s", scheme, r.Host, segments[0], resourceType, id)
 }
 
-func intQuery(r *http.Request, key string, fallback int) int {
+func intQuery(r *http.Request, key string, defaultValue int) int {
 	value := strings.TrimSpace(r.URL.Query().Get(key))
 	if value == "" {
-		return fallback
+		return defaultValue
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil {
-		return fallback
+		return defaultValue
 	}
 	return parsed
 }

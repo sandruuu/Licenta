@@ -32,6 +32,7 @@ func TestGatewayControlRegistryReturnsGatewayAckErrors(t *testing.T) {
 			DeviceID:     "device-1",
 			ResourceID:   "res-ssh",
 			InternalHost: "10.10.0.10",
+			ExternalPort: 2222,
 			InternalPort: 22,
 			Protocol:     "ssh",
 			ExpiresAt:    time.Now().Add(time.Hour),

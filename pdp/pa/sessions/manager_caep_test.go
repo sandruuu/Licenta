@@ -238,7 +238,7 @@ func TestSessionManagerPublishesDeleteEventOnMaxSessionEviction(t *testing.T) {
 		gotReason = reason
 	})
 
-	_, err := sm.CreateSession(&models.AccessDecision{RiskScore: 10}, models.AccessRequest{
+	_, err := sm.CreateSession(&models.AccessDecision{}, models.AccessRequest{
 		UserID:   "user-1",
 		Username: "laura",
 		DeviceID: "device-new",
@@ -268,7 +268,7 @@ func TestSessionManagerReusesAndRenewsResourceSession(t *testing.T) {
 		Protocol:       "ssh",
 		OrganizationID: "organization-1",
 	}
-	first, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{RiskScore: 10}, req, time.Minute)
+	first, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{RiskSignals: []string{"new_location"}}, req, time.Minute)
 	if err != nil {
 		t.Fatalf("CreateOrRenewSession() first error = %v", err)
 	}
@@ -278,7 +278,7 @@ func TestSessionManagerReusesAndRenewsResourceSession(t *testing.T) {
 	first.ExpiresAt = time.Now().Add(20 * time.Second)
 	s.SaveSession(first)
 
-	second, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{RiskScore: 15}, req, time.Minute)
+	second, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{RiskSignals: []string{"device_non_compliant"}}, req, time.Minute)
 	if err != nil {
 		t.Fatalf("CreateOrRenewSession() second error = %v", err)
 	}
@@ -291,8 +291,8 @@ func TestSessionManagerReusesAndRenewsResourceSession(t *testing.T) {
 	if time.Until(second.ExpiresAt) < 9*time.Minute {
 		t.Fatalf("session was not renewed far enough: expires=%s", second.ExpiresAt)
 	}
-	if second.RiskScore != 15 {
-		t.Fatalf("risk score = %d, want renewed decision score 15", second.RiskScore)
+	if len(second.RiskSignals) != 1 || second.RiskSignals[0] != "device_non_compliant" {
+		t.Fatalf("risk signals = %v, want renewed decision signals", second.RiskSignals)
 	}
 }
 
@@ -310,13 +310,12 @@ func TestSessionManagerAppliesPolicySessionControls(t *testing.T) {
 	}
 	start := time.Now()
 	session, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{
-		RiskScore:   25,
+		RiskSignals: []string{"device_non_compliant"},
 		MatchedRule: "policy-session-controls",
 		SessionControls: models.SessionPolicyControls{
 			MaxAgeSeconds:          600,
 			RevalidateEverySeconds: 60,
 			RevokeOnPostureChange:  true,
-			RevokeOnRiskIncrease:   true,
 		},
 	}, req, time.Minute)
 	if err != nil {
@@ -331,8 +330,11 @@ func TestSessionManagerAppliesPolicySessionControls(t *testing.T) {
 	if session.SessionMaxAgeSeconds != 600 || session.RevalidateEverySeconds != 60 {
 		t.Fatalf("session controls not persisted: %+v", session)
 	}
-	if !session.RevokeOnPostureChange || !session.RevokeOnRiskIncrease {
-		t.Fatalf("revocation controls not persisted: %+v", session)
+	if !session.RevokeOnPostureChange {
+		t.Fatalf("posture revocation control not persisted: %+v", session)
+	}
+	if len(session.RiskSignals) != 1 || session.RiskSignals[0] != "device_non_compliant" {
+		t.Fatalf("risk signals not persisted on session: %+v", session)
 	}
 	if session.ExpiresAt.Before(start.Add(55*time.Second)) || session.ExpiresAt.After(start.Add(65*time.Second)) {
 		t.Fatalf("ExpiresAt = %s, want about 60s from start %s", session.ExpiresAt, start)
@@ -345,7 +347,7 @@ func TestSessionManagerAppliesPolicySessionControls(t *testing.T) {
 	if !ok {
 		t.Fatalf("saved session %s not found", session.ID)
 	}
-	if saved.PolicyID != session.PolicyID || !saved.RevokeOnRiskIncrease || saved.RevalidateEverySeconds != 60 {
+	if saved.PolicyID != session.PolicyID || saved.RevalidateEverySeconds != 60 {
 		t.Fatalf("saved session controls = %+v, want persisted controls", saved)
 	}
 }
@@ -372,7 +374,6 @@ func TestSessionManagerCapsRenewalAtPolicyMaxAge(t *testing.T) {
 		GatewayID:            req.GatewayID,
 		Protocol:             req.Protocol,
 		OrganizationID:       req.OrganizationID,
-		RiskScore:            10,
 		CreatedAt:            now.Add(-115 * time.Second),
 		ExpiresAt:            now.Add(20 * time.Second),
 		LastActivity:         now.Add(-time.Minute),
@@ -381,7 +382,6 @@ func TestSessionManagerCapsRenewalAtPolicyMaxAge(t *testing.T) {
 	s.SaveSession(existing)
 
 	renewed, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{
-		RiskScore:   10,
 		MatchedRule: "policy-short-session",
 		SessionControls: models.SessionPolicyControls{
 			MaxAgeSeconds: 120,
@@ -396,66 +396,6 @@ func TestSessionManagerCapsRenewalAtPolicyMaxAge(t *testing.T) {
 	maxExpiresAt := existing.CreatedAt.Add(120 * time.Second)
 	if renewed.ExpiresAt.After(maxExpiresAt.Add(2 * time.Second)) {
 		t.Fatalf("ExpiresAt = %s, want capped near %s", renewed.ExpiresAt, maxExpiresAt)
-	}
-}
-
-func TestSessionManagerRevokesAndReplacesSessionOnRiskIncrease(t *testing.T) {
-	s := newSessionTestStore(t)
-	sm := NewSessionManager(s, time.Hour, 5)
-	now := time.Now()
-	req := models.AccessRequest{
-		UserID:         "user-1",
-		Username:       "laura",
-		DeviceID:       "device-1",
-		Resource:       "res-admin",
-		GatewayID:      "gw-1",
-		Protocol:       "https",
-		OrganizationID: "organization-1",
-	}
-	existing := &models.Session{
-		ID:                   "sess-risk-baseline",
-		UserID:               req.UserID,
-		Username:             req.Username,
-		DeviceID:             req.DeviceID,
-		Resource:             req.Resource,
-		GatewayID:            req.GatewayID,
-		Protocol:             req.Protocol,
-		OrganizationID:       req.OrganizationID,
-		RiskScore:            20,
-		CreatedAt:            now.Add(-time.Minute),
-		ExpiresAt:            now.Add(time.Hour),
-		LastActivity:         now.Add(-time.Minute),
-		RevokeOnRiskIncrease: true,
-	}
-	s.SaveSession(existing)
-	var deletedID, deletedReason string
-	sm.SetDeleteEventSink(func(session *models.Session, reason string) {
-		deletedID = session.ID
-		deletedReason = reason
-	})
-
-	replacement, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{
-		RiskScore:   35,
-		MatchedRule: "policy-risk-sensitive",
-		SessionControls: models.SessionPolicyControls{
-			RevokeOnRiskIncrease: true,
-		},
-	}, req, time.Minute)
-	if err != nil {
-		t.Fatalf("CreateOrRenewSession() error = %v", err)
-	}
-	if reused {
-		t.Fatal("risk increase reused the existing session")
-	}
-	if replacement.ID == existing.ID {
-		t.Fatalf("replacement ID = %s, want a new session", replacement.ID)
-	}
-	if deletedID != existing.ID || deletedReason != "risk_increased" {
-		t.Fatalf("delete event = %s reason=%s, want %s risk_increased", deletedID, deletedReason, existing.ID)
-	}
-	savedOld, ok := s.GetSession(existing.ID)
-	if !ok || !savedOld.Revoked {
-		t.Fatalf("old session revoked = %v, found=%v", ok && savedOld.Revoked, ok)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -54,14 +55,18 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	if err := service.readyStore(); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(resource.Name) == "" || strings.TrimSpace(resource.Type) == "" {
-		return nil, fmt.Errorf("%w: name and type are required", ErrInvalidRequest)
+	resource.Name = strings.TrimSpace(resource.Name)
+	if resource.Name == "" {
+		return nil, fmt.Errorf("%w: Name is required", ErrInvalidRequest)
+	}
+	if strings.TrimSpace(resource.Type) == "" {
+		return nil, fmt.Errorf("%w: Type is required", ErrInvalidRequest)
 	}
 	resource.Type = normalizeResourceType(resource.Type)
 	if !validResourceType(resource.Type) {
-		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: Type must be WEB, SSH, or RDP", ErrInvalidRequest)
 	}
-	if err := normalizeWebResource(&resource); err != nil {
+	if err := normalizeResource(&resource); err != nil {
 		return nil, err
 	}
 	if err := service.validateResourceScope(&resource); err != nil {
@@ -79,7 +84,9 @@ func (service *Service) CreateResource(resource models.Resource) (*models.Resour
 	resource.UpdatedAt = now
 	resource.Enabled = true
 
-	service.store.SaveResource(&resource)
+	if err := service.store.SaveResource(&resource); err != nil {
+		return nil, fmt.Errorf("save resource: %w", err)
+	}
 	service.publishResourceEvent(&resource, "created", "resource_created", false)
 	return &resource, nil
 }
@@ -101,7 +108,8 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyStringField(fields, "type", &updated.Type)
 	updated.Type = normalizeResourceType(updated.Type)
 	applyStringField(fields, "host", &updated.Host)
-	applyIntField(fields, "port", &updated.Port)
+	applyIntField(fields, "external_port", &updated.ExternalPort)
+	applyIntField(fields, "internal_port", &updated.InternalPort)
 	applyStringField(fields, "external_url", &updated.ExternalURL)
 	applyBoolField(fields, "enabled", &updated.Enabled)
 	applyStringSliceField(fields, "tags", &updated.Tags)
@@ -110,9 +118,9 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	applyStringField(fields, "gateway_id", &updated.GatewayID)
 
 	if !validResourceType(updated.Type) {
-		return nil, fmt.Errorf("%w: type must be ssh, rdp, or web", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: Type must be WEB, SSH, or RDP", ErrInvalidRequest)
 	}
-	if err := normalizeWebResource(&updated); err != nil {
+	if err := normalizeResource(&updated); err != nil {
 		return nil, err
 	}
 	if err := service.validateResourceScope(&updated); err != nil {
@@ -120,7 +128,9 @@ func (service *Service) UpdateResource(id string, fields map[string]json.RawMess
 	}
 
 	revokesSessions := resourceUpdateRevokesSessions(existing, &updated)
-	service.store.SaveResource(&updated)
+	if err := service.store.SaveResource(&updated); err != nil {
+		return nil, fmt.Errorf("save resource: %w", err)
+	}
 	service.publishResourceEvent(&updated, "updated", "resource_updated", revokesSessions)
 	return &updated, nil
 }
@@ -200,7 +210,8 @@ func resourceUpdateRevokesSessions(existing, updated *models.Resource) bool {
 	}
 	return strings.TrimSpace(existing.Type) != strings.TrimSpace(updated.Type) ||
 		strings.TrimSpace(existing.Host) != strings.TrimSpace(updated.Host) ||
-		existing.Port != updated.Port ||
+		existing.ExternalPort != updated.ExternalPort ||
+		existing.InternalPort != updated.InternalPort ||
 		strings.TrimSpace(existing.ExternalURL) != strings.TrimSpace(updated.ExternalURL) ||
 		strings.TrimSpace(existing.OrganizationID) != strings.TrimSpace(updated.OrganizationID) ||
 		strings.TrimSpace(existing.GatewayID) != strings.TrimSpace(updated.GatewayID)
@@ -247,25 +258,122 @@ func normalizeResourceType(resourceType string) string {
 	return strings.ToLower(strings.TrimSpace(resourceType))
 }
 
-func normalizeWebResource(resource *models.Resource) error {
-	if resource == nil || normalizeResourceType(resource.Type) != "web" {
+func normalizeResource(resource *models.Resource) error {
+	if resource == nil {
 		return nil
 	}
-	if resource.Port <= 0 {
-		resource.Port = 443
+	resource.Type = normalizeResourceType(resource.Type)
+	resource.Name = strings.TrimSpace(resource.Name)
+	if resource.Name == "" {
+		return fmt.Errorf("%w: Name is required", ErrInvalidRequest)
 	}
-	externalURL := strings.TrimSpace(resource.ExternalURL)
-	if externalURL == "" {
-		return nil
+	if !validResourcePort(resource.ExternalPort) {
+		return fmt.Errorf("%w: External Port must be between 1 and 65535", ErrInvalidRequest)
 	}
-	parsed, err := url.Parse(externalURL)
-	if err != nil || strings.TrimSpace(parsed.Scheme) == "" {
-		return fmt.Errorf("%w: web external_url must be a valid HTTPS URL", ErrInvalidRequest)
+	if !validResourcePort(resource.InternalPort) {
+		return fmt.Errorf("%w: Internal Port must be between 1 and 65535", ErrInvalidRequest)
 	}
-	if !strings.EqualFold(parsed.Scheme, "https") {
-		return fmt.Errorf("%w: web resources must use HTTPS external_url", ErrInvalidRequest)
+	internalHost, err := normalizeInternalHost(resource.Host)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidRequest, err.Error())
 	}
+	externalHost, err := validateExternalHost(resource.ExternalURL)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidRequest, err.Error())
+	}
+	resource.Host = internalHost
+	resource.ExternalURL = externalHost
 	return nil
+}
+
+func normalizeInternalHost(value string) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(value))
+	host = strings.TrimSuffix(host, ".")
+	if host == "" {
+		return "", errors.New("Internal Host is required")
+	}
+	if looksLikeIPv4(host) {
+		if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
+			return "", errors.New("Internal Host must be a valid IPv4 address or DNS hostname")
+		}
+		return host, nil
+	}
+	if !validDNSName(host, false) {
+		return "", errors.New("Internal Host must be a valid IPv4 address or DNS hostname")
+	}
+	return host, nil
+}
+
+func validateExternalHost(value string) (string, error) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", errors.New("External Host is required")
+	}
+	host := raw
+	if strings.Contains(raw, "://") {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Hostname() == "" {
+			return "", errors.New("External Host must be a valid HTTP/HTTPS URL or DNS hostname")
+		}
+		if parsed.Port() != "" {
+			return "", errors.New("External Host cannot include a port. Use External Port instead")
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return "", errors.New("External Host URL must use HTTP or HTTPS")
+		}
+		host = parsed.Hostname()
+	} else if strings.ContainsAny(raw, "/?#") || strings.Contains(raw, ":") {
+		return "", errors.New("External Host must be a valid HTTP/HTTPS URL or DNS hostname")
+	}
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if net.ParseIP(host) != nil || looksLikeIPv4(host) {
+		return "", errors.New("External Host must be a valid DNS hostname")
+	}
+	if !validDNSName(host, true) {
+		return "", errors.New("External Host must be a valid DNS hostname")
+	}
+	return raw, nil
+}
+
+func looksLikeIPv4(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && char != '.' {
+			return false
+		}
+	}
+	return strings.Contains(value, ".") || value[0] >= '0' && value[0] <= '9'
+}
+
+func validDNSName(value string, requireDot bool) bool {
+	if value == "" || len(value) > 253 {
+		return false
+	}
+	if strings.Contains(value, "..") {
+		return false
+	}
+	if requireDot && !strings.Contains(value, ".") {
+		return false
+	}
+	labels := strings.Split(value, ".")
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, char := range label {
+			if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func validResourcePort(port int) bool {
+	return port > 0 && port <= 65535
 }
 
 func applyStringField(fields map[string]json.RawMessage, name string, target *string) {

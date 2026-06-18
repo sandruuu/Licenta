@@ -10,8 +10,8 @@ import (
 )
 
 // resolveIdentityProvider determines which organization IdP should authenticate
-// the user. Priority: explicit idp_id, login_hint domain, explicit
-// organization_id, then single-organization fallback when unambiguous.
+// the user. Priority: explicit idp_id, login_hint domain, then explicit
+// organization_id.
 func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Organization, error) {
 	_ = clientID
 	queryOrganizationID := strings.TrimSpace(r.URL.Query().Get("organization_id"))
@@ -71,11 +71,6 @@ func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*mod
 		return nil, nil, fmt.Errorf("organization has no enabled default identity provider")
 	}
 
-	if idpCfg, organization, ok := s.singleOrganizationIdentityProvider(); ok {
-		log.Printf("[HRD] Single-organization fallback: organization=%s -> idp=%s", organization.ID, idpCfg.Name)
-		return idpCfg, organization, nil
-	}
-
 	return nil, nil, nil
 }
 
@@ -98,29 +93,6 @@ func (s *Server) defaultIdentityProviderForOrganization(organizationID string) (
 		return nil, organization, false
 	}
 	return idpCfg, organization, true
-}
-
-func (s *Server) singleOrganizationIdentityProvider() (*models.IdentityProviderConfig, *models.Organization, bool) {
-	var selectedOrganization *models.Organization
-	var selectedIdP *models.IdentityProviderConfig
-	for _, organization := range s.pa.Store.ListOrganizations() {
-		if organization == nil || !organization.Enabled {
-			continue
-		}
-		idpCfg, resolvedOrganization, ok := s.defaultIdentityProviderForOrganization(organization.ID)
-		if !ok || idpCfg == nil {
-			continue
-		}
-		if selectedIdP != nil {
-			return nil, nil, false
-		}
-		selectedOrganization = resolvedOrganization
-		selectedIdP = idpCfg
-	}
-	if selectedIdP == nil {
-		return nil, nil, false
-	}
-	return selectedIdP, selectedOrganization, true
 }
 
 func organizationMatchesDomain(organization *models.Organization, domain string) bool {

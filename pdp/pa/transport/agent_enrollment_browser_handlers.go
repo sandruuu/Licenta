@@ -160,9 +160,6 @@ func (s *Server) resolveEnrollmentIdentityProvider(email string) (*models.Identi
 		}
 		return nil, nil, false
 	}
-	if idpCfg, organization, ok := s.singleOrganizationIdentityProvider(); ok {
-		return idpCfg, organization, true
-	}
 	return nil, nil, false
 }
 
@@ -205,7 +202,7 @@ func (s *Server) handleEnrollmentFederatedCallback(w http.ResponseWriter, r *htt
 	if len(idpCfg.GroupRoleMapping) > 0 && len(claims.Groups) > 0 {
 		role = auth.MapGroupsToRole(claims.Groups, idpCfg.GroupRoleMapping)
 	}
-	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.Issuer, claims.Username, claims.Email, role, session.AuthRealmID)
+	user, err := s.pa.Auth.Users.FindOrCreateFederatedUser(claims.Subject, idpCfg.ID, claims.Username, claims.Email, role, session.AuthRealmID)
 	if err != nil {
 		log.Printf("[ENROLL] Enrollment federated user provisioning failed: session=%s err=%v", state, err)
 		http.Error(w, "User provisioning failed", http.StatusInternalServerError)

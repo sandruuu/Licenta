@@ -37,7 +37,7 @@ type ProcessIdentity struct {
 type AuthorizeResponse struct {
 	Decision          string
 	Reason            string
-	RiskScore         int
+	RiskSignals       []string
 	MatchedRule       string
 	Policies          []string
 	SessionID         string

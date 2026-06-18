@@ -60,9 +60,8 @@ func (pa *PolicyAdministrator) populateDirectoryContext(ctx *evaluation.AccessCo
 	}
 	if !directory.Active {
 		return &models.AccessDecision{
-			Decision:  "deny",
-			Reason:    "directory user is disabled",
-			RiskScore: 100,
+			Decision: "deny",
+			Reason:   "directory user is disabled",
 		}
 	}
 

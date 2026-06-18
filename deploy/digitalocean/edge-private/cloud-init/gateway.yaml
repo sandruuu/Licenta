@@ -1,0 +1,38 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+write_files:
+  - path: /opt/trustcloud-gateway/docker-compose.yaml
+    permissions: "0644"
+    encoding: b64
+    content: ${gateway_compose_b64}
+  - path: /opt/trustcloud-gateway/pa-ca.crt
+    permissions: "0644"
+    encoding: b64
+    content: ${pdp_ca_pem_base64}
+  - path: /opt/trustcloud-gateway/.env.template
+    permissions: "0600"
+    content: |
+      GATEWAY_IMAGE=${gateway_image}
+      GATEWAY_CONTAINER_NAME=trustcloud-gateway
+      GATEWAY_HOST_PORT=${gateway_public_port}
+      GATEWAY_PA_URL=${pdp_mtls_url}
+      GATEWAY_ENROLLMENT_TOKEN=${gateway_enrollment_token}
+
+runcmd:
+  - |
+    set -eu
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+
+    cd /opt/trustcloud-gateway
+    PUBLIC_HOST="${gateway_public_endpoint_host}"
+    if [ -z "$PUBLIC_HOST" ]; then
+      PUBLIC_HOST="$(curl -fsS http://169.254.169.254/metadata/v1/interfaces/public/0/ipv4/address)"
+    fi
+
+    cp .env.template .env
+    printf "\nGATEWAY_PUBLIC_ENDPOINT=%s:%s\n" "$PUBLIC_HOST" "${gateway_public_port}" >> .env
+
+    docker compose --env-file .env -f docker-compose.yaml up -d

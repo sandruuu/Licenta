@@ -171,7 +171,7 @@ export const POLICY_SECTIONS = [
     category: 'Users',
     fields: ['new_user_policy'],
     description: 'Define what happens when a user is not enrolled for MFA yet.',
-    protects: 'Controls inline enrollment, temporary pass-through, or blocking for unknown and unenrolled users.',
+    protects: 'Controls inline enrollment, controlled pass-through, or blocking for unknown and unenrolled users.',
     recommendation: 'Use Require enrollment for normal rollout and Deny access for sensitive resources.',
   },
   {

@@ -202,21 +202,14 @@ func ResourcePort(resource *models.Resource, protocol string) int {
 	if resource == nil {
 		return 0
 	}
-	if resource.Port > 0 {
-		return resource.Port
-	}
-	switch protocol {
-	case "https":
-		return 443
-	case "http":
-		return 80
-	case "ssh":
-		return 22
-	case "rdp":
-		return 3389
-	default:
+	return resource.ExternalPort
+}
+
+func ResourceInternalPort(resource *models.Resource, protocol string) int {
+	if resource == nil {
 		return 0
 	}
+	return resource.InternalPort
 }
 
 func newSnapshot(resources []ResourceEntry, deviceDataPolicy DeviceDataPolicy, ttlSeconds int) Snapshot {

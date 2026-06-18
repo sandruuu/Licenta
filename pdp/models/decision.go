@@ -116,23 +116,25 @@ func PolicyActionForAuthenticationPolicy(policy string) (string, bool) {
 }
 
 type StepUpRequirement struct {
-	ChallengeID        string    `json:"challenge_id,omitempty"`
-	URL                string    `json:"url,omitempty"`
-	Methods            []string  `json:"methods,omitempty"`
-	MinStrength        string    `json:"min_strength,omitempty"`
-	WebAuthnAttachment string    `json:"webauthn_attachment,omitempty"`
-	AllowedAAGUIDs     []string  `json:"allowed_aaguids,omitempty"`
-	RequiredACR        string    `json:"required_acr,omitempty"`
-	MaxAgeSeconds      int       `json:"max_age_seconds,omitempty"`
-	ExpiresAt          time.Time `json:"expires_at,omitempty"`
-	Reason             string    `json:"reason,omitempty"`
-	PolicyID           string    `json:"policy_id,omitempty"`
-	ResourceID         string    `json:"resource_id,omitempty"`
-	AlreadySatisfied   bool      `json:"already_satisfied,omitempty"`
-	CompletedMethod    string    `json:"completed_method,omitempty"`
-	CompletedStrength  string    `json:"completed_strength,omitempty"`
-	CompletedAtUnix    int64     `json:"completed_at_unix,omitempty"`
-	VerificationNonce  string    `json:"verification_nonce,omitempty"`
+	ChallengeID         string    `json:"challenge_id,omitempty"`
+	URL                 string    `json:"url,omitempty"`
+	Methods             []string  `json:"methods,omitempty"`
+	MinStrength         string    `json:"min_strength,omitempty"`
+	WebAuthnAttachment  string    `json:"webauthn_attachment,omitempty"`
+	AllowedAAGUIDs      []string  `json:"allowed_aaguids,omitempty"`
+	RequiredACR         string    `json:"required_acr,omitempty"`
+	MaxAgeSeconds       int       `json:"max_age_seconds,omitempty"`
+	ExpiresAt           time.Time `json:"expires_at,omitempty"`
+	Reason              string    `json:"reason,omitempty"`
+	PolicyID            string    `json:"policy_id,omitempty"`
+	ResourceID          string    `json:"resource_id,omitempty"`
+	AlreadySatisfied    bool      `json:"already_satisfied,omitempty"`
+	CompletedMethod     string    `json:"completed_method,omitempty"`
+	CompletedStrength   string    `json:"completed_strength,omitempty"`
+	CompletedAAGUID     string    `json:"completed_aaguid,omitempty"`
+	CompletedAttachment string    `json:"completed_attachment,omitempty"`
+	CompletedAtUnix     int64     `json:"completed_at_unix,omitempty"`
+	VerificationNonce   string    `json:"verification_nonce,omitempty"`
 }
 
 type AuthContext struct {
@@ -169,10 +171,10 @@ func StepUpMethods(values []string) []string {
 			continue
 		}
 		if method == "idp" || method == "reauth" || method == "idp_reauth" || method == "external_idp" {
-			for _, fallback := range []string{"totp", "webauthn"} {
-				if _, ok := seen[fallback]; !ok {
-					seen[fallback] = struct{}{}
-					methods = append(methods, fallback)
+			for _, defaultMethod := range []string{"totp", "webauthn"} {
+				if _, ok := seen[defaultMethod]; !ok {
+					seen[defaultMethod] = struct{}{}
+					methods = append(methods, defaultMethod)
 				}
 			}
 			continue

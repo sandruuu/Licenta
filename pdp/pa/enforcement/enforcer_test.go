@@ -131,6 +131,89 @@ func TestPolicyUpdatedRevokesDeniedSessionsWithinScope(t *testing.T) {
 	assertRevoked(t, dataStore, "sess-other-resource", false)
 }
 
+func TestPolicyUpdatedKeepsSessionWithSatisfiedStepUp(t *testing.T) {
+	policyAdmin, dataStore := newEnforcementTestPA(t)
+	seedEnforcementScope(dataStore)
+	now := time.Now()
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:      "pol-step-up",
+		Name:    "Require MFA",
+		Enabled: true,
+		Action:  models.DecisionStepUpRequired,
+		Conditions: models.RuleConditions{
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyEnforceMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:             "assign-step-up",
+		PolicyID:       "pol-step-up",
+		OrganizationID: "organization-1",
+		Level:          "resource",
+		ResourceID:     "res-ssh",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	session := activeSession("sess-step-up", "device-1", "res-ssh", "gw-1", "organization-1")
+	session.StepUpACR = models.DefaultStepUpACR
+	session.StepUpMethod = "totp"
+	session.StepUpStrength = models.StepUpStrengthOTP
+	session.StepUpVerifiedAt = now.Add(-time.Minute)
+	session.StepUpExpiresAt = now.Add(9 * time.Minute)
+	dataStore.SaveSession(session)
+
+	revoked := NewService(policyAdmin, nil).HandleEvent(events.Event{
+		Type: events.TopicPolicyUpdated,
+		Payload: map[string]string{
+			"organization_id": "organization-1",
+			"resource_id":     "res-ssh",
+		},
+	})
+
+	if revoked != 0 {
+		t.Fatalf("revoked = %d, want 0", revoked)
+	}
+	assertRevoked(t, dataStore, "sess-step-up", false)
+}
+
+func TestSessionStepUpAuthContextCarriesWebAuthnProof(t *testing.T) {
+	now := time.Now()
+	session := &models.Session{
+		StepUpACR:        models.DefaultStepUpACR,
+		StepUpMethod:     "webauthn",
+		StepUpStrength:   models.StepUpStrengthHardwareKey,
+		StepUpAAGUID:     "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		StepUpAttachment: "cross_platform",
+		StepUpVerifiedAt: now.Add(-time.Minute),
+		StepUpExpiresAt:  now.Add(9 * time.Minute),
+	}
+
+	auth := sessionStepUpAuthContext(session)
+	if auth.ACR != models.DefaultStepUpACR {
+		t.Fatalf("ACR = %q, want %q", auth.ACR, models.DefaultStepUpACR)
+	}
+	if len(auth.AMR) != 1 || auth.AMR[0] != "webauthn" {
+		t.Fatalf("AMR = %+v, want [webauthn]", auth.AMR)
+	}
+	if auth.StepUpMethod != "webauthn" || auth.StepUpStrength != models.StepUpStrengthHardwareKey {
+		t.Fatalf("step-up method/strength = %q/%q", auth.StepUpMethod, auth.StepUpStrength)
+	}
+	if auth.StepUpAAGUID != "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" {
+		t.Fatalf("AAGUID = %q", auth.StepUpAAGUID)
+	}
+	if auth.StepUpAttachment != "cross_platform" {
+		t.Fatalf("attachment = %q", auth.StepUpAttachment)
+	}
+	if !auth.StepUpVerifiedAt.Equal(session.StepUpVerifiedAt) || !auth.StepUpExpiresAt.Equal(session.StepUpExpiresAt) {
+		t.Fatalf("step-up times were not preserved")
+	}
+}
+
 func TestResourceGatewayAndDeviceEventsRevokeScopedSessions(t *testing.T) {
 	policyAdmin, dataStore := newEnforcementTestPA(t)
 	seedEnforcementScope(dataStore)
@@ -238,7 +321,8 @@ func seedEnforcementScope(dataStore *store.Store) {
 		Name:           "SSH",
 		Type:           "ssh",
 		Host:           "ssh.internal",
-		Port:           22,
+		ExternalPort:   22,
+		InternalPort:   22,
 		Enabled:        true,
 		OrganizationID: "organization-1",
 		GatewayID:      "gw-1",
@@ -250,7 +334,8 @@ func seedEnforcementScope(dataStore *store.Store) {
 		Name:           "Web",
 		Type:           "web",
 		Host:           "web.internal",
-		Port:           443,
+		ExternalPort:   443,
+		InternalPort:   443,
 		Enabled:        true,
 		OrganizationID: "organization-1",
 		GatewayID:      "gw-1",

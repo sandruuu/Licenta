@@ -40,6 +40,7 @@ type ProvisionedSession struct {
 	ResourceID       string
 	ResourceName     string
 	InternalHost     string
+	ExternalPort     int
 	InternalPort     int
 	Protocol         string
 	ExpiresAt        time.Time
@@ -131,6 +132,7 @@ func (registry *ControlRegistry) ProvisionSession(ctx context.Context, gatewayID
 		"resource_id":        strings.TrimSpace(session.ResourceID),
 		"resource_name":      strings.TrimSpace(session.ResourceName),
 		"internal_host":      strings.TrimSpace(session.InternalHost),
+		"external_port":      float64(session.ExternalPort),
 		"internal_port":      float64(session.InternalPort),
 		"protocol":           strings.TrimSpace(session.Protocol),
 		"expires_at":         session.ExpiresAt.UTC().Format(time.RFC3339Nano),
@@ -381,6 +383,9 @@ func validateProvisionedSession(session ProvisionedSession) error {
 	}
 	if session.InternalPort <= 0 {
 		return errors.New("internal_port must be positive")
+	}
+	if session.ExternalPort <= 0 {
+		return errors.New("external_port must be positive")
 	}
 	if session.ExpiresAt.IsZero() {
 		return errors.New("expires_at is required")

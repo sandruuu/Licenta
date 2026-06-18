@@ -43,6 +43,7 @@ type Session struct {
 	ResourceID       string
 	ResourceName     string
 	InternalHost     string
+	ExternalPort     int
 	InternalPort     int
 	Protocol         string
 	ExpiresAt        time.Time
@@ -82,6 +83,7 @@ func NewStoreWithClock(now func() time.Time) *Store {
 }
 
 func (store *Store) Provision(session Session, rawToken string) error {
+	rawToken = strings.TrimSpace(rawToken)
 	session.ID = strings.TrimSpace(session.ID)
 	session.DeviceID = strings.TrimSpace(session.DeviceID)
 	session.UserID = strings.TrimSpace(session.UserID)
@@ -95,7 +97,7 @@ func (store *Store) Provision(session Session, rawToken string) error {
 	if session.ID == "" {
 		return validationError(CodeMissingSessionID, "session_id is required")
 	}
-	if strings.TrimSpace(rawToken) == "" && strings.TrimSpace(session.TokenHash) == "" {
+	if rawToken == "" {
 		return validationError(CodeInvalidToken, "session token is required")
 	}
 	if session.DeviceID == "" {
@@ -107,17 +109,16 @@ func (store *Store) Provision(session Session, rawToken string) error {
 	if session.InternalHost == "" || session.InternalPort <= 0 {
 		return validationError(CodeBadRequest, "internal resource host and port are required")
 	}
+	if session.ExternalPort <= 0 {
+		return validationError(CodeBadRequest, "external resource port is required")
+	}
 	if session.ExpiresAt.IsZero() || !session.ExpiresAt.After(store.now()) {
 		return validationError(CodeSessionExpired, "session expiry must be in the future")
 	}
 	if session.Protocol == "" {
 		session.Protocol = "tcp"
 	}
-	if strings.TrimSpace(rawToken) != "" {
-		session.TokenHash = hashToken(rawToken)
-	} else {
-		session.TokenHash = strings.TrimSpace(session.TokenHash)
-	}
+	session.TokenHash = hashToken(rawToken)
 	if session.CreatedAt.IsZero() {
 		session.CreatedAt = store.now()
 	}
@@ -179,7 +180,7 @@ func (store *Store) Validate(check ConnectCheck) (*Session, error) {
 	if check.Protocol != session.Protocol {
 		return nil, validationError(CodeProtocolMismatch, "session protocol binding mismatch")
 	}
-	if check.Port != session.InternalPort {
+	if check.Port != session.ExternalPort {
 		return nil, validationError(CodeResourceMismatch, "session port binding mismatch")
 	}
 

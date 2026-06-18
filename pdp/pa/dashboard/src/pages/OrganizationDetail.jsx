@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
+  AlertCircle,
   ArrowLeft,
   Ban,
   Building2,
   ChevronLeft,
   ChevronRight,
-  Loader2,
   Plus,
-  Shield,
   Edit2,
 } from 'lucide-react';
 import {
@@ -24,6 +23,8 @@ import {
   updateOrganization,
 } from '../api';
 import Button from '../components/ui/Button';
+import LoadingSpinner from '../components/ui/LoadingSpinner';
+import PageLoading from '../components/ui/PageLoading';
 import {
   DetailDisclosure,
   DetailEmptyState as EmptyState,
@@ -36,6 +37,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import OrganizationFormModal from '../components/organizations/OrganizationFormModal';
 import GatewayCreateModal from '../components/organizations/GatewayCreateModal';
+import GatewayTokenModal from '../components/organizations/GatewayTokenModal';
 import StatusBadge from '../components/organizations/StatusBadge';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import { usePublicConfig } from '../config/publicConfig';
@@ -51,15 +53,30 @@ const resourceTypeOptions = [
   { value: 'rdp', label: 'RDP' },
 ];
 
+function externalHost(resource) {
+  return resource?.external_url || resource?.host || '';
+}
+
+function endpointLabel(host, port) {
+  const base = host || '-';
+  return port ? `${base}:${port}` : base;
+}
+
+function resourceExternalPort(resource) {
+  return resource?.external_port || '';
+}
+
+function resourceInternalPort(resource) {
+  return resource?.internal_port || '';
+}
+
 function resourceProtocolLabel(resource) {
   const type = String(resource?.type || 'resource').toUpperCase();
-  return resource?.port ? `${type} : ${resource.port}` : type;
+  return `${type} - ${endpointLabel(resource?.host, resourceInternalPort(resource))}`;
 }
 
 function resourceTargetLabel(resource) {
-  if (resource?.external_url) return resource.external_url;
-  if (resource?.host) return resource.port ? `${resource.host}:${resource.port}` : resource.host;
-  return resource?.description || resource?.id || '-';
+  return endpointLabel(externalHost(resource), resourceExternalPort(resource));
 }
 
 export default function OrganizationDetail() {
@@ -90,13 +107,16 @@ export default function OrganizationDetail() {
   const [idpTestResult, setIdPTestResult] = useState(null);
   const [idpAdvancedOpen, setIdPAdvancedOpen] = useState(false);
   const [idpScimOpen, setIdPScimOpen] = useState(false);
+  const [scimTokenModal, setScimTokenModal] = useState(null);
   const [resourceOpen, setResourceOpen] = useState(false);
   const [resourceForm, setResourceForm] = useState({});
   const [resourceSaving, setResourceSaving] = useState(false);
   const [resourceError, setResourceError] = useState('');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async ({ showLoading = true } = {}) => {
+    if (showLoading) {
+      setLoading(true);
+    }
     setError('');
     try {
       const [organizationData, gatewayData, resourceData, idpData, directoryUserData, directoryGroupData] = await Promise.all([
@@ -117,7 +137,9 @@ export default function OrganizationDetail() {
     } catch (e) {
       setError(e.message || 'Failed to load organization data');
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   }, [organizationID]);
 
@@ -164,7 +186,6 @@ export default function OrganizationDetail() {
       issuer: '',
       client_id: '',
       client_secret: '',
-      scim_token: '',
       scopes: publicConfig.oidc_default_scopes || 'openid profile email groups',
       enabled: true,
       auto_discovery: true,
@@ -180,9 +201,19 @@ export default function OrganizationDetail() {
     setIdPOpen(true);
   };
 
+  const showSCIMToken = (token, providerName) => {
+    setScimTokenModal({ token, providerName, organizationID });
+  };
+
+  const closeSCIMTokenModal = () => {
+    setScimTokenModal(null);
+    load({ showLoading: false });
+  };
+
   const openResourceCreate = () => {
     const type = 'web';
     const option = resourceTypes.find((item) => item.value === type);
+    const defaultPort = option?.defaultPort || publicConfig.resource_default_ports?.web || '';
     setResourceForm({
       name: '',
       description: '',
@@ -190,7 +221,8 @@ export default function OrganizationDetail() {
       organization_id: organizationID,
       gateway_id: organizationGateways[0]?.id || '',
       host: '',
-      port: option?.defaultPort || publicConfig.resource_default_ports?.web || '',
+      external_port: defaultPort,
+      internal_port: defaultPort,
       external_url: '',
       enabled: true,
     });
@@ -200,7 +232,13 @@ export default function OrganizationDetail() {
 
   const selectResourceType = (type) => {
     const option = resourceTypes.find((item) => item.value === type);
-    setResourceForm({ ...resourceForm, type, port: option?.defaultPort || resourceForm.port || 0 });
+    const defaultPort = option?.defaultPort || publicConfig.resource_default_ports?.[type] || publicConfig.resource_default_ports?.web || 0;
+    setResourceForm({
+      ...resourceForm,
+      type,
+      external_port: resourceForm.external_port || defaultPort,
+      internal_port: resourceForm.internal_port || defaultPort,
+    });
   };
 
   const saveResourceCreate = async () => {
@@ -214,7 +252,8 @@ export default function OrganizationDetail() {
         organization_id: organizationID,
         gateway_id: resourceForm.gateway_id,
         host: resourceForm.host?.trim(),
-        port: parseInt(resourceForm.port, 10) || 0,
+        external_port: parseInt(resourceForm.external_port, 10) || 0,
+        internal_port: parseInt(resourceForm.internal_port, 10) || 0,
         external_url: resourceForm.external_url?.trim(),
         enabled: resourceForm.enabled !== false,
         metadata: {},
@@ -238,13 +277,12 @@ export default function OrganizationDetail() {
 
     setIdPSaving(true);
     try {
-      await createIdP(organizationID, {
+      const createdIdP = await createIdP(organizationID, {
         name: idpForm.name.trim(),
         type: idpForm.type || 'oidc',
         issuer: idpForm.issuer.trim(),
         client_id: idpForm.client_id.trim(),
         client_secret: idpForm.client_secret || undefined,
-        scim_token: idpForm.scim_token || undefined,
         scopes: (idpForm.scopes || '').trim(),
         enabled: idpForm.enabled !== false,
         auto_discovery: idpForm.auto_discovery !== false,
@@ -257,7 +295,12 @@ export default function OrganizationDetail() {
         is_default: idpForm.enabled !== false,
       });
       setIdPOpen(false);
-      await load();
+      if (createdIdP?.scim_token) {
+        showSCIMToken(createdIdP.scim_token, createdIdP.name || idpForm.name.trim());
+        load({ showLoading: false });
+      } else {
+        await load();
+      }
     } catch (e) {
       setIdPError(e.message || 'Failed to add IdP');
     } finally {
@@ -316,12 +359,7 @@ export default function OrganizationDetail() {
   };
 
   if (loading) {
-    return (
-      <div className="py-16 text-center text-text-muted">
-        <span className="spinner mr-2" />
-        Loading organization...
-      </div>
-    );
+    return <PageLoading />;
   }
 
   if (!organization) {
@@ -431,15 +469,11 @@ export default function OrganizationDetail() {
                   {configuredIdP?.has_scim_token ? 'CONFIGURED' : 'NOT CONFIGURED'}
                 </p>
               </div>
-              <div className="grid gap-5 sm:grid-cols-2">
-                <div className="min-w-0">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Groups</p>
-                  <p className="mt-2 text-sm font-semibold text-text-primary">{directoryGroups.length}</p>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Users</p>
-                  <p className="mt-2 text-sm font-semibold text-text-primary">{directoryUsers.length}</p>
-                </div>
+              <div className="grid w-full max-w-[240px] grid-cols-2 gap-x-12 gap-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Groups</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-text-muted">Users</p>
+                <p className="text-sm font-semibold tabular-nums text-text-primary">{directoryGroups.length}</p>
+                <p className="text-sm font-semibold tabular-nums text-text-primary">{directoryUsers.length}</p>
               </div>
             </div>
 
@@ -598,13 +632,31 @@ export default function OrganizationDetail() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setResourceOpen(false)}>Cancel</Button>
-            <Button onClick={saveResourceCreate} disabled={resourceSaving || !resourceForm.gateway_id || !resourceForm.name?.trim()}>
+            <Button
+              onClick={saveResourceCreate}
+              disabled={
+                resourceSaving
+                  || !resourceForm.gateway_id
+                  || !resourceForm.name?.trim()
+                  || !resourceForm.host?.trim()
+                  || !resourceForm.external_url?.trim()
+                  || !String(resourceForm.external_port || '').trim()
+                  || !String(resourceForm.internal_port || '').trim()
+              }
+            >
               {resourceSaving ? 'Saving...' : 'Create Resource'}
             </Button>
           </>
         )}
       >
-        {resourceError && <div className="rounded-md border border-danger bg-danger-muted p-3 text-xs text-danger">{resourceError}</div>}
+        <div className="mb-4 min-h-6">
+          {resourceError ? (
+            <div className="flex items-center gap-2 text-sm font-semibold text-danger">
+              <AlertCircle size={17} />
+              <span>{resourceError}</span>
+            </div>
+          ) : null}
+        </div>
 
         <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-4">
           <FormField label="Organization" className="mb-0 md:col-span-2">
@@ -626,17 +678,20 @@ export default function OrganizationDetail() {
               ))}
             </FormSelect>
           </FormField>
-          <FormField label="Port" className="mb-0">
-            <FormInput type="number" value={resourceForm.port || ''} onChange={(event) => setResourceForm({ ...resourceForm, port: event.target.value })} />
+          <FormField label="External Port" className="mb-0">
+            <FormInput type="number" value={resourceForm.external_port || ''} onChange={(event) => setResourceForm({ ...resourceForm, external_port: event.target.value })} />
           </FormField>
-          <FormField label="Name" className="mb-0 md:col-span-2">
+          <FormField label="Internal Port" className="mb-0">
+            <FormInput type="number" value={resourceForm.internal_port || ''} onChange={(event) => setResourceForm({ ...resourceForm, internal_port: event.target.value })} />
+          </FormField>
+          <FormField label="Name" className="mb-0">
             <FormInput value={resourceForm.name || ''} onChange={(event) => setResourceForm({ ...resourceForm, name: event.target.value })} placeholder="Production Admin Portal" />
           </FormField>
 
           <FormField label="Internal Host" className="mb-0 md:col-span-2">
             <FormInput value={resourceForm.host || ''} onChange={(event) => setResourceForm({ ...resourceForm, host: event.target.value })} placeholder="10.0.0.5 or server.internal" />
           </FormField>
-          <FormField label="External URL / FQDN" className="mb-0 md:col-span-2">
+          <FormField label="External Host" className="mb-0 md:col-span-2">
             <FormInput value={resourceForm.external_url || ''} onChange={(event) => setResourceForm({ ...resourceForm, external_url: event.target.value })} placeholder="https://app.company.com or ssh.company.com" />
           </FormField>
 
@@ -670,7 +725,7 @@ export default function OrganizationDetail() {
             <FormInput value={idpForm.client_id || ''} onChange={(event) => setIdPForm({ ...idpForm, client_id: event.target.value })} placeholder="trustcloud" className="font-mono" />
           </FormField>
           <FormField label="Issuer URL" className="mb-3 md:col-span-2">
-            <FormInput value={idpForm.issuer || ''} onChange={(event) => setIdPForm({ ...idpForm, issuer: event.target.value })} placeholder="http://keycloak:8080/realms/trustcloud-lab" className="font-mono" />
+            <FormInput value={idpForm.issuer || ''} onChange={(event) => setIdPForm({ ...idpForm, issuer: event.target.value })} placeholder="https://idp.company.com/realms/company" className="font-mono" />
           </FormField>
           <FormField label="OIDC client secret" className="mb-3">
             <FormInput type="password" value={idpForm.client_secret || ''} onChange={(event) => setIdPForm({ ...idpForm, client_secret: event.target.value })} placeholder="Required for confidential clients" />
@@ -689,12 +744,12 @@ export default function OrganizationDetail() {
             open={idpScimOpen}
             onClick={() => setIdPScimOpen((open) => !open)}
             title="SCIM provisioning"
-            description="Optional token used only for syncing users and groups."
+            description="PDP generates a token for syncing users and groups."
           />
           {idpScimOpen && (
-            <FormField label="SCIM provisioning token" className="mb-0">
-              <FormInput type="password" value={idpForm.scim_token || ''} onChange={(event) => setIdPForm({ ...idpForm, scim_token: event.target.value })} placeholder="Bearer token configured in the IdP" />
-            </FormField>
+            <div className="rounded-md border border-border bg-surface-secondary px-4 py-3 text-sm font-semibold text-text-secondary">
+              A SCIM provisioning token will be generated automatically.
+            </div>
           )}
 
           <DetailDisclosure
@@ -725,7 +780,7 @@ export default function OrganizationDetail() {
 
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="secondary" onClick={testIdPDiscovery} disabled={idpTesting || !idpForm.issuer?.trim()}>
-            {idpTesting ? <Loader2 size={14} className="spinner-icon" /> : <Shield size={14} />}
+            {idpTesting ? <LoadingSpinner size="sm" /> : null}
             {idpTesting ? 'Testing...' : 'Test Discovery'}
           </Button>
           {idpTestResult && (
@@ -735,6 +790,24 @@ export default function OrganizationDetail() {
           )}
         </div>
       </Modal>
+
+      <GatewayTokenModal
+        open={!!scimTokenModal}
+        tokenInfo={scimTokenModal}
+        title="SCIM provisioning token"
+        tokenLabel={scimTokenModal?.providerName ? `Token for ${scimTokenModal.providerName}` : 'SCIM token'}
+        warningText="Use these values in the SCIM connector. The token will not be shown again."
+        copyTitle="Copy SCIM token"
+        fields={[
+          {
+            key: 'organization-id',
+            label: 'Organization ID',
+            value: scimTokenModal?.organizationID || organizationID,
+            copyTitle: 'Copy organization ID',
+          },
+        ]}
+        onClose={closeSCIMTokenModal}
+      />
     </div>
   );
 }

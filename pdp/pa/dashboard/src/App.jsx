@@ -1,7 +1,16 @@
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { clearToken, getToken, validateAdminSession } from './api';
+import {
+  clearToken,
+  getRefreshToken,
+  getSessionRefreshDelay,
+  getToken,
+  logoutAdminSession,
+  refreshAdminSession,
+  validateAdminSession,
+} from './api';
 import Layout from './components/Layout';
+import LoadingSpinner from './components/ui/LoadingSpinner';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Organizations from './pages/Organizations';
@@ -13,53 +22,94 @@ import Policies from './pages/Policies';
 import Sessions from './pages/Sessions';
 import Audit from './pages/Audit';
 import DeviceHealth from './pages/DeviceHealth';
-import ProtectApp from './pages/ProtectApp';
 import Gateways from './pages/Gateways';
 import GatewayDetail from './pages/GatewayDetail';
 
-const sessionSpinnerSegments = Array.from({ length: 12 }, (_, index) => index);
+const DASHBOARD_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 function SessionLoading() {
   return (
     <div className="grid min-h-screen place-items-center bg-surface" role="status" aria-live="polite" aria-label="Loading">
-      <div className="flex flex-col items-center gap-1.5">
-        <div className="session-spinner" aria-hidden="true">
-          {sessionSpinnerSegments.map((index) => (
-            <span key={index} style={{ '--segment-index': index }} />
-          ))}
-        </div>
-        <span className="text-[10px] font-semibold leading-none text-text-secondary">Loading...</span>
-      </div>
+      <LoadingSpinner size="lg" />
     </div>
   );
 }
 
 function PrivateRoute({ children }) {
-  const [status, setStatus] = useState(() => (getToken() ? 'checking' : 'guest'));
+  const [status, setStatus] = useState(() => (getToken() || getRefreshToken() ? 'checking' : 'guest'));
 
   useEffect(() => {
     let cancelled = false;
+    let refreshTimer = null;
+    let lastActivity = Date.now();
 
-    async function checkSession() {
-      if (!getToken()) {
-        setStatus('guest');
+    function clearRefreshTimer() {
+      if (refreshTimer) {
+        window.clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+    }
+
+    function recordActivity() {
+      lastActivity = Date.now();
+    }
+
+    function scheduleRefresh() {
+      clearRefreshTimer();
+      if (cancelled || (!getToken() && !getRefreshToken())) return;
+      refreshTimer = window.setTimeout(() => {
+        void refreshSessionIfActive();
+      }, getSessionRefreshDelay());
+    }
+
+    async function refreshSessionIfActive() {
+      if (Date.now() - lastActivity > DASHBOARD_IDLE_TIMEOUT_MS) {
+        await logoutAdminSession();
+        if (!cancelled) setStatus('guest');
         return;
       }
-
-      setStatus('checking');
       try {
-        await validateAdminSession();
-        if (!cancelled) setStatus('authenticated');
+        await refreshAdminSession();
+        if (!cancelled) {
+          setStatus('authenticated');
+          scheduleRefresh();
+        }
       } catch {
         clearToken();
+        clearRefreshTimer();
         if (!cancelled) setStatus('guest');
       }
     }
 
+    async function checkSession(showLoading = true) {
+      if (!getToken() && !getRefreshToken()) {
+        clearRefreshTimer();
+        setStatus('guest');
+        return;
+      }
+
+      if (showLoading) setStatus('checking');
+      try {
+        await validateAdminSession();
+        if (!cancelled) {
+          setStatus('authenticated');
+          scheduleRefresh();
+        }
+      } catch {
+        clearToken();
+        clearRefreshTimer();
+        if (!cancelled) setStatus('guest');
+      }
+    }
+
+    const activityEvents = ['pointerdown', 'keydown', 'scroll', 'focus'];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }));
     void checkSession();
 
     return () => {
       cancelled = true;
+      clearRefreshTimer();
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, recordActivity));
     };
   }, []);
 
@@ -89,7 +139,6 @@ function App() {
           <Route path="policies" element={<Policies />} />
           <Route path="gateways" element={<Gateways />} />
           <Route path="gateways/:gatewayId" element={<GatewayDetail />} />
-          <Route path="protect-app" element={<ProtectApp />} />
           <Route path="sessions" element={<Sessions />} />
           <Route path="device-data" element={<DeviceHealth />} />
           <Route path="device-health" element={<Navigate to="/device-data" replace />} />

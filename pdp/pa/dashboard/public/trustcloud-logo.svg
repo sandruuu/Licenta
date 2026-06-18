@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">TrustCloud network shield keyhole logo</title>
+  <desc id="desc">Line icon of a connected computer monitor with a central shield and keyhole.</desc>
+
+  <defs>
+    <style>
+      .structure {
+        stroke: #2a2a2a;
+      }
+
+      .connector {
+        stroke: #2a2a2a;
+      }
+
+      .node {
+        fill: none;
+        stroke: #2a2a2a;
+      }
+
+      .shield {
+        fill: none;
+        stroke: #2c6164;
+      }
+
+      .keyhole {
+        fill: #2c6164;
+      }
+    </style>
+    <mask id="connector-gap" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="white" />
+      <path
+        d="M256 120c26 21 56 31 88 31v75c0 56-36 90-88 112-52-22-88-56-88-112v-75c32 0 62-10 88-31z"
+        fill="black"
+        stroke="black"
+        stroke-width="18"
+        stroke-linejoin="round"
+      />
+      <g fill="black" stroke="black" stroke-width="8" stroke-linejoin="round">
+        <rect x="64" y="233" width="30" height="30" rx="4" />
+        <rect x="418" y="233" width="30" height="30" rx="4" />
+
+        <rect x="92" y="78" width="28" height="28" rx="4" />
+        <circle cx="106" cy="181" r="15" />
+
+        <rect x="392" y="78" width="28" height="28" rx="4" />
+        <circle cx="406" cy="181" r="15" />
+
+        <rect x="242" y="37" width="28" height="28" rx="4" />
+      </g>
+    </mask>
+  </defs>
+
+  <g class="structure" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 286v74c0 12 10 22 22 22h340c12 0 22-10 22-22v-74" />
+    <path d="M210 382v34" />
+    <path d="M302 382v34" />
+    <path d="M196 416h124" />
+  </g>
+
+  <g mask="url(#connector-gap)" class="connector" fill="none" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M79 248h354" />
+
+    <path d="M106 92v89" />
+    <path d="M106 181l119 48" />
+
+    <path d="M406 92v89" />
+    <path d="M406 181l-119 48" />
+
+    <path d="M256 51v111" />
+  </g>
+
+  <g class="node" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="64" y="233" width="30" height="30" rx="4" />
+    <rect x="418" y="233" width="30" height="30" rx="4" />
+
+    <rect x="92" y="78" width="28" height="28" rx="4" />
+    <circle cx="106" cy="181" r="15" />
+
+    <rect x="392" y="78" width="28" height="28" rx="4" />
+    <circle cx="406" cy="181" r="15" />
+
+    <rect x="242" y="37" width="28" height="28" rx="4" />
+  </g>
+
+  <path
+    class="shield"
+    d="M256 120c26 21 56 31 88 31v75c0 56-36 90-88 112-52-22-88-56-88-112v-75c32 0 62-10 88-31z"
+    stroke-width="8"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <g class="keyhole">
+    <circle cx="256" cy="205" r="12" />
+    <path d="M250 214h12l9 55h-30z" />
+  </g>
+</svg>

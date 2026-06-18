@@ -33,7 +33,7 @@ func TestAuthorizeResponseFromStructParsesGatewaySession(t *testing.T) {
 	payload, err := structpb.NewStruct(map[string]any{
 		"decision":            "allow",
 		"reason":              "matched policy",
-		"risk_score":          float64(7),
+		"risk_signals":        []any{"device_non_compliant", "new_location"},
 		"matched_rule":        "policy-1",
 		"policies":            []any{"policy-1", "policy-2"},
 		"session_id":          "sess-1",
@@ -55,6 +55,9 @@ func TestAuthorizeResponseFromStructParsesGatewaySession(t *testing.T) {
 	}
 	if len(response.Policies) != 2 || response.Policies[1] != "policy-2" {
 		t.Fatalf("policies = %+v", response.Policies)
+	}
+	if len(response.RiskSignals) != 2 || response.RiskSignals[0] != "device_non_compliant" || response.RiskSignals[1] != "new_location" {
+		t.Fatalf("risk signals = %+v", response.RiskSignals)
 	}
 	if !response.ExpiresAt.Equal(expires) {
 		t.Fatalf("expires = %s want %s", response.ExpiresAt, expires)

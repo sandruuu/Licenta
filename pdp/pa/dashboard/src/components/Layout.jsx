@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { clearToken } from '../api';
+import { logoutAdminSession } from '../api';
 import BrandLogo from './ui/BrandLogo';
 import {
   Server,
@@ -17,13 +17,9 @@ const navSections = [
   {
     items: [
       { to: '/organizations', icon: Building2, label: 'Organizations' },
+      { to: '/gateways', icon: Router, label: 'Gateways' },
       { to: '/resources', icon: Server, label: 'Resources' },
       { to: '/policies', icon: ShieldCheck, label: 'Policies' },
-      { to: '/gateways', icon: Router, label: 'Gateways' },
-    ],
-  },
-  {
-    items: [
       { to: '/sessions', icon: Radio, label: 'Sessions' },
       { to: '/device-data', icon: LaptopMinimalCheck, label: 'Devices' },
       { to: '/audit', icon: FileText, label: 'Audit' },
@@ -34,8 +30,8 @@ const navSections = [
 export default function Layout() {
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    clearToken();
+  const handleLogout = async () => {
+    await logoutAdminSession();
     navigate('/login');
   };
 

@@ -25,7 +25,8 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 		Name:           "SSH Server",
 		Type:           "ssh",
 		Host:           "10.10.0.10",
-		Port:           22,
+		ExternalPort:   2222,
+		InternalPort:   22,
 		Enabled:        true,
 		CreatedAt:      time.Now().Add(-time.Hour),
 		UpdatedAt:      time.Now().Add(-time.Hour),
@@ -62,7 +63,7 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 		"access_token": accessToken,
 		"resource_id":  "res-ssh",
 		"protocol":     "ssh",
-		"port":         float64(22),
+		"port":         float64(2222),
 		"process": map[string]interface{}{
 			"pid":    float64(4242),
 			"name":   "ssh.exe",
@@ -97,6 +98,9 @@ func TestAgentAuthorizationGRPCProvisionsConnectedGateway(t *testing.T) {
 	sessionPayload := command.GetFields()["session"].GetStructValue()
 	if sessionPayload == nil || structFieldString(sessionPayload, "device_id") != "device-1" || structFieldString(sessionPayload, "resource_id") != "res-ssh" {
 		t.Fatalf("session payload = %+v", command.AsMap())
+	}
+	if int(sessionPayload.GetFields()["external_port"].GetNumberValue()) != 2222 || int(sessionPayload.GetFields()["internal_port"].GetNumberValue()) != 22 {
+		t.Fatalf("session ports = %+v", sessionPayload.AsMap())
 	}
 	stream.queueRecv(gatewayControlAckFor(t, command, gatewayControlAckStatusOK, "", "provisioned"))
 
@@ -162,7 +166,8 @@ func TestAgentAuthorizationGRPCReturnsStepUpChallengeWithoutGatewaySession(t *te
 		Name:           "Web App",
 		Type:           "web",
 		Host:           "web-app",
-		Port:           443,
+		ExternalPort:   443,
+		InternalPort:   8443,
 		Enabled:        true,
 		CreatedAt:      now,
 		UpdatedAt:      now,

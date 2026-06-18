@@ -17,6 +17,7 @@ func TestStoreValidatesProvisionedSession(t *testing.T) {
 		ResourceID:   "res-ssh",
 		ResourceName: "SSH Server",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 2222,
 		InternalPort: 22,
 		Protocol:     "SSH",
 		ExpiresAt:    now.Add(time.Hour),
@@ -31,12 +32,12 @@ func TestStoreValidatesProvisionedSession(t *testing.T) {
 		DeviceID:     "device-1",
 		ResourceID:   "res-ssh",
 		Protocol:     "ssh",
-		Port:         22,
+		Port:         2222,
 	})
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if session.InternalHost != "10.10.0.10" || session.InternalPort != 22 || session.Protocol != "ssh" {
+	if session.InternalHost != "10.10.0.10" || session.ExternalPort != 2222 || session.InternalPort != 22 || session.Protocol != "ssh" {
 		t.Fatalf("Validate() returned wrong session: %+v", session)
 	}
 	if session.TokenHash == "session-secret" {
@@ -53,6 +54,7 @@ func TestStoreRejectsInvalidBindings(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 2222,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -65,11 +67,11 @@ func TestStoreRejectsInvalidBindings(t *testing.T) {
 		in   ConnectCheck
 		code string
 	}{
-		{name: "bad token", in: ConnectCheck{SessionID: "sess-1", SessionToken: "wrong", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "ssh", Port: 22}, code: CodeInvalidToken},
-		{name: "wrong device", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-2", ResourceID: "res-ssh", Protocol: "ssh", Port: 22}, code: CodeDeviceMismatch},
-		{name: "wrong resource", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-rdp", Protocol: "ssh", Port: 22}, code: CodeResourceMismatch},
+		{name: "bad token", in: ConnectCheck{SessionID: "sess-1", SessionToken: "wrong", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "ssh", Port: 2222}, code: CodeInvalidToken},
+		{name: "wrong device", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-2", ResourceID: "res-ssh", Protocol: "ssh", Port: 2222}, code: CodeDeviceMismatch},
+		{name: "wrong resource", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-rdp", Protocol: "ssh", Port: 2222}, code: CodeResourceMismatch},
 		{name: "wrong port", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "ssh", Port: 3389}, code: CodeResourceMismatch},
-		{name: "wrong protocol", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "rdp", Port: 22}, code: CodeProtocolMismatch},
+		{name: "wrong protocol", in: ConnectCheck{SessionID: "sess-1", SessionToken: "session-secret", DeviceID: "device-1", ResourceID: "res-ssh", Protocol: "rdp", Port: 2222}, code: CodeProtocolMismatch},
 	}
 
 	for _, tt := range tests {
@@ -92,6 +94,7 @@ func TestStoreRejectsExpiredAndRevokedSessions(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -109,7 +112,7 @@ func TestStoreRejectsExpiredAndRevokedSessions(t *testing.T) {
 	}
 
 	store = NewStoreWithClock(func() time.Time { return now })
-	if err := store.Provision(Session{ID: "expired", DeviceID: "device-1", ResourceID: "res-ssh", InternalHost: "10.10.0.10", InternalPort: 22, Protocol: "ssh", ExpiresAt: now.Add(-time.Second)}, "token"); err == nil {
+	if err := store.Provision(Session{ID: "expired", DeviceID: "device-1", ResourceID: "res-ssh", InternalHost: "10.10.0.10", ExternalPort: 22, InternalPort: 22, Protocol: "ssh", ExpiresAt: now.Add(-time.Second)}, "token"); err == nil {
 		t.Fatal("Provision() accepted expired session")
 	}
 }
@@ -123,6 +126,7 @@ func TestStoreListSessionsReturnsCopies(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Hour),
@@ -151,6 +155,7 @@ func TestStorePurgeExpiredRemovesExpiredSessions(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-ssh",
 		InternalHost: "10.10.0.10",
+		ExternalPort: 22,
 		InternalPort: 22,
 		Protocol:     "ssh",
 		ExpiresAt:    now.Add(time.Minute),
@@ -164,6 +169,7 @@ func TestStorePurgeExpiredRemovesExpiredSessions(t *testing.T) {
 		UserID:       "user-1",
 		ResourceID:   "res-rdp",
 		InternalHost: "10.10.0.11",
+		ExternalPort: 3389,
 		InternalPort: 3389,
 		Protocol:     "rdp",
 		ExpiresAt:    now.Add(time.Hour),

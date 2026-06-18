@@ -24,37 +24,39 @@ const (
 )
 
 type agentSessionTransaction struct {
-	ID                         string
-	OrganizationID             string
-	DeviceID                   string
-	DeviceCertThumbprint       string
-	LocalUserSIDHash           string
-	WindowsLogonSessionID      string
-	WindowsSessionID           string
-	DeviceDataRevision         string
-	ClaimSecretHash            string
-	AuthURL                    string
-	Status                     string
-	Reason                     string
-	IDPProfileID               string
-	ExpectedIssuer             string
-	ExpectedClientID           string
-	BrowserState               string
-	BrowserNonce               string
-	PKCEVerifier               string
-	AuthenticatedUserSubject   string
-	AuthenticatedUserEmail     string
-	AuthenticatedUserIssuer    string
-	AuthenticatedUserID        string
-	AuthenticatedUsername      string
-	AuthenticatedUserRole      string
-	AgentSessionID             string
-	AgentSessionToken          string
-	AgentSessionTokenExpiresAt time.Time
-	PolicyEpoch                int
-	SingleUseConsumed          bool
-	CreatedAt                  time.Time
-	ExpiresAt                  time.Time
+	ID                       string
+	OrganizationID           string
+	DeviceID                 string
+	DeviceCertThumbprint     string
+	LocalUserSIDHash         string
+	WindowsLogonSessionID    string
+	WindowsSessionID         string
+	DeviceDataRevision       string
+	SessionRenewalRequired   bool
+	ClaimSecretHash          string
+	AuthURL                  string
+	Status                   string
+	Reason                   string
+	IDPProfileID             string
+	ExpectedIssuer           string
+	ExpectedClientID         string
+	BrowserState             string
+	BrowserNonce             string
+	PKCEVerifier             string
+	AuthenticatedUserSubject string
+	AuthenticatedUserEmail   string
+	AuthenticatedUserIssuer  string
+	AuthenticatedUserID      string
+	AuthenticatedUsername    string
+	AuthenticatedUserRole    string
+	AgentSessionID           string
+	PolicyEpoch              int
+	SingleUseConsumed        bool
+	CreatedAt                time.Time
+	LastActivityAt           time.Time
+	IdleExpiresAt            time.Time
+	AbsoluteExpiresAt        time.Time
+	ExpiresAt                time.Time
 }
 
 type agentSessionStore struct {
@@ -120,6 +122,37 @@ func (store *agentSessionStore) getByBrowserState(state string) (*agentSessionTr
 		}
 	}
 	return nil, false
+}
+
+func (store *agentSessionStore) getByAgentSessionID(agentSessionID string) (*agentSessionTransaction, bool) {
+	agentSessionID = strings.TrimSpace(agentSessionID)
+	if store == nil || store.state == nil || agentSessionID == "" {
+		return nil, false
+	}
+	for key, raw := range store.listRaw() {
+		var session agentSessionTransaction
+		if err := json.Unmarshal(raw, &session); err != nil {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
+			continue
+		}
+		if sessionExpired(&session, time.Now().UTC()) {
+			_ = store.state.DeleteEphemeralState(agentSessionStateKind, key)
+			continue
+		}
+		if strings.TrimSpace(session.AgentSessionID) == agentSessionID {
+			copy := session
+			return &copy, true
+		}
+	}
+	return nil, false
+}
+
+func (store *agentSessionStore) updateByAgentSessionID(agentSessionID string, fn func(*agentSessionTransaction) error) (*agentSessionTransaction, error) {
+	session, ok := store.getByAgentSessionID(agentSessionID)
+	if !ok {
+		return nil, errAgentSessionNotFound
+	}
+	return store.update(session.ID, fn)
 }
 
 func (store *agentSessionStore) deleteByAgentSessionID(agentSessionID string) bool {

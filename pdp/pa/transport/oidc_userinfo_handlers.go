@@ -78,7 +78,7 @@ func (s *Server) handleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expiresAt := time.Now().Add(s.pa.Cfg.JWTExpiry) // fallback
+	expiresAt := time.Now().Add(s.pa.Cfg.JWTExpiry)
 	if claims.ExpiresAt != nil {
 		expiresAt = claims.ExpiresAt.Time
 	}

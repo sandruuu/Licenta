@@ -93,10 +93,14 @@ func agentAuthorizeResponseToStruct(response agentAuthorizeResponse) (*structpb.
 	for _, policy := range response.Policies {
 		policies = append(policies, policy)
 	}
+	riskSignals := make([]interface{}, 0, len(response.RiskSignals))
+	for _, signal := range response.RiskSignals {
+		riskSignals = append(riskSignals, signal)
+	}
 	payload := map[string]interface{}{
 		"decision":     response.Decision,
 		"reason":       response.Reason,
-		"risk_score":   float64(response.RiskScore),
+		"risk_signals": riskSignals,
 		"matched_rule": response.MatchedRule,
 		"policies":     policies,
 	}

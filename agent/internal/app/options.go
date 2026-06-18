@@ -11,6 +11,8 @@ type ServiceConfig struct {
 	CertificateRenewBefore           time.Duration
 	CertificateRenewCheckInterval    time.Duration
 	CertificateRenewTimeout          time.Duration
+	SessionRenewBefore               time.Duration
+	SessionRenewRetryInterval        time.Duration
 	DeviceDataSyncInterval           time.Duration
 	DeviceDataSyncChangeScanInterval time.Duration
 	EnrollmentStatePath              string

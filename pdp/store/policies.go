@@ -102,6 +102,45 @@ func (s *Store) DeletePolicyRule(id string) {
 	s.db.Exec("DELETE FROM policy_rules WHERE id = ?", id)
 }
 
+func (s *Store) normalizePolicyRuleConditions() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	rows, err := s.db.Query(`SELECT id, conditions_json FROM policy_rules`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type normalizedRule struct {
+		id         string
+		conditions string
+	}
+	var updates []normalizedRule
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		normalized := toJSON(fromJSON[models.RuleConditions](raw))
+		if normalized != raw {
+			updates = append(updates, normalizedRule{id: id, conditions: normalized})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := s.db.Exec(`UPDATE policy_rules SET conditions_json = ? WHERE id = ?`, update.conditions, update.id); err != nil {
+			return err
+		}
+	}
+	if len(updates) > 0 {
+		log.Printf("[STORE] Normalized %d policy rule condition payload(s)", len(updates))
+	}
+	return nil
+}
+
 func (s *Store) GetPolicyAssignment(id string) (*models.PolicyAssignment, bool) {
 	row := s.db.QueryRow(`SELECT id, policy_id, level, organization_id, resource_id,
 		group_id, group_name, order_index, enabled, created_at, updated_at FROM policy_assignments

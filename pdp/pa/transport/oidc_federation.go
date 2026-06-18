@@ -22,8 +22,7 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 	fedState := oidcSession.ID
 	fedNonce := nonce
 
-	// Build a temporary FederationConfig from the IdentityProviderConfig
-	// so the existing FederationProvider code works unchanged.
+	// Build the request-scoped federation config from the organization's IdP.
 	fedCfg := &models.FederationConfig{
 		Issuer:        idpCfg.Issuer,
 		ClientID:      idpCfg.ClientID,
@@ -81,7 +80,7 @@ func (s *Server) resolveFederatedConfig(fedSession *auth.FederationSession) (aut
 			if claimMapping == nil {
 				claimMapping = map[string]string{}
 			}
-			return cfg.Issuer, claimMapping, cfg
+			return cfg.ID, claimMapping, cfg
 		}
 	}
 

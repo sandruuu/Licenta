@@ -294,13 +294,15 @@ Configul curent din repository:
   "tray_timeout": "10s",
   "dashboard_refresh_interval": "5s",
   "pdp_grpc_endpoint": "mtls.trust-cloud.dev:443",
-  "pdp_tls_server_name": "mtls.trust-cloud.dev",
+  "pdp_tls_server_name": "trust-cloud.dev",
   "pdp_ca_file": "pdp-ca.pem",
   "enrollment_timeout": "10m",
   "enrollment_poll_interval": "3s",
   "certificate_renew_before": "12h",
   "certificate_renew_check_interval": "1h",
   "certificate_renew_timeout": "20s",
+  "session_renew_before": "2m",
+  "session_renew_retry_interval": "15s",
   "device_data_sync_interval": "30m",
   "device_data_sync_change_scan_interval": "5s",
   "local_dns_listen_address": "127.0.0.1:53",
@@ -326,6 +328,8 @@ Campuri citite de `internal/app/config.go`:
 - `certificate_renew_before`: cat timp inainte de expirarea certificatului agentul incearca renewal; default intern `12h`.
 - `certificate_renew_check_interval`: cat de des ruleaza verificarea periodica de renewal; default intern `1h`.
 - `certificate_renew_timeout`: timeout-ul pentru un apel concret de renewal; default intern `20s`.
+- `session_renew_before`: cat timp inainte de expirarea access tokenului agentul incearca `RenewSession`; default intern `2m`.
+- `session_renew_retry_interval`: intervalul de retry cand `RenewSession` esueaza temporar; default intern `15s`.
 - `device_data_sync_interval`: heartbeat-ul periodic pentru device-data; default intern `30m`.
 - `device_data_sync_change_scan_interval`: scan fallback pentru detectarea schimbarilor; default intern in runner este `30s`, iar configul curent il seteaza la `5s`. Evenimentele Windows pot declansa raportare mai devreme.
 - `enrollment_state_path`: cale optionala pentru fisierul de enrollment. Daca lipseste, store-ul foloseste `%ProgramData%\TrustAgent\enrollment.json`.
@@ -345,7 +349,7 @@ Campuri care nu sunt citite din JSON in implementarea curenta:
 
 Exista default-uri interne pentru login in `usersession` (`10m` si `3s`), dar `internal/app/config.go` nu parseaza in prezent aceste doua chei din `config.json`. Daca apar in fisier, sunt ignorate de decoder-ul Go pentru ca structura `configFile` nu le contine.
 
-Configul nu contine `issuer_url`, client OIDC public, redirect-uri local sau setari de token refresh pentru Tray. Browser login-ul este orchestrat de PDP, iar Tray-ul primeste doar URL-uri HTTPS de browser.
+Configul nu contine `issuer_url`, client OIDC public sau redirect-uri local. Browser login-ul este orchestrat de PDP, iar Tray-ul primeste doar URL-uri HTTPS de browser.
 
 ## Instalare
 
@@ -353,7 +357,7 @@ Build si instalare enterprise:
 
 ```powershell
 .\packaging\build-enterprise-package.ps1
-.\build\TrustAgent-Setup.exe
+.\build\TrustAgent.exe
 ```
 
 Setup-ul cere UAC cand este rulat manual. In deployment enterprise poate fi rulat elevated sau ca `SYSTEM` prin Intune/SCCM/GPO.
@@ -379,7 +383,7 @@ Build enterprise:
 - cere config explicit prin `-ConfigPath` sau foloseste `agent/config.json`;
 - daca `pdp_ca_file` este relativ sau absolut si exista, copiaza CA-ul in output ca `pdp-ca.pem` si rescrie configul build-ului sa pointeze la `pdp-ca.pem`;
 - ruleaza preflight cu `-SkipEnvironmentChecks`;
-- daca `ISCC.exe` este gasit, genereaza `TrustAgent-Setup.exe` cu Inno Setup 6;
+- daca `ISCC.exe` este gasit, genereaza `TrustAgent.exe` cu Inno Setup 6;
 - daca `ISCC.exe` lipseste, lasa pachetul build fara installer exe si afiseaza mesaj.
 
 Installer Inno Setup:
@@ -731,7 +735,6 @@ Finalizare:
    - `device_cert_thumbprint`;
    - `certificate_expiry`;
    - `pdp_endpoint`;
-   - `gateway_endpoints`;
    - `enrolled_by_idp_profile_id`.
 10. Tray primeste doar update de stare.
 
@@ -758,7 +761,6 @@ Campuri persistate in `EnrollmentRecord`:
 - `device_certificate_chain_pem`;
 - `certificate_expiry`;
 - `pdp_endpoint`;
-- `gateway_endpoints`;
 - `enrolled_by_idp_profile_id`;
 - `updated_at`.
 
@@ -846,10 +848,11 @@ Pornire login:
    - method: `StartSession`;
    - path complet: `/trustagent.session.AgentSessionService/StartSession`.
 7. Requestul include device context, device data revision si local user context hash-uit.
-8. PDP nu are incredere in `device_id` din request; identitatea device-ului vine din certificatul mTLS.
-9. PDP creeaza `AgentSessionTransaction` cu status `WAITING_FOR_USER_LOGIN`.
-10. PDP returneaza `auth_url`, `claim_secret`, TTL si poll interval.
-11. Serviciul pastreaza `claim_secret`; Tray primeste doar `auth_url`.
+8. Requestul include obligatoriu `session_renewal_required=true`; sesiunea agent este intotdeauna gestionata server-side cu `RenewSession`.
+9. PDP nu are incredere in `device_id` din request; identitatea device-ului vine din certificatul mTLS.
+10. PDP creeaza `AgentSessionTransaction` cu status `WAITING_FOR_USER_LOGIN`.
+11. PDP returneaza `auth_url`, `claim_secret`, TTL si poll interval.
+12. Serviciul pastreaza `claim_secret`; Tray primeste doar `auth_url`.
 
 Browser si IdP:
 
@@ -882,7 +885,7 @@ Claim si catalog:
 6. Tokenul are:
    - audience `trustagent-api`;
    - purpose `trustagent.session`;
-   - scope-uri precum `catalog:read`, `flow:authorize`, `session:revoke`, `events:read`;
+   - scope-uri precum `catalog:read`, `flow:authorize`, `session:renew`, `session:revoke`, `events:read`;
    - binding la certificatul device prin `cnf.x5t#S256`.
 7. Serviciul cere catalogul prin gRPC mTLS + `agent_session_token`.
    - path complet: `/trustagent.session.AgentSessionService/GetCatalog`.
@@ -894,8 +897,19 @@ Claim si catalog:
    - directioneaza aceste FQDN-uri protejate catre `local_dns_server`;
    - blocheaza finalizarea autentificarii locale daca aplicarea catalogului esueaza.
 10. Serviciul salveaza catalogul per sesiune locala.
-11. Serviciul porneste watcher-ul de evenimente PDP pentru sesiunea autentificata.
-12. Tray afiseaza userul autentificat si resursele.
+11. Serviciul porneste loop-ul de `RenewSession` inainte de expirarea access tokenului agent.
+12. Serviciul porneste watcher-ul de evenimente PDP pentru sesiunea autentificata.
+13. Tray afiseaza userul autentificat si resursele.
+
+Renew user session:
+
+1. Access tokenul agentului este scurt.
+2. Inainte de `expires_at`, serviciul apeleaza gRPC mTLS `RenewSession`.
+   - path complet: `/trustagent.session.AgentSessionService/RenewSession`.
+3. PDP verifica tokenul vechi, scope-ul `session:renew`, acelasi certificat mTLS si starea server-side din Redis.
+4. PDP roteste tokenul si revoca JTI-ul vechi.
+5. Daca idle timeout-ul sau absolute timeout-ul au expirat, PDP refuza renew-ul, iar agentul semneaza userul afara si curata accesul local.
+6. Reautorizarea sesiunilor de resursa foloseste intotdeauna tokenul agent curent din manager, nu tokenul pastrat la deschiderea initiala a conexiunii.
 
 Evenimente remote:
 
@@ -922,6 +936,7 @@ Payload `StartSession` construit de agent:
 - `agent_version`, valoarea curenta fiind `TrustAgent`;
 - `device_cert_thumbprint`;
 - `device_data_revision`;
+- `session_renewal_required`, intotdeauna `true`;
 - `local_user.sid_hash`;
 - `local_user.windows_logon_session_id`;
 - `local_user.windows_session_id`.
@@ -948,6 +963,7 @@ Payload `ClaimSession`:
 - `device_id`;
 - `device_cert_thumbprint`;
 - `device_data_revision`;
+- `session_renewal_required`, intotdeauna `true`;
 - `local_user.sid_hash`;
 - `local_user.windows_logon_session_id`;
 - `local_user.windows_session_id`.
@@ -1404,14 +1420,14 @@ Raspuns `AuthorizeResource` parsat de agent:
 
 - `decision`;
 - `reason`;
-- `risk_score`;
+- `risk_signals`;
 - `matched_rule`;
 - `policies`;
 - `session_id`;
 - `session_token`;
 - `gateway_id`;
 - `gateway_endpoint`;
-- `gateway_server_name` sau aliasul `gateway_tls_server_name`;
+- `gateway_server_name`;
 - `resource_id`;
 - `protocol`;
 - `port`;
@@ -1911,6 +1927,7 @@ gRPC mTLS dupa enrollment:
 - `/trustagent.session.AgentSessionService/SessionStatus`;
 - `/trustagent.session.AgentSessionService/ClaimSession`;
 - `/trustagent.session.AgentSessionService/GetCatalog`;
+- `/trustagent.session.AgentSessionService/RenewSession`;
 - `/trustagent.session.AgentSessionService/RevokeSession`;
 - `/trustagent.device.DeviceDataService/ReportDeviceData`;
 - `/trustagent.events.AgentEventsService/Watch`;
