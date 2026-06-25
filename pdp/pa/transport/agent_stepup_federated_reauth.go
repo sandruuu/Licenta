@@ -51,14 +51,9 @@ func (s *Server) redirectStepUpReauthToIDP(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		return err
 	}
-	fedCfg := &models.FederationConfig{
-		Issuer:        idpCfg.Issuer,
-		ClientID:      idpCfg.ClientID,
-		ClientSecret:  idpCfg.ClientSecret,
-		Scopes:        idpCfg.Scopes,
-		Prompt:        "login",
-		AutoDiscovery: idpCfg.AutoDiscovery,
-		ClaimMapping:  idpCfg.ClaimMapping,
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, nil, "login")
+	if err != nil {
+		return err
 	}
 	authURL, err := s.pa.Auth.Federation.GenerateExternalAuthURL(fedCfg, s.federatedCallbackURL(), state, nonce, pkceChallenge)
 	if err != nil {
@@ -99,13 +94,11 @@ func (s *Server) handleStepUpFederatedCallback(w http.ResponseWriter, r *http.Re
 	if claimMapping == nil {
 		claimMapping = map[string]string{}
 	}
-	fedCfg := &models.FederationConfig{
-		Issuer:        idpCfg.Issuer,
-		ClientID:      idpCfg.ClientID,
-		ClientSecret:  idpCfg.ClientSecret,
-		Scopes:        idpCfg.Scopes,
-		AutoDiscovery: idpCfg.AutoDiscovery,
-		ClaimMapping:  claimMapping,
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, claimMapping, "")
+	if err != nil {
+		log.Printf("[STEP-UP] Invalid IdP configuration during callback: challenge=%s idp=%s err=%v", session.ChallengeID, idpCfg.ID, err)
+		http.Error(w, "Federation configuration invalid", http.StatusInternalServerError)
+		return true
 	}
 	tokenResp, err := s.pa.Auth.Federation.ExchangeExternalCode(fedCfg, code, s.federatedCallbackURL(), session.PKCEVerifier)
 	if err != nil {

@@ -143,7 +143,7 @@ func TestAuthenticatedStepUpMessagesIncludeResourceTarget(t *testing.T) {
 
 	manager.SetAuthenticatedStepUp(
 		"Additional security verification is required to access rdp-desktop.trustcloud.test.",
-		"https://pdp.example.test/browser/step-up/stepup-1",
+		"https://pdp.example.test/verify/stepup-1",
 		"res-rdp",
 		"rdp-desktop.trustcloud.test",
 		time.Now().Add(time.Minute),
@@ -170,7 +170,7 @@ func TestAuthenticatedStepUpDeniedKeepsResourceTarget(t *testing.T) {
 	}
 	manager.SetAuthenticatedStepUp(
 		"Additional security verification is required to access ssh.trustcloud.test.",
-		"https://pdp.example.test/browser/step-up/stepup-2",
+		"https://pdp.example.test/verify/stepup-2",
 		"res-ssh",
 		"ssh.trustcloud.test",
 		time.Now().Add(time.Minute),
@@ -197,7 +197,7 @@ func TestAuthenticatedStepUpExpirySetsErrorToastMessage(t *testing.T) {
 	}
 	manager.SetAuthenticatedStepUp(
 		"Additional security verification is required to access web-app.trustcloud.test.",
-		"https://pdp.example.test/browser/step-up/stepup-3",
+		"https://pdp.example.test/verify/stepup-3",
 		"res-web",
 		"web-app.trustcloud.test",
 		time.Now().Add(20*time.Millisecond),
@@ -433,6 +433,7 @@ func TestRefreshCatalogAppliesUpdatedCatalog(t *testing.T) {
 		state:             ipc.UserSessionStateAuthenticated,
 		agentSessionID:    "sess-catalog",
 		agentSessionToken: "agent-token",
+		message:           "Authenticated",
 		expiresAt:         time.Now().Add(time.Hour),
 	}
 
@@ -450,6 +451,9 @@ func TestRefreshCatalogAppliesUpdatedCatalog(t *testing.T) {
 	snapshot := manager.Snapshot(peer)
 	if snapshot.Catalog.Version != "catalog-v2" || len(snapshot.Catalog.Resources) != 1 {
 		t.Fatalf("snapshot catalog = %+v", snapshot.Catalog)
+	}
+	if snapshot.UserSession.Message != "Authenticated" {
+		t.Fatalf("snapshot message = %q, want Authenticated", snapshot.UserSession.Message)
 	}
 }
 

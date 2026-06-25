@@ -4,16 +4,18 @@ import "time"
 
 // User represents a registered user in the identity provider.
 type User struct {
-	ID              string   `json:"id"`
-	Username        string   `json:"username"`
-	Email           string   `json:"email"`
-	PasswordHash    string   `json:"password_hash"`
-	TOTPSecret      string   `json:"totp_secret,omitempty"`
-	MFAMethods      []string `json:"mfa_methods"`
-	Role            string   `json:"role"`
-	Disabled        bool     `json:"disabled"`
-	OrganizationID  string   `json:"organization_id,omitempty"`
-	LastTOTPCounter int64    `json:"last_totp_counter,omitempty"`
+	ID                     string    `json:"id"`
+	Username               string    `json:"username"`
+	Email                  string    `json:"email"`
+	PasswordHash           string    `json:"password_hash"`
+	PasswordChangeRequired bool      `json:"password_change_required,omitempty"`
+	PasswordChangedAt      time.Time `json:"password_changed_at,omitempty"`
+	TOTPSecret             string    `json:"totp_secret,omitempty"`
+	MFAMethods             []string  `json:"mfa_methods"`
+	Role                   string    `json:"role"`
+	Disabled               bool      `json:"disabled"`
+	OrganizationID         string    `json:"organization_id,omitempty"`
+	LastTOTPCounter        int64     `json:"last_totp_counter,omitempty"`
 
 	ExternalSubject string `json:"external_subject,omitempty"`
 	AuthSource      string `json:"auth_source,omitempty"`

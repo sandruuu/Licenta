@@ -106,7 +106,7 @@ func (s *Server) handleAdminPasskeyRegisterFinish(w http.ResponseWriter, r *http
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeAdminSessionResponse(w, http.StatusOK, response)
 }
 
 func (s *Server) handleAdminPasskeyLoginBegin(w http.ResponseWriter, r *http.Request) {
@@ -136,6 +136,10 @@ func (s *Server) handleAdminPasskeyLoginBegin(w http.ResponseWriter, r *http.Req
 	user, exists := s.pa.Auth.Users.GetUserByEmail(email)
 	if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "passkey sign-in is not configured for this account"})
+		return
+	}
+	if user.PasswordChangeRequired {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required"})
 		return
 	}
 	creds, err := s.loadWebAuthnCredentials(user.ID)
@@ -194,6 +198,10 @@ func (s *Server) handleAdminPasskeyLoginFinish(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "passkey sign-in failed"})
 		return
 	}
+	if user.PasswordChangeRequired {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required"})
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxStepUpRequestBody)
 	creds, err := s.loadWebAuthnCredentials(user.ID)
@@ -225,7 +233,7 @@ func (s *Server) handleAdminPasskeyLoginFinish(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authentication failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeAdminSessionResponse(w, http.StatusOK, response)
 }
 
 func (s *Server) authenticatePasskeyEnrollmentRequest(w http.ResponseWriter, r *http.Request) (*models.User, *paauth.CustomClaims, bool) {
@@ -254,6 +262,10 @@ func (s *Server) authenticatePasskeyEnrollmentRequest(w http.ResponseWriter, r *
 	user, exists := s.pa.Auth.Users.GetUser(claims.UserID)
 	if !exists || user == nil || user.Disabled {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return nil, nil, false
+	}
+	if user.PasswordChangeRequired {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required"})
 		return nil, nil, false
 	}
 	return user, claims, true

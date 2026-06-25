@@ -19,12 +19,6 @@ import (
 	"pdp/pki"
 )
 
-// enrollRateEntry tracks per-IP enrollment rate limiting.
-type enrollRateEntry struct {
-	count   int
-	resetAt time.Time
-}
-
 // Server is the HTTP API server for the TrustCloud component.
 type Server struct {
 	pa             *pa.PolicyAdministrator
@@ -38,10 +32,11 @@ type Server struct {
 	externalPKI   *pki.VaultClient
 	externalCAPEM []byte
 
-	agentSessions *agentSessionStore
-	adminSessions *adminSessionStore
-	stepUpAuth    *stepUpBrowserAuthStore
-	adminMFA      *adminMFAStore
+	agentSessions        *agentSessionStore
+	adminSessions        *adminSessionStore
+	stepUpAuth           *stepUpBrowserAuthStore
+	adminMFA             *adminMFAStore
+	adminPasswordChanges *adminPasswordChangeStore
 
 	// PA event broker for CAEP-style state-change notifications.
 	events *events.Broker
@@ -53,33 +48,37 @@ func NewServer(policyAdmin *pa.PolicyAdministrator, addr, mtlsCAPath string) (*S
 	if strings.TrimSpace(mtlsCAPath) == "" {
 		return nil, fmt.Errorf("strict mTLS requires mtls_ca to be configured on the PDP server")
 	}
+	if policyAdmin == nil {
+		return nil, fmt.Errorf("PDP policy administrator is required")
+	}
 	if policyAdmin.Cfg == nil {
 		return nil, fmt.Errorf("PDP config is required")
 	}
 	policyAdmin.Cfg.ApplyDefaults()
 
 	s := &Server{
-		pa:             policyAdmin,
-		mux:            http.NewServeMux(),
-		addr:           addr,
-		gatewayControl: NewGatewayControlRegistry(policyAdmin.Runtime),
-		agentSessions:  newAgentSessionStore(policyAdmin.Runtime),
-		adminSessions:  newAdminSessionStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.AdminAccessTokenTTL, policyAdmin.Cfg.Runtime.AdminSessionIdleTTL, policyAdmin.Cfg.Runtime.AdminSessionAbsoluteTTL),
-		stepUpAuth:     newStepUpBrowserAuthStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
-		adminMFA:       newAdminMFAStore(policyAdmin.Runtime),
-		events:         events.NewBroker(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.EventBufferSize),
+		pa:                   policyAdmin,
+		mux:                  http.NewServeMux(),
+		addr:                 addr,
+		gatewayControl:       NewGatewayControlRegistry(policyAdmin.Runtime),
+		agentSessions:        newAgentSessionStore(policyAdmin.Runtime),
+		adminSessions:        newAdminSessionStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.AdminAccessTokenTTL, policyAdmin.Cfg.Runtime.AdminSessionIdleTTL, policyAdmin.Cfg.Runtime.AdminSessionAbsoluteTTL),
+		stepUpAuth:           newStepUpBrowserAuthStore(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.BrowserAuthSessionTTL),
+		adminMFA:             newAdminMFAStore(policyAdmin.Runtime),
+		adminPasswordChanges: newAdminPasswordChangeStore(policyAdmin.Runtime),
+		events:               events.NewBroker(policyAdmin.Runtime, policyAdmin.Cfg.Runtime.EventBufferSize),
 	}
 
-	if policyAdmin != nil && policyAdmin.Devices != nil {
+	if policyAdmin.Devices != nil {
 		policyAdmin.Devices.SetEventPublisher(s)
 	}
-	if policyAdmin != nil && policyAdmin.Resources != nil {
+	if policyAdmin.Resources != nil {
 		policyAdmin.Resources.SetEventPublisher(s)
 	}
-	if policyAdmin != nil && policyAdmin.Enrollment != nil {
+	if policyAdmin.Enrollment != nil {
 		policyAdmin.Enrollment.SetEventPublisher(s)
 	}
-	if policyAdmin != nil && policyAdmin.Gateways != nil {
+	if policyAdmin.Gateways != nil {
 		policyAdmin.Gateways.SetEventPublisher(s)
 	}
 	s.wireSessionDeleteSink()
@@ -150,7 +149,9 @@ func (s *Server) registerRoutes() {
 	// Public endpoints (no auth required)
 	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
+	s.mux.HandleFunc("/api/auth/password/change-initial", s.handleInitialPasswordChange)
 	s.mux.HandleFunc("/api/auth/mfa/verify", s.handleMFAVerify)
+	s.mux.HandleFunc("/api/auth/mfa/recovery", s.handleMFARecovery)
 	s.mux.HandleFunc("/api/auth/passkey/login/begin", s.handleAdminPasskeyLoginBegin)
 	s.mux.HandleFunc("/api/auth/passkey/login/finish", s.handleAdminPasskeyLoginFinish)
 	s.mux.HandleFunc("/api/auth/passkey/register/begin", s.handleAdminPasskeyRegisterBegin)
@@ -165,13 +166,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/cert-fingerprint", s.handleCertFingerprint) // Public: returns server TLS cert SHA-256 fingerprint
 
 	// ─────────────────────────────────────────────
-	// Browser auth flow endpoints (Duo-like)
+	// Public agent identity flow endpoints
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage)              // Serve React access login page
-	s.mux.HandleFunc("/browser/enroll/", s.handleBrowserEnroll)        // Browser side of TrustAgent enrollment
-	s.mux.HandleFunc("/browser/session/", s.handleBrowserAgentSession) // Browser side of TrustAgent user login
-	s.mux.HandleFunc("/browser/step-up/assets/stepup.js", s.handleStepUpBrowserAsset)
-	s.mux.HandleFunc("/browser/step-up/", s.handleBrowserStepUp) // Browser side of per-resource step-up verification
+	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage) // Serve React access login page
+	s.mux.HandleFunc(publicEnrollPathPrefix, s.handleBrowserEnroll)
+	s.mux.HandleFunc(publicSignInPathPrefix, s.handleBrowserAgentSession)
+	s.mux.HandleFunc(publicStepUpAssetPath, s.handleStepUpBrowserAsset)
+	s.mux.HandleFunc(publicStepUpPathPrefix, s.handleBrowserStepUp)
 
 	// ─────────────────────────────────────────────
 	// OIDC / OAuth2 endpoints (PDP acts as IdP)
@@ -212,6 +213,9 @@ func (s *Server) registerRoutes() {
 	// Admin endpoints (JWT auth + admin role)
 	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/session", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSession)))
+	s.mux.Handle("/api/admin/account", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccount)))
+	s.mux.Handle("/api/admin/account/password", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountPassword)))
+	s.mux.Handle("/api/admin/account/recovery-codes", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountRecoveryCodes)))
 	s.mux.Handle("/api/admin/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminUsers)))
 	s.mux.Handle("/api/admin/organizations", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizations)))
 	s.mux.Handle("/api/admin/organizations/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizationByID)))

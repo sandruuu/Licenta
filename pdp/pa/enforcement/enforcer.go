@@ -87,10 +87,6 @@ func (service *Service) handleHealthChanged(evt events.Event) int {
 		if organizationID != "" && strings.TrimSpace(session.OrganizationID) != organizationID {
 			return false
 		}
-		if session.RevokeOnPostureChange {
-			service.auditContinuousRevocation(session, "device_posture_changed", "session policy requires revocation when device posture changes")
-			return true
-		}
 		allowed, denyReason := service.sessionStillAllowed(session)
 		if allowed {
 			return false

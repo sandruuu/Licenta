@@ -26,7 +26,7 @@ type stepUpPageMethod struct {
 
 func (s *Server) handleBrowserStepUp(w http.ResponseWriter, r *http.Request) {
 	setNoStoreHeaders(w)
-	challengeID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/browser/step-up/"), "/")
+	challengeID := publicPathID(r.URL.Path, publicStepUpPathPrefix)
 	if challengeID == "" {
 		http.NotFound(w, r)
 		return
@@ -86,6 +86,8 @@ func (s *Server) handleBrowserStepUp(w http.ResponseWriter, r *http.Request) {
 		switch method {
 		case "reauth":
 			s.handleStepUpReauth(w, r, challenge)
+		case "recovery":
+			s.handleStepUpRecovery(w, r, challenge)
 		case "totp":
 			s.handleStepUpTOTP(w, r, challenge)
 		default:
@@ -182,7 +184,67 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Authenticator app", true)
 	}
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=totp expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
+	if !s.userHasTOTPConfigured(user) {
+		if codes, err := s.pa.Auth.Users.GenerateRecoveryCodes(challenge.UserID); err == nil && len(codes) > 0 {
+			renderStepUpRecoveryCodesPage(w, challenge.ID, codes)
+			return
+		} else if err != nil {
+			log.Printf("[STEP-UP] Recovery code generation failed after TOTP enrollment: challenge=%s user=%s err=%v", challenge.ID, challenge.UserID, err)
+		}
+	}
 	renderEnrollmentPage(w, "Verification complete", stepUpResourceCompleteMessage, "", false)
+}
+
+func (s *Server) handleStepUpRecovery(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge) {
+	if stepUpChallengeExpired(challenge, time.Now().UTC()) {
+		renderStepUpExpiredPage(w)
+		return
+	}
+	targetMethod := strings.ToLower(strings.TrimSpace(r.Form.Get("target_method")))
+	if targetMethod == "" || !methodAllowed(challenge.Methods, targetMethod) {
+		s.renderStepUpPage(w, r, challenge, "Choose an MFA method to recover.", targetMethod)
+		return
+	}
+	if targetMethod != "totp" && targetMethod != "webauthn" {
+		s.renderStepUpPage(w, r, challenge, "Recovery is not available for this method.", targetMethod)
+		return
+	}
+	user, ok := s.stepUpUser(challenge)
+	if !ok || user == nil || user.Disabled {
+		s.renderStepUpPage(w, r, challenge, "The user for this verification request is not available.", targetMethod)
+		return
+	}
+	recoveryCode := strings.TrimSpace(r.Form.Get("recovery_code"))
+	if recoveryCode == "" {
+		s.renderStepUpPage(w, r, challenge, "Enter a recovery code.", targetMethod)
+		return
+	}
+	if err := s.pa.Auth.Users.VerifyRecoveryCode(user.ID, recoveryCode); err != nil {
+		log.Printf("[STEP-UP] Recovery code verification failed: challenge=%s user=%s err=%v", challenge.ID, user.ID, err)
+		if _, retryAllowed := s.pa.StepUps.RecordFailedAttempt(challenge.ID, "invalid MFA recovery code"); !retryAllowed {
+			s.logResourceStepUpEvent("agent_step_up_denied", challenge, stepUpRemoteIP(r), models.DecisionDeny, "Resource step-up denied after too many invalid recovery codes", false)
+			renderEnrollmentPage(w, "Verification denied", "Too many failed verification attempts. Try accessing the protected resource again.", "", false)
+			return
+		}
+		s.renderStepUpPage(w, r, challenge, "The recovery code is invalid or has already been used.", targetMethod)
+		return
+	}
+	if err := s.pa.Auth.Users.ResetMFAMethodForRecovery(user.ID, targetMethod); err != nil {
+		log.Printf("[STEP-UP] MFA recovery reset failed: challenge=%s user=%s method=%s err=%v", challenge.ID, user.ID, targetMethod, err)
+		s.renderStepUpPage(w, r, challenge, "The MFA method could not be reset. Try again.", targetMethod)
+		return
+	}
+	session, err := s.stepUpAuth.create(r, challenge, targetMethod, time.Now().UTC())
+	if err != nil {
+		log.Printf("[STEP-UP] Recovery enrollment session creation failed: challenge=%s user=%s method=%s err=%v", challenge.ID, user.ID, targetMethod, err)
+		s.renderStepUpPage(w, r, challenge, "Recovery was accepted, but setup could not be started. Try again.", targetMethod)
+		return
+	}
+	s.setStepUpAuthCookie(w, session)
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("agent_mfa_recovery_code_used", user.ID, user.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "MFA recovery code accepted for resource step-up", true)
+	}
+	http.Redirect(w, r, stepUpMethodURL(challenge.ID, targetMethod), http.StatusSeeOther)
 }
 
 func (s *Server) handleStepUpReauth(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge) {
@@ -588,7 +650,74 @@ func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challe
   height:28px;
   margin-top:4px;
 }
-</style></head><body><main id="stepup-root" class="` + panelClass + `" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `" data-expires-at="` + html.EscapeString(expiresAt) + `">` + browserBrandMarkup + `<div class="stepup-heading` + stepUpHeadingClass(hasActiveMethod) + `"><h1>` + html.EscapeString(pageTitle) + `</h1>` + pageCopyMarkup + `</div>` + messageSlot + `<div class="methods">` + methodCards.String() + actionMarkup + `</div></main><script src="/browser/step-up/assets/stepup.js" defer></script></body></html>`))
+.recovery-codes{
+  display:grid;
+  gap:8px;
+  width:100%;
+  max-width:300px;
+  margin:0 auto 18px;
+  border:1px solid var(--color-border);
+  border-radius:6px;
+  background:var(--color-surface);
+  padding:12px;
+  text-align:left;
+}
+.recovery-codes code{
+  display:block;
+  color:var(--color-text-primary);
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:.08em;
+  line-height:20px;
+}
+.recovery-complete-copy{
+  max-width:300px;
+  margin:0 auto 18px;
+}
+.recovery-panel{
+  margin-top:2px;
+}
+.recovery-panel summary{
+  cursor:pointer;
+  color:var(--color-text-secondary);
+  font-size:13px;
+  font-weight:600;
+  text-align:center;
+  list-style:none;
+}
+.recovery-panel summary::-webkit-details-marker{display:none}
+.recovery-panel summary:hover{color:var(--color-text-primary)}
+.recovery-panel form{
+  margin-top:14px;
+}
+.recovery-panel input{
+  width:100%;
+  text-transform:uppercase;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  letter-spacing:.04em;
+}
+</style></head><body><main id="stepup-root" class="` + panelClass + `" data-challenge-id="` + html.EscapeString(challenge.ID) + `" data-csrf-token="` + html.EscapeString(csrfToken) + `" data-expires-at="` + html.EscapeString(expiresAt) + `">` + browserBrandMarkup + `<div class="stepup-heading` + stepUpHeadingClass(hasActiveMethod) + `"><h1>` + html.EscapeString(pageTitle) + `</h1>` + pageCopyMarkup + `</div>` + messageSlot + `<div class="methods">` + methodCards.String() + actionMarkup + `</div></main><script src="` + publicStepUpAssetPath + `" defer></script></body></html>`))
+}
+
+func renderStepUpRecoveryCodesPage(w http.ResponseWriter, challengeID string, codes []string) {
+	var codeMarkup strings.Builder
+	for _, code := range codes {
+		codeMarkup.WriteString(`<code>`)
+		codeMarkup.WriteString(html.EscapeString(code))
+		codeMarkup.WriteString(`</code>`)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TrustCloud recovery codes</title><style>` + browserPageStyles + `
+.stepup-panel{width:min(400px,100%)}
+.completion-mark{margin:0 auto 18px}
+.stepup-heading{max-width:300px;margin:0 auto 18px}
+.stepup-heading h1{margin-bottom:12px;font-size:18px;line-height:24px}
+.stepup-copy{margin:0;color:var(--color-text-secondary);font-size:13px;line-height:20px;text-align:left}
+.recovery-codes{display:grid;gap:8px;width:100%;max-width:300px;margin:0 auto 18px;border:1px solid var(--color-border);border-radius:6px;background:var(--color-surface);padding:12px;text-align:left}
+.recovery-codes code{display:block;color:var(--color-text-primary);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;font-weight:700;letter-spacing:.08em;line-height:20px}
+.recovery-complete-copy{max-width:300px;margin:0 auto 18px}
+</style></head><body><main class="panel stepup-panel">` + browserBrandMarkup + `<div class="completion-mark" aria-hidden="true"></div><div class="stepup-heading"><h1>Verification complete</h1><p class="stepup-copy">Save these recovery codes before closing this page. Each code can be used once if you lose access to your MFA method.</p></div><div class="recovery-codes">` + codeMarkup.String() + `</div><p class="stepup-copy recovery-complete-copy">` + html.EscapeString(stepUpResourceCompleteMessage) + `</p><a class="button-link" href="` + html.EscapeString(stepUpSelectionURL(challengeID)) + `?completed=1">I saved these codes</a></main></body></html>`))
 }
 
 func (s *Server) renderStepUpMethodCard(challenge *pa.StepUpChallenge, method stepUpPageMethod, setup *models.MFAEnrollResponse, csrfToken string) string {

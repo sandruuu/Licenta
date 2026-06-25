@@ -11,11 +11,19 @@ import (
 )
 
 func Listen() (net.Listener, error) {
-	return ListenAt(PipePath())
+	return ListenForUserSID("")
+}
+
+func ListenForUserSID(authorizedUserSID string) (net.Listener, error) {
+	return ListenAtForUserSID(PipePath(), authorizedUserSID)
 }
 
 func ListenAt(pipePath string) (net.Listener, error) {
-	securityDescriptor, err := PipeSecurityDescriptor("")
+	return ListenAtForUserSID(pipePath, "")
+}
+
+func ListenAtForUserSID(pipePath string, authorizedUserSID string) (net.Listener, error) {
+	securityDescriptor, err := PipeSecurityDescriptor(authorizedUserSID)
 	if err != nil {
 		return nil, fmt.Errorf("build named pipe security descriptor: %w", err)
 	}

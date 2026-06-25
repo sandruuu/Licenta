@@ -214,7 +214,7 @@ func TestCompleteInteractiveSessionDeletesInteractiveTransaction(t *testing.T) {
 		t.Fatalf("StartInteractiveSession returned error: %v", err)
 	}
 	organization := &models.Organization{ID: "organization-1", Enabled: true}
-	idp := &models.IdentityProviderConfig{ID: "idp-1", Issuer: "https://idp.test", ClientID: "client-1"}
+	idp := &models.IdentityProviderConfig{ID: "idp-1", Issuer: "https://idp.test", ClientID: "client-1", ClientSecret: "secret-1"}
 	if _, err := service.BeginInteractiveIDPLogin(start.SessionID, organization, idp, "pkce", "nonce", "state"); err != nil {
 		t.Fatalf("BeginInteractiveIDPLogin returned error: %v", err)
 	}

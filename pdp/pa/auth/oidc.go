@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -63,7 +64,7 @@ type OIDCClientStore interface {
 // a new access token. Implements one-time-use rotation: each use revokes
 // the old token and issues a new one.
 type RefreshToken struct {
-	Token     string    `json:"token"`
+	TokenHash string    `json:"token_hash"`
 	ClientID  string    `json:"client_id"`
 	UserID    string    `json:"user_id"`
 	Username  string    `json:"username"`
@@ -149,6 +150,11 @@ func (m *OIDCManager) RegisterClient(client *OIDCClient) error {
 	if client == nil || strings.TrimSpace(client.ClientID) == "" {
 		return fmt.Errorf("OIDC client_id is required")
 	}
+	for _, redirectURI := range client.RedirectURIs {
+		if _, ok := parseOIDCRedirectURI(redirectURI); !ok {
+			return fmt.Errorf("invalid redirect_uri for client %s: %s", client.ClientID, redirectURI)
+		}
+	}
 	if err := m.clients.SaveOIDCClient(client); err != nil {
 		return err
 	}
@@ -173,7 +179,6 @@ func (m *OIDCManager) ValidateClientID(clientID string) (*OIDCClient, error) {
 }
 
 // ValidateRedirectURI checks that the redirect_uri is allowed for the client.
-// Supports exact match or suffix wildcard (entry ending with '*').
 func (m *OIDCManager) ValidateRedirectURI(client *OIDCClient, redirectURI string) bool {
 	if len(client.RedirectURIs) == 0 {
 		// No redirect URIs configured — reject all (secure default)
@@ -181,16 +186,42 @@ func (m *OIDCManager) ValidateRedirectURI(client *OIDCClient, redirectURI string
 		return false
 	}
 	for _, allowed := range client.RedirectURIs {
-		if allowed == redirectURI {
+		if oidcRedirectURIsEqual(allowed, redirectURI) {
 			return true
-		}
-		// Support prefix wildcard: "https://*/auth/callback" style
-		if len(allowed) > 1 && allowed[len(allowed)-1] == '*' {
-			prefix := allowed[:len(allowed)-1]
-			if len(redirectURI) >= len(prefix) && redirectURI[:len(prefix)] == prefix {
-				return true
-			}
 		}
 	}
 	return false
+}
+
+func oidcRedirectURIsEqual(allowed, redirectURI string) bool {
+	allowedURL, ok := parseOIDCRedirectURI(allowed)
+	if !ok {
+		return false
+	}
+	redirectURL, ok := parseOIDCRedirectURI(redirectURI)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(allowedURL.Scheme, redirectURL.Scheme) &&
+		strings.EqualFold(allowedURL.Host, redirectURL.Host) &&
+		allowedURL.EscapedPath() == redirectURL.EscapedPath() &&
+		allowedURL.RawQuery == redirectURL.RawQuery
+}
+
+func parseOIDCRedirectURI(raw string) (*url.URL, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, "*") {
+		return nil, false
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed == nil {
+		return nil, false
+	}
+	if parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return nil, false
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, false
+	}
+	return parsed, true
 }

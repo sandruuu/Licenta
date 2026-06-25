@@ -1,8 +1,13 @@
 package auth
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func TestEnrollmentTokenUsesDedicatedAudienceAndPurpose(t *testing.T) {
@@ -77,6 +82,64 @@ func TestAuthTokenCanCarrySessionAndCustomTTL(t *testing.T) {
 	}
 	if claims.ExpiresAt == nil || time.Until(claims.ExpiresAt.Time) > 3*time.Minute {
 		t.Fatalf("custom ttl was not applied: expires_at=%v", claims.ExpiresAt)
+	}
+}
+
+func TestParseAuthTokenRejectsWrongIssuer(t *testing.T) {
+	manager := newTestJWTManager(t)
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "unexpected-issuer",
+			Subject:   "user-1",
+			Audience:  jwt.ClaimStrings{AgentTokenAudience},
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			ID:        "jti-1",
+		},
+		UserID:   "user-1",
+		Username: "user@example.com",
+		Role:     "user",
+		MFADone:  true,
+	})
+	signed, err := token.SignedString(manager.privateKey)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	if _, err := manager.ParseAuthTokenForAudience(signed, AgentTokenAudience); err == nil {
+		t.Fatalf("ParseAuthTokenForAudience accepted token with wrong issuer")
+	}
+}
+
+func TestParseAuthTokenRejectsNonES256ECDSA(t *testing.T) {
+	manager := newTestJWTManager(t)
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate P-384 key: %v", err)
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodES384, CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    manager.issuer,
+			Subject:   "user-1",
+			Audience:  jwt.ClaimStrings{AgentTokenAudience},
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			ID:        "jti-1",
+		},
+		UserID:   "user-1",
+		Username: "user@example.com",
+		Role:     "user",
+		MFADone:  true,
+	})
+	signed, err := token.SignedString(key)
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+
+	if _, err := manager.ParseAuthTokenForAudience(signed, AgentTokenAudience); err == nil {
+		t.Fatalf("ParseAuthTokenForAudience accepted ECDSA token that was not ES256")
 	}
 }
 

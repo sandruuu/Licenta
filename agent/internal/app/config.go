@@ -38,6 +38,7 @@ type configFile struct {
 	TrafficProxyListenAddress        string `json:"traffic_proxy_listen_address,omitempty"`
 	WFPDriverDevicePath              string `json:"wfp_driver_device_path,omitempty"`
 	WFPFailClosed                    *bool  `json:"wfp_fail_closed,omitempty"`
+	PipeAuthorizedUserSID            string `json:"pipe_authorized_user_sid,omitempty"`
 }
 
 func loadServiceConfig(serviceConfig ServiceConfig) (ServiceConfig, error) {
@@ -71,6 +72,7 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 	}
 	options.TrafficProxyListenAddress = strings.TrimSpace(config.TrafficProxyListenAddress)
 	options.WFPDriverDevicePath = strings.TrimSpace(config.WFPDriverDevicePath)
+	options.PipeAuthorizedUserSID = strings.TrimSpace(config.PipeAuthorizedUserSID)
 	options.WFPFailClosed = true
 	if config.WFPFailClosed != nil {
 		options.WFPFailClosed = *config.WFPFailClosed

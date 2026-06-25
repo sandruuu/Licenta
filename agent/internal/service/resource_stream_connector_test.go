@@ -92,7 +92,7 @@ func TestResourceStreamConnectorRecordsStepUpRequired(t *testing.T) {
 			Decision:          flowauthorization.DecisionStepUpRequired,
 			Reason:            "step-up required",
 			StepUpChallengeID: "stepup-1",
-			StepUpURL:         "https://pdp.example.test/browser/step-up/stepup-1",
+			StepUpURL:         "https://pdp.example.test/verify/stepup-1",
 		}},
 		tunnel: &fakeGatewayTunnel{},
 		onStepUpRequired: func(request trafficinterception.StreamRequest, authorization flowauthorization.AuthorizeResponse) {

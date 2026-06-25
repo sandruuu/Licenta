@@ -2,7 +2,6 @@ package transport
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 )
@@ -34,16 +33,4 @@ func generateCSRFToken() string {
 		return ""
 	}
 	return hex.EncodeToString(data)
-}
-
-func validateCSRF(r *http.Request) bool {
-	cookie, err := r.Cookie("csrf_token")
-	if err != nil || cookie.Value == "" {
-		return false
-	}
-	headerToken := r.Header.Get("X-CSRF-Token")
-	if headerToken == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(headerToken)) == 1
 }

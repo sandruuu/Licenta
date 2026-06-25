@@ -126,6 +126,17 @@ func TestValidateAndMapExternalClaimsVerifiesIDTokenSignature(t *testing.T) {
 	}
 }
 
+func TestExchangeExternalCodeRequiresClientSecret(t *testing.T) {
+	fp := NewFederationProvider(newFederationTestState(), "openid", nil, time.Minute, time.Second)
+	_, err := fp.ExchangeExternalCode(&models.FederationConfig{
+		Issuer:   "https://idp.example.test",
+		ClientID: "trustcloud",
+	}, "code-1", "https://pdp.example.test/callback", "verifier-1")
+	if err == nil || !strings.Contains(err.Error(), "client_secret") {
+		t.Fatalf("ExchangeExternalCode() error = %v, want client_secret requirement", err)
+	}
+}
+
 type federationTestState struct {
 	values map[string][]byte
 }

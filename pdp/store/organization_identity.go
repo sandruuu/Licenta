@@ -120,8 +120,8 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 
 	_, err := s.db.Exec(`INSERT INTO identity_provider_configs
 		(id, organization_id, name, type, enabled, domains_json, issuer, client_id, client_secret,
-		 scim_token, scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 scim_token, scim_token_expires_at, scim_token_rotated_at, scopes, auto_discovery, claim_mapping_json, group_role_mapping_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			organization_id = EXCLUDED.organization_id,
 			name = EXCLUDED.name,
@@ -132,6 +132,8 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 			client_id = EXCLUDED.client_id,
 			client_secret = EXCLUDED.client_secret,
 			scim_token = EXCLUDED.scim_token,
+			scim_token_expires_at = EXCLUDED.scim_token_expires_at,
+			scim_token_rotated_at = EXCLUDED.scim_token_rotated_at,
 			scopes = EXCLUDED.scopes,
 			auto_discovery = EXCLUDED.auto_discovery,
 			claim_mapping_json = EXCLUDED.claim_mapping_json,
@@ -140,7 +142,8 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 			updated_at = EXCLUDED.updated_at`,
 		cfg.ID, cfg.OrganizationID, cfg.Name, cfg.Type, b2i(cfg.Enabled),
 		toJSON(cfg.Domains), cfg.Issuer, cfg.ClientID, cfg.ClientSecret,
-		cfg.SCIMToken, cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
+		cfg.SCIMToken, fmtTime(cfg.SCIMTokenExpiresAt), fmtTime(cfg.SCIMTokenRotatedAt),
+		cfg.Scopes, b2i(cfg.AutoDiscovery), toJSON(claimMapping), toJSON(groupRoleMapping),
 		fmtTime(cfg.CreatedAt), fmtTime(cfg.UpdatedAt))
 	if err != nil {
 		log.Printf("[STORE] Failed to save IdP config %s: %v", cfg.ID, err)
@@ -149,7 +152,7 @@ func (s *Store) SaveIdentityProviderConfig(cfg *models.IdentityProviderConfig) {
 
 func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderConfig, bool) {
 	row := s.db.QueryRow(`SELECT id, organization_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scim_token_expires_at, scim_token_rotated_at, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE id = ?`, id)
 	return s.scanIdentityProviderConfig(row)
@@ -157,7 +160,7 @@ func (s *Store) GetIdentityProviderConfig(id string) (*models.IdentityProviderCo
 
 func (s *Store) ListIdentityProviderConfigsForOrganization(organizationID string) []*models.IdentityProviderConfig {
 	rows, err := s.db.Query(`SELECT id, organization_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scim_token_expires_at, scim_token_rotated_at, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE organization_id = ? ORDER BY created_at ASC`, organizationID)
 	if err != nil {
@@ -178,7 +181,7 @@ func (s *Store) FindIdentityProviderByDomain(domain string) (*models.IdentityPro
 	}
 
 	rows, err := s.db.Query(`SELECT id, organization_id, name, type, enabled, domains_json,
-		issuer, client_id, client_secret, scim_token, scopes, auto_discovery,
+		issuer, client_id, client_secret, scim_token, scim_token_expires_at, scim_token_rotated_at, scopes, auto_discovery,
 		claim_mapping_json, group_role_mapping_json, created_at, updated_at
 		FROM identity_provider_configs WHERE enabled = 1`)
 	if err != nil {
@@ -247,11 +250,11 @@ func (s *Store) scanIdentityProviderConfig(row interface {
 }) (*models.IdentityProviderConfig, bool) {
 	cfg := &models.IdentityProviderConfig{}
 	var enabled, autoDiscovery int
-	var domainsJSON, claimMappingJSON, groupRoleMappingJSON, createdAt, updatedAt string
+	var domainsJSON, claimMappingJSON, groupRoleMappingJSON, scimTokenExpiresAt, scimTokenRotatedAt, createdAt, updatedAt string
 
 	err := row.Scan(&cfg.ID, &cfg.OrganizationID, &cfg.Name, &cfg.Type, &enabled,
 		&domainsJSON, &cfg.Issuer, &cfg.ClientID, &cfg.ClientSecret, &cfg.SCIMToken,
-		&cfg.Scopes, &autoDiscovery, &claimMappingJSON, &groupRoleMappingJSON,
+		&scimTokenExpiresAt, &scimTokenRotatedAt, &cfg.Scopes, &autoDiscovery, &claimMappingJSON, &groupRoleMappingJSON,
 		&createdAt, &updatedAt)
 	if err != nil {
 		return nil, false
@@ -271,6 +274,8 @@ func (s *Store) scanIdentityProviderConfig(row interface {
 	if cfg.GroupRoleMapping == nil {
 		cfg.GroupRoleMapping = []models.GroupRoleRule{}
 	}
+	cfg.SCIMTokenExpiresAt = parseTime(scimTokenExpiresAt)
+	cfg.SCIMTokenRotatedAt = parseTime(scimTokenRotatedAt)
 	cfg.CreatedAt = parseTime(createdAt)
 	cfg.UpdatedAt = parseTime(updatedAt)
 	return cfg, true

@@ -9,6 +9,8 @@ func (s *Store) createTables() error {
 			username TEXT UNIQUE NOT NULL,
 			email TEXT NOT NULL,
 			password_hash TEXT NOT NULL,
+			password_change_required INTEGER DEFAULT 0,
+			password_changed_at TEXT DEFAULT '',
 			totp_secret TEXT DEFAULT '',
 			mfa_methods_json TEXT DEFAULT '[]',
 			last_totp_counter INTEGER DEFAULT -1,
@@ -21,6 +23,8 @@ func (s *Store) createTables() error {
 			updated_at TEXT DEFAULT '',
 			last_login_at TEXT DEFAULT ''
 		)`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required INTEGER DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TEXT DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
 		`CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users(lower(email))`,
@@ -146,6 +150,9 @@ func (s *Store) createTables() error {
 
 		`CREATE TABLE IF NOT EXISTS device_data (
 			device_id TEXT PRIMARY KEY,
+			user_id TEXT DEFAULT '',
+			username TEXT DEFAULT '',
+			agent_session_id TEXT DEFAULT '',
 			hostname TEXT DEFAULT '',
 			os TEXT DEFAULT '',
 			checks_json TEXT DEFAULT '[]',
@@ -153,6 +160,9 @@ func (s *Store) createTables() error {
 			reported_at TEXT DEFAULT '',
 			organization_id TEXT DEFAULT ''
 		)`,
+		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT ''`,
+		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS username TEXT DEFAULT ''`,
+		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS agent_session_id TEXT DEFAULT ''`,
 
 		`CREATE TABLE IF NOT EXISTS revoked_tokens (
 			jti TEXT PRIMARY KEY,
@@ -252,6 +262,16 @@ func (s *Store) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_webauthn_credential_id ON webauthn_credentials(credential_id)`,
 
+		`CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			code_hash TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			used_at TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mfa_recovery_codes_user ON mfa_recovery_codes(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_mfa_recovery_codes_active ON mfa_recovery_codes(user_id, used_at)`,
+
 		`CREATE TABLE IF NOT EXISTS identity_provider_configs (
 			id TEXT PRIMARY KEY,
 			organization_id TEXT NOT NULL,
@@ -263,6 +283,8 @@ func (s *Store) createTables() error {
 			client_id TEXT DEFAULT '',
 			client_secret TEXT DEFAULT '',
 			scim_token TEXT DEFAULT '',
+			scim_token_expires_at TEXT DEFAULT '',
+			scim_token_rotated_at TEXT DEFAULT '',
 			scopes TEXT DEFAULT '',
 			auto_discovery INTEGER DEFAULT 1,
 			claim_mapping_json TEXT DEFAULT '{}',
@@ -270,6 +292,8 @@ func (s *Store) createTables() error {
 			created_at TEXT DEFAULT '',
 			updated_at TEXT DEFAULT ''
 		)`,
+		`ALTER TABLE identity_provider_configs ADD COLUMN IF NOT EXISTS scim_token_expires_at TEXT DEFAULT ''`,
+		`ALTER TABLE identity_provider_configs ADD COLUMN IF NOT EXISTS scim_token_rotated_at TEXT DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_idp_organization ON identity_provider_configs(organization_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_idp_single_organization ON identity_provider_configs(organization_id) WHERE organization_id <> ''`,
 

@@ -7,6 +7,10 @@ import (
 	"pdp/models"
 )
 
+type sessionScanner interface {
+	Scan(dest ...any) error
+}
+
 // ─────────────────────────────────────────────
 // Session operations
 // ─────────────────────────────────────────────
@@ -19,28 +23,10 @@ func (s *Store) GetSession(id string) (*models.Session, bool) {
 		revoke_on_posture_change, revoked
 		FROM sessions WHERE id = ?`, id)
 
-	sess := &models.Session{}
-	var revoked, revokeOnPostureChange int
-	var createdAt, expiresAt, lastActivity, revalidateAfter, riskSignalsJSON, stepUpVerifiedAt, stepUpExpiresAt string
-
-	err := row.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-		&sess.Resource, &sess.GatewayID, &sess.Protocol, &riskSignalsJSON, &sess.OrganizationID, &sess.PolicyID,
-		&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.StepUpACR, &sess.StepUpMethod,
-		&sess.StepUpStrength, &sess.StepUpAAGUID, &sess.StepUpAttachment, &stepUpVerifiedAt, &stepUpExpiresAt, &sess.SessionMaxAgeSeconds,
-		&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revoked)
+	sess, err := scanSession(row)
 	if err != nil {
 		return nil, false
 	}
-
-	sess.Revoked = i2b(revoked)
-	sess.RevokeOnPostureChange = i2b(revokeOnPostureChange)
-	sess.RiskSignals = fromJSON[[]string](riskSignalsJSON)
-	sess.CreatedAt = parseTime(createdAt)
-	sess.ExpiresAt = parseTime(expiresAt)
-	sess.LastActivity = parseTime(lastActivity)
-	sess.RevalidateAfter = parseTime(revalidateAfter)
-	sess.StepUpVerifiedAt = parseTime(stepUpVerifiedAt)
-	sess.StepUpExpiresAt = parseTime(stepUpExpiresAt)
 	return sess, true
 }
 
@@ -120,30 +106,39 @@ func (s *Store) ListUserSessions(userID string) []*models.Session {
 func (s *Store) scanSessions(rows *sql.Rows) []*models.Session {
 	var sessions []*models.Session
 	for rows.Next() {
-		sess := &models.Session{}
-		var revoked, revokeOnPostureChange int
-		var createdAt, expiresAt, lastActivity, revalidateAfter, riskSignalsJSON, stepUpVerifiedAt, stepUpExpiresAt string
-
-		if err := rows.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
-			&sess.Resource, &sess.GatewayID, &sess.Protocol, &riskSignalsJSON, &sess.OrganizationID, &sess.PolicyID,
-			&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.StepUpACR, &sess.StepUpMethod,
-			&sess.StepUpStrength, &sess.StepUpAAGUID, &sess.StepUpAttachment, &stepUpVerifiedAt, &stepUpExpiresAt, &sess.SessionMaxAgeSeconds,
-			&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revoked); err != nil {
+		sess, err := scanSession(rows)
+		if err != nil {
 			continue
 		}
-
-		sess.Revoked = i2b(revoked)
-		sess.RevokeOnPostureChange = i2b(revokeOnPostureChange)
-		sess.RiskSignals = fromJSON[[]string](riskSignalsJSON)
-		sess.CreatedAt = parseTime(createdAt)
-		sess.ExpiresAt = parseTime(expiresAt)
-		sess.LastActivity = parseTime(lastActivity)
-		sess.RevalidateAfter = parseTime(revalidateAfter)
-		sess.StepUpVerifiedAt = parseTime(stepUpVerifiedAt)
-		sess.StepUpExpiresAt = parseTime(stepUpExpiresAt)
 		sessions = append(sessions, sess)
 	}
 	return sessions
+}
+
+func scanSession(scanner sessionScanner) (*models.Session, error) {
+	sess := &models.Session{}
+	var revoked, revokeOnPostureChange int
+	var createdAt, expiresAt, lastActivity, revalidateAfter, riskSignalsJSON, stepUpVerifiedAt, stepUpExpiresAt string
+
+	err := scanner.Scan(&sess.ID, &sess.UserID, &sess.Username, &sess.DeviceID, &sess.SourceIP,
+		&sess.Resource, &sess.GatewayID, &sess.Protocol, &riskSignalsJSON, &sess.OrganizationID, &sess.PolicyID,
+		&createdAt, &expiresAt, &lastActivity, &revalidateAfter, &sess.StepUpACR, &sess.StepUpMethod,
+		&sess.StepUpStrength, &sess.StepUpAAGUID, &sess.StepUpAttachment, &stepUpVerifiedAt, &stepUpExpiresAt, &sess.SessionMaxAgeSeconds,
+		&sess.RevalidateEverySeconds, &revokeOnPostureChange, &revoked)
+	if err != nil {
+		return nil, err
+	}
+
+	sess.Revoked = i2b(revoked)
+	sess.RevokeOnPostureChange = i2b(revokeOnPostureChange)
+	sess.RiskSignals = fromJSON[[]string](riskSignalsJSON)
+	sess.CreatedAt = parseTime(createdAt)
+	sess.ExpiresAt = parseTime(expiresAt)
+	sess.LastActivity = parseTime(lastActivity)
+	sess.RevalidateAfter = parseTime(revalidateAfter)
+	sess.StepUpVerifiedAt = parseTime(stepUpVerifiedAt)
+	sess.StepUpExpiresAt = parseTime(stepUpExpiresAt)
+	return sess, nil
 }
 
 func (s *Store) RevokeSession(id string) bool {

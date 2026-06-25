@@ -12,6 +12,15 @@ type WebAuthnCredential struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// MFARecoveryCode stores a one-time recovery code hash for an MFA account.
+type MFARecoveryCode struct {
+	ID        string    `json:"id"`
+	UserID    string    `json:"user_id"`
+	CodeHash  string    `json:"code_hash"`
+	CreatedAt time.Time `json:"created_at"`
+	UsedAt    time.Time `json:"used_at,omitempty"`
+}
+
 // PushChallenge represents a push-based MFA approval request.
 type PushChallenge struct {
 	ID          string    `json:"id"`

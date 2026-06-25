@@ -23,7 +23,10 @@ func (s *Server) handleSCIMUsers(w http.ResponseWriter, r *http.Request, organiz
 			writeSCIMJSON(w, http.StatusOK, s.scimUserResponse(r, user))
 			return
 		}
-		users := s.filteredDirectoryUsers(r, organization.ID, idpCfg.ID)
+		users, ok := s.filteredDirectoryUsers(w, r, organization.ID, idpCfg.ID)
+		if !ok {
+			return
+		}
 		writeSCIMList(w, r, users, func(item interface{}) interface{} {
 			return s.scimUserResponse(r, item.(*models.DirectoryUser))
 		})
@@ -92,7 +95,10 @@ func (s *Server) handleSCIMGroups(w http.ResponseWriter, r *http.Request, organi
 			writeSCIMJSON(w, http.StatusOK, s.scimGroupResponse(r, group))
 			return
 		}
-		groups := s.filteredDirectoryGroups(r, organization.ID, idpCfg.ID)
+		groups, ok := s.filteredDirectoryGroups(w, r, organization.ID, idpCfg.ID)
+		if !ok {
+			return
+		}
 		writeSCIMList(w, r, groups, func(item interface{}) interface{} {
 			return s.scimGroupResponse(r, item.(*models.DirectoryGroup))
 		})
@@ -164,7 +170,7 @@ func (s *Server) upsertSCIMUser(w http.ResponseWriter, r *http.Request, organiza
 		existing, found = s.pa.Store.FindDirectoryUserByExternalID(organizationID, idpID, payload.ExternalID)
 	}
 	if !found {
-		existing, found = s.pa.Store.FindDirectoryUserByUserName(organizationID, idpID, payload.UserName)
+		existing, _ = s.pa.Store.FindDirectoryUserByUserName(organizationID, idpID, payload.UserName)
 	}
 
 	now := time.Now().UTC()
@@ -237,7 +243,7 @@ func (s *Server) upsertSCIMGroup(w http.ResponseWriter, r *http.Request, organiz
 		existing, found = s.pa.Store.FindDirectoryGroupByExternalID(organizationID, idpID, payload.ExternalID)
 	}
 	if !found {
-		existing, found = s.pa.Store.FindDirectoryGroupByDisplayName(organizationID, idpID, payload.DisplayName)
+		existing, _ = s.pa.Store.FindDirectoryGroupByDisplayName(organizationID, idpID, payload.DisplayName)
 	}
 
 	now := time.Now().UTC()
@@ -457,9 +463,17 @@ func (s *Server) applySCIMGroupPatch(organizationID, idpID string, group *models
 	return fmt.Errorf("unsupported group patch path")
 }
 
-func (s *Server) filteredDirectoryUsers(r *http.Request, organizationID, idpID string) []interface{} {
+func (s *Server) filteredDirectoryUsers(w http.ResponseWriter, r *http.Request, organizationID, idpID string) ([]interface{}, bool) {
 	users := s.pa.Store.ListDirectoryUsers(organizationID, idpID)
-	filter, hasFilter := parseSCIMFilter(r.URL.Query().Get("filter"))
+	filter, hasFilter, err := parseSCIMFilter(r.URL.Query().Get("filter"))
+	if err != nil {
+		writeSCIMError(w, http.StatusBadRequest, err.Error(), "invalidFilter")
+		return nil, false
+	}
+	if hasFilter && !validSCIMUserFilterAttribute(filter.Attribute) {
+		writeSCIMError(w, http.StatusBadRequest, "unsupported user filter attribute", "invalidFilter")
+		return nil, false
+	}
 	result := make([]interface{}, 0, len(users))
 	for _, user := range users {
 		if user == nil {
@@ -470,12 +484,20 @@ func (s *Server) filteredDirectoryUsers(r *http.Request, organizationID, idpID s
 		}
 		result = append(result, user)
 	}
-	return result
+	return result, true
 }
 
-func (s *Server) filteredDirectoryGroups(r *http.Request, organizationID, idpID string) []interface{} {
+func (s *Server) filteredDirectoryGroups(w http.ResponseWriter, r *http.Request, organizationID, idpID string) ([]interface{}, bool) {
 	groups := s.pa.Store.ListDirectoryGroups(organizationID, idpID)
-	filter, hasFilter := parseSCIMFilter(r.URL.Query().Get("filter"))
+	filter, hasFilter, err := parseSCIMFilter(r.URL.Query().Get("filter"))
+	if err != nil {
+		writeSCIMError(w, http.StatusBadRequest, err.Error(), "invalidFilter")
+		return nil, false
+	}
+	if hasFilter && !validSCIMGroupFilterAttribute(filter.Attribute) {
+		writeSCIMError(w, http.StatusBadRequest, "unsupported group filter attribute", "invalidFilter")
+		return nil, false
+	}
 	result := make([]interface{}, 0, len(groups))
 	for _, group := range groups {
 		if group == nil {
@@ -486,7 +508,7 @@ func (s *Server) filteredDirectoryGroups(r *http.Request, organizationID, idpID 
 		}
 		result = append(result, group)
 	}
-	return result
+	return result, true
 }
 
 func (s *Server) scimUserResponse(r *http.Request, user *models.DirectoryUser) scimUserResource {

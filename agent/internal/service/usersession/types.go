@@ -45,6 +45,7 @@ type Dependencies struct {
 	DeviceDataSnapshot func() ipc.DeviceDataReport
 	OnCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	OnLogout           func(context.Context, ipc.PeerIdentity) error
+	OnAuthenticated    func(context.Context, ipc.PeerIdentity)
 	Clock              func() time.Time
 }
 
@@ -194,6 +195,7 @@ type Manager struct {
 	deviceDataSnapshot func() ipc.DeviceDataReport
 	onCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	onLogout           func(context.Context, ipc.PeerIdentity) error
+	onAuthenticated    func(context.Context, ipc.PeerIdentity)
 	clock              func() time.Time
 	sessions           map[string]*sessionState
 	signedOutMessages  map[string]string

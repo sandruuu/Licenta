@@ -26,8 +26,8 @@ func NewGRPCClientFromConnection(connection *grpc.ClientConn) (Client, error) {
 	return &GRPCClient{connection: connection}, nil
 }
 
-func (client *GRPCClient) ReportDeviceData(ctx context.Context, report ipc.DeviceDataReport) error {
-	payload, err := structpb.NewStruct(deviceDataPayload(report))
+func (client *GRPCClient) ReportDeviceData(ctx context.Context, report ipc.DeviceDataReport, session SessionContext) error {
+	payload, err := structpb.NewStruct(deviceDataPayload(report, session))
 	if err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (client *GRPCClient) Close() error {
 	return nil
 }
 
-func deviceDataPayload(report ipc.DeviceDataReport) map[string]any {
+func deviceDataPayload(report ipc.DeviceDataReport, session SessionContext) map[string]any {
 	checks := make([]any, 0, len(report.Checks))
 	for _, check := range report.Checks {
 		entry := map[string]any{
@@ -57,10 +57,12 @@ func deviceDataPayload(report ipc.DeviceDataReport) map[string]any {
 		checks = append(checks, entry)
 	}
 	payload := map[string]any{
-		"device_id": report.DeviceID,
-		"hostname":  report.Hostname,
-		"os":        report.OS,
-		"checks":    checks,
+		"device_id":           report.DeviceID,
+		"hostname":            report.Hostname,
+		"os":                  report.OS,
+		"checks":              checks,
+		"agent_session_id":    session.AgentSessionID,
+		"agent_session_token": session.AgentSessionToken,
 	}
 	if !report.CollectedAt.IsZero() {
 		payload["collected_at"] = report.CollectedAt.UTC().Format(timeRFC3339Nano)

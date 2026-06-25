@@ -68,12 +68,6 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// writeError logs the real error server-side and returns a sanitized message to the client.
-func writeError(w http.ResponseWriter, status int, userMsg string, err error) {
-	log.Printf("[ERROR] %s: %v", userMsg, err)
-	writeJSON(w, status, map[string]string{"error": userMsg})
-}
-
 func (s *Server) getCAPEM() ([]byte, error) {
 	if len(s.externalCAPEM) > 0 {
 		return s.externalCAPEM, nil

@@ -240,6 +240,13 @@ func (fp *FederationProvider) GenerateExternalAuthURL(fedCfg *models.FederationC
 // ExchangeExternalCode exchanges an authorization code at the external IdP's
 // token endpoint and returns the raw token response.
 func (fp *FederationProvider) ExchangeExternalCode(fedCfg *models.FederationConfig, code, redirectURI, codeVerifier string) (*FederatedTokenResponse, error) {
+	if fedCfg == nil {
+		return nil, fmt.Errorf("federation config is required")
+	}
+	clientSecret := strings.TrimSpace(fedCfg.ClientSecret)
+	if clientSecret == "" {
+		return nil, fmt.Errorf("client_secret is required")
+	}
 	disc, err := fp.Discover(fedCfg.Issuer)
 	if err != nil {
 		return nil, err
@@ -252,9 +259,7 @@ func (fp *FederationProvider) ExchangeExternalCode(fedCfg *models.FederationConf
 		"client_id":     {fedCfg.ClientID},
 		"code_verifier": {codeVerifier},
 	}
-	if fedCfg.ClientSecret != "" {
-		data.Set("client_secret", fedCfg.ClientSecret)
-	}
+	data.Set("client_secret", clientSecret)
 
 	client := &http.Client{Timeout: fp.httpTimeout}
 	resp, err := client.PostForm(disc.TokenEndpoint, data)

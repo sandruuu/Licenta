@@ -90,7 +90,7 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		DeviceDataRevision:     strings.TrimSpace(structFieldString(request, "device_data_revision")),
 		SessionRenewalRequired: true,
 		ClaimSecretHash:        hashSessionSecret(claimSecret),
-		AuthURL:                publicOrigin + "/browser/session/" + sessionID,
+		AuthURL:                publicSignInURL(publicOrigin, sessionID),
 		Status:                 agentSessionStatusWaitingForUserLogin,
 		PolicyEpoch:            1,
 		CreatedAt:              now,

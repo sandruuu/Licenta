@@ -41,7 +41,7 @@ func EnsureCAPEMCompatible(existingCAPath string, currentCAPEM []byte) error {
 	}
 
 	return fmt.Errorf(
-		"Vault PKI CA changed; refusing to overwrite %s because enrolled device and gateway certificates would become invalid (saved_ca_sha256=%s current_ca_sha256=%s)",
+		"vault PKI CA changed; refusing to overwrite %s because enrolled device and gateway certificates would become invalid (saved_ca_sha256=%s current_ca_sha256=%s)",
 		path,
 		certificateSHA256(existingCert),
 		certificateSHA256(currentCert),

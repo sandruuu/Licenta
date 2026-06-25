@@ -33,6 +33,10 @@ func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*i
 		if err := ipc.DecodeBody(request.Body, &payload); err != nil {
 			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, err.Error()), nil
 		}
+		peer, ok := ipc.PeerIdentityFromContext(ctx)
+		if !ok || !peer.Verified || strings.TrimSpace(peer.UserSID) == "" {
+			return ipc.NewErrorResponse(request.ID, ipc.ErrorCodeInvalidRequest, "verified IPC peer identity is required"), nil
+		}
 		response, code, err := service.enrollment.StartInteractive(ctx)
 		if err != nil {
 			return ipc.NewErrorResponse(request.ID, code, err.Error()), nil

@@ -22,14 +22,11 @@ func (s *Server) redirectToExternalIdP(w http.ResponseWriter, r *http.Request, o
 	fedState := oidcSession.ID
 	fedNonce := nonce
 
-	// Build the request-scoped federation config from the organization's IdP.
-	fedCfg := &models.FederationConfig{
-		Issuer:        idpCfg.Issuer,
-		ClientID:      idpCfg.ClientID,
-		ClientSecret:  idpCfg.ClientSecret,
-		Scopes:        idpCfg.Scopes,
-		AutoDiscovery: idpCfg.AutoDiscovery,
-		ClaimMapping:  idpCfg.ClaimMapping,
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, nil, "")
+	if err != nil {
+		log.Printf("[FEDERATION] Invalid IdP configuration: idp=%s err=%v", idpCfg.ID, err)
+		http.Error(w, "Federation configuration error", http.StatusInternalServerError)
+		return
 	}
 
 	extAuthURL, err := s.pa.Auth.Federation.GenerateExternalAuthURL(
@@ -89,21 +86,6 @@ func (s *Server) resolveFederatedConfig(fedSession *auth.FederationSession) (aut
 
 // buildFederationConfigForExchange constructs a FederationConfig struct for
 // the token exchange call from the organization-level IdP config.
-func (s *Server) buildFederationConfigForExchange(_ *auth.FederationSession, _ string, claimMapping map[string]string, idpCfg *models.IdentityProviderConfig) *models.FederationConfig {
-	if idpCfg != nil {
-		return &models.FederationConfig{
-			Issuer:        idpCfg.Issuer,
-			ClientID:      idpCfg.ClientID,
-			ClientSecret:  idpCfg.ClientSecret,
-			Scopes:        idpCfg.Scopes,
-			AutoDiscovery: idpCfg.AutoDiscovery,
-			ClaimMapping:  claimMapping,
-		}
-	}
-
-	return nil
-}
-
 // federatedCallbackURL returns the PDP's federated callback URL based on request host.
 func (s *Server) federatedCallbackURL() string {
 	return s.appConfig().Public.FederatedCallbackURL
@@ -164,10 +146,9 @@ func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Exchange the code at the external IdP's token endpoint.
-	// Build a FederationConfig for the exchange from whichever source was resolved.
-	fedCfg := s.buildFederationConfigForExchange(fedSession, authSource, claimMapping, idpCfg)
-	if fedCfg == nil {
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, claimMapping, "")
+	if err != nil {
+		log.Printf("[FEDERATION] Invalid IdP configuration during callback: idp=%s err=%v", authSource, err)
 		http.Error(w, "Federation configuration invalid", http.StatusInternalServerError)
 		return
 	}

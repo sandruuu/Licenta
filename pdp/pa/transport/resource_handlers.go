@@ -343,7 +343,7 @@ func dashboardFilePath(urlPath string) string {
 }
 
 func isReservedServerPath(urlPath string) bool {
-	for _, prefix := range []string{"/api", "/auth", "/browser", "/scim", "/.well-known", "/health", "/live", "/ready"} {
+	for _, prefix := range []string{"/api", "/auth", "/browser", "/enroll", "/sign-in", "/verify", "/scim", "/.well-known", "/health", "/live", "/ready"} {
 		if urlPath == prefix || strings.HasPrefix(urlPath, prefix+"/") {
 			return true
 		}

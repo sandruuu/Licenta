@@ -46,11 +46,18 @@ type EnrollmentRecordProvider interface {
 }
 
 type Client interface {
-	ReportDeviceData(context.Context, ipc.DeviceDataReport) error
+	ReportDeviceData(context.Context, ipc.DeviceDataReport, SessionContext) error
 	Close() error
 }
 
 type ClientFactory func(context.Context, enrollment.EnrollmentRecord) (Client, error)
+
+type SessionContext struct {
+	AgentSessionID    string
+	AgentSessionToken string
+}
+
+type SessionProvider func() (SessionContext, bool)
 
 type Dependencies struct {
 	Logger        *slog.Logger
@@ -58,6 +65,7 @@ type Dependencies struct {
 	Watcher       Watcher
 	Enrollment    EnrollmentRecordProvider
 	ClientFactory ClientFactory
+	Session       SessionProvider
 	Clock         func() time.Time
 }
 
@@ -67,6 +75,7 @@ type Runner struct {
 	watcher       Watcher
 	enrollment    EnrollmentRecordProvider
 	clientFactory ClientFactory
+	session       SessionProvider
 	clock         func() time.Time
 	config        Config
 	trigger       chan string
@@ -103,6 +112,7 @@ func NewRunner(config Config, dependencies Dependencies) *Runner {
 		watcher:       dependencies.Watcher,
 		enrollment:    dependencies.Enrollment,
 		clientFactory: dependencies.ClientFactory,
+		session:       dependencies.Session,
 		clock:         clock,
 		config:        config,
 		trigger:       make(chan string, 8),
@@ -176,6 +186,12 @@ func (runner *Runner) sync(ctx context.Context, reason string) {
 		runner.lastSentFingerprint = ""
 		runner.lastPeriodicReport = time.Time{}
 	}
+	session, ok := runner.activeSession()
+	if !ok {
+		runner.lastSentFingerprint = ""
+		runner.lastPeriodicReport = time.Time{}
+		return
+	}
 
 	report, err := runner.collector.Collect(ctx, record.DeviceID)
 	if err != nil {
@@ -198,14 +214,27 @@ func (runner *Runner) sync(ctx context.Context, reason string) {
 		runner.logger.Warn("Failed to prepare device data sync client", "error", err)
 		return
 	}
-	if err := client.ReportDeviceData(callCtx, report); err != nil {
+	if err := client.ReportDeviceData(callCtx, report, session); err != nil {
 		runner.logger.Warn("Failed to report device data to PDP", "device_id", record.DeviceID, "reason", reason, "error", err)
 		return
 	}
 
 	runner.lastSentFingerprint = fingerprint
 	runner.lastPeriodicReport = now
-	runner.logger.Info("Reported device data to PDP", "device_id", record.DeviceID, "reason", reportReason(reason, changed, due), "checks", len(report.Checks))
+	runner.logger.Info("Reported device data to PDP", "device_id", record.DeviceID, "agent_session_id", session.AgentSessionID, "reason", reportReason(reason, changed, due), "checks", len(report.Checks))
+}
+
+func (runner *Runner) activeSession() (SessionContext, bool) {
+	if runner == nil || runner.session == nil {
+		return SessionContext{}, false
+	}
+	session, ok := runner.session()
+	if !ok || strings.TrimSpace(session.AgentSessionToken) == "" {
+		return SessionContext{}, false
+	}
+	session.AgentSessionID = strings.TrimSpace(session.AgentSessionID)
+	session.AgentSessionToken = strings.TrimSpace(session.AgentSessionToken)
+	return session, true
 }
 
 func (runner *Runner) ensureClient(ctx context.Context, record enrollment.EnrollmentRecord) (Client, error) {
@@ -266,16 +295,25 @@ func triggerReason(reason string) string {
 }
 
 func reportFingerprint(report ipc.DeviceDataReport) string {
+	type postureCheck struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+	}
 	normalized := struct {
-		DeviceID string                `json:"device_id"`
-		Hostname string                `json:"hostname"`
-		OS       string                `json:"os"`
-		Checks   []ipc.DeviceDataCheck `json:"checks"`
+		DeviceID string         `json:"device_id"`
+		Checks   []postureCheck `json:"checks"`
 	}{
 		DeviceID: strings.TrimSpace(report.DeviceID),
-		Hostname: strings.TrimSpace(report.Hostname),
-		OS:       strings.TrimSpace(report.OS),
-		Checks:   cloneReport(report).Checks,
+	}
+	for _, check := range report.Checks {
+		name := strings.ToLower(strings.TrimSpace(check.Name))
+		if name == "" {
+			continue
+		}
+		normalized.Checks = append(normalized.Checks, postureCheck{
+			Name:   name,
+			Status: strings.ToLower(strings.TrimSpace(check.Status)),
+		})
 	}
 	sort.SliceStable(normalized.Checks, func(i, j int) bool {
 		left := normalized.Checks[i]
@@ -283,29 +321,9 @@ func reportFingerprint(report ipc.DeviceDataReport) string {
 		if left.Name != right.Name {
 			return left.Name < right.Name
 		}
-		if left.Status != right.Status {
-			return left.Status < right.Status
-		}
-		return left.Description < right.Description
+		return left.Status < right.Status
 	})
 	data, _ := json.Marshal(normalized)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
-}
-
-func cloneReport(report ipc.DeviceDataReport) ipc.DeviceDataReport {
-	clone := report
-	if report.Checks != nil {
-		clone.Checks = make([]ipc.DeviceDataCheck, len(report.Checks))
-		for index, check := range report.Checks {
-			clone.Checks[index] = check
-			if check.Details != nil {
-				clone.Checks[index].Details = make(map[string]string, len(check.Details))
-				for key, value := range check.Details {
-					clone.Checks[index].Details[key] = value
-				}
-			}
-		}
-	}
-	return clone
 }

@@ -76,15 +76,6 @@ func (s *Service) validateAssignedResourcesOrganization(organizationID string, r
 	return nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func (s *Service) clock() time.Time {
 	if s != nil && s.now != nil {
 		return s.now()

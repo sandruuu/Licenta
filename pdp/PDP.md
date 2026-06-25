@@ -777,11 +777,11 @@ Comportament:
 - tine cont de lockout prin Redis runtime state;
 - reseteaza failed attempts la autentificare primara reusita.
 
-Login-ul cu parola nu intoarce niciodata token final dupa parola. Raspunsul este fie `mfa_required`, fie `mfa_setup_required`, iar tokenul administrativ final este emis doar dupa verificarea MFA.
+Login-ul cu parola nu intoarce niciodata token final dupa parola. Daca administratorul are marcata schimbarea obligatorie a parolei, raspunsul este `password_change_required` si fluxul se opreste pana la setarea unei parole noi. In celelalte cazuri, raspunsul este fie `mfa_required`, fie `mfa_setup_required`, iar tokenul administrativ final este emis doar dupa verificarea MFA.
 
 ### 9.2 Provisioning admin
 
-PDP nu creeaza administratori la pornire si nu expune endpoint public pentru creare administrator. Conturile locale de administrator sunt provisionate direct in PostgreSQL de operator, cu `password_hash` bcrypt si rol `platform_admin`.
+PDP nu creeaza administratori la pornire si nu expune endpoint public pentru creare administrator. Conturile locale de administrator sunt provisionate direct in PostgreSQL de operator, cu `password_hash` bcrypt si rol `platform_admin`. Pentru un cont creat cu parola temporara, campul `password_change_required` trebuie setat la `1`, astfel incat prima autentificare sa permita doar schimbarea parolei.
 
 ### 9.3 TOTP
 
@@ -794,10 +794,15 @@ Daca un admin nu are TOTP activ, login-ul creeaza un secret pending si intoarce:
 La `POST /api/auth/mfa/verify`:
 
 - daca exista secret pending, codul activeaza MFA;
+- dupa activarea MFA sunt generate coduri de recuperare afisate o singura data;
 - altfel codul verifica TOTP existent;
 - challenge-ul este consumat la succes;
 - failed attempts sunt contorizate;
 - la prea multe esecuri se aplica lockout.
+
+Codurile de recuperare sunt asociate contului MFA, nu unei metode MFA anume. PDP pastreaza doar hash-ul fiecarui cod. Un cod poate fi folosit o singura data prin `POST /api/auth/mfa/recovery`, iar folosirea lui nu emite sesiune administrativa. In schimb, codul porneste un nou flux de configurare TOTP, dupa care se genereaza un set nou de coduri.
+
+Pentru accesul la resurse, aceleasi coduri pot fi folosite in pagina de step-up. Codul de recuperare nu finalizeaza accesul la resursa. Dupa verificarea lui, metoda selectata pentru step-up este resetata si utilizatorul trebuie sa o inroleze din nou. Abia dupa finalizarea noii inrolari, challenge-ul de step-up este marcat ca finalizat.
 
 TOTP este implementat cu:
 
@@ -1233,12 +1238,12 @@ PDP genereaza:
 - device challenge random;
 - poll secret random;
 - hash pentru poll secret;
-- URL browser `<base>/browser/enroll/{session}`;
+- URL browser `<base>/enroll/{session}`;
 - expiry dupa `BrowserSessionTTL`.
 
 Statusul initial este `WAITING_FOR_IDP_DISCOVERY`.
 
-Pagina browser de enrollment poate redirectiona inapoi la aceeasi ruta cu `?cancelled=1` cand utilizatorul anuleaza flow-ul. Session ID-ul din path este cel generat de PDP, cu prefix `erq`; valorile din teste de forma `/browser/enroll/erq_test` sunt fixture-uri, nu ID-uri reale de productie.
+Pagina browser de enrollment poate redirectiona inapoi la aceeasi ruta cu `?cancelled=1` cand utilizatorul anuleaza flow-ul. Session ID-ul din path este cel generat de PDP, cu prefix `erq`; valorile din teste de forma `/enroll/erq_test` sunt fixture-uri, nu ID-uri reale de productie.
 
 ### 14.3 Login IdP pentru enrollment
 
@@ -1325,7 +1330,7 @@ PDP creeaza:
 - session request ID cu prefix `srq`;
 - claim secret random;
 - hash claim secret;
-- URL browser `/browser/session/{id}`;
+- URL browser `/sign-in/{id}`;
 - status `WAITING_FOR_USER_LOGIN`;
 - policy epoch initial;
 - expiry dupa `BrowserAuthSessionTTL`.
@@ -1417,8 +1422,7 @@ Catalogul include o politica de colectare device data derivata din politicile ap
 
 gRPC:
 
-- `trustagent.device.DeviceDataService/ReportDeviceData`;
-- `Heartbeat`.
+- `trustagent.device.DeviceDataService/ReportDeviceData`.
 
 `ReportDeviceData`:
 
@@ -1432,13 +1436,6 @@ gRPC:
 - salveaza raportul;
 - auditeaza `device_data_report`;
 - publica `health.changed`.
-
-`Heartbeat`:
-
-- cere raport raw existent;
-- actualizeaza timestamp-uri;
-- publica `health.changed`;
-- daca nu exista raport anterior, intoarce failed precondition.
 
 ### 15.8 AuthorizeResource
 
@@ -1523,9 +1520,9 @@ Numarul maxim de incercari esuate este `5`.
 
 URL-ul step-up este:
 
-`{PublicOrigin}/browser/step-up/{challenge_id}`
+`{PublicOrigin}/verify/{challenge_id}`
 
-Ruta browser accepta si query params de stare/UI: `method=totp` sau `method=webauthn` selecteaza metoda afisata, `completed=1` este folosit dupa finalizarea WebAuthn din asset-ul JS, iar `cancelled=1` marcheaza revenirea dupa anulare. Exemplul de test `/browser/step-up/stepup-1` este un fixture; in runtime ID-ul real este challenge ID-ul generat de `StepUpManager`.
+Ruta browser accepta si query params de stare/UI: `method=totp` sau `method=webauthn` selecteaza metoda afisata, `completed=1` este folosit dupa finalizarea WebAuthn din asset-ul JS, iar `cancelled=1` marcheaza revenirea dupa anulare. Exemplul de test `/verify/stepup-1` este un fixture; in runtime ID-ul real este challenge ID-ul generat de `StepUpManager`.
 
 La completare, managerul salveaza:
 
@@ -1783,10 +1780,10 @@ Evenimente suprimate si sterse din lant:
 ### 21.4 Browser helper flows
 
 - `GET /auth/login`
-- `GET /browser/enroll/{session}`
-- `GET /browser/session/{session}`
-- `GET /browser/step-up/{challenge}`
-- `GET /browser/step-up/assets/stepup.js`
+- `GET /enroll/{session}`
+- `GET /sign-in/{session}`
+- `GET /verify/{challenge}`
+- `GET /verify/assets/stepup.js`
 
 ### 21.5 OIDC
 
@@ -1914,7 +1911,6 @@ Servicii:
   - `GetCatalog`
 - `trustagent.device.DeviceDataService`
   - `ReportDeviceData`
-  - `Heartbeat`
 - `trustagent.events.AgentEventsService`
   - `Watch`
 - `trustcloud.agent.AgentAuthorizationService`
@@ -1944,7 +1940,6 @@ Full method paths gRPC folosite de interceptori/logica:
 - `/trustagent.session.AgentSessionService/RevokeSession`
 - `/trustcloud.catalog.DeviceCatalogService/GetCatalog`
 - `/trustagent.device.DeviceDataService/ReportDeviceData`
-- `/trustagent.device.DeviceDataService/Heartbeat`
 - `/trustagent.events.AgentEventsService/Watch`
 - `/trustcloud.agent.AgentAuthorizationService/AuthorizeResource`
 - `/trustagent.enrollment.EnrollmentService/StartSession`

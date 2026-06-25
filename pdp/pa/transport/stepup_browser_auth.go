@@ -158,7 +158,7 @@ func (s *Server) setStepUpAuthCookie(w http.ResponseWriter, session *stepUpBrows
 	http.SetCookie(w, &http.Cookie{
 		Name:     stepUpAuthCookieName,
 		Value:    "",
-		Path:     "/browser/step-up/",
+		Path:     publicStepUpPathPrefix,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,

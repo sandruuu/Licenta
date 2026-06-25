@@ -47,6 +47,7 @@ func serviceConfigJSON() string {
   "traffic_proxy_listen_address": "127.0.0.1:18787",
   "wfp_driver_device_path": "\\\\.\\TrustAgentWfp",
   "wfp_fail_closed": true,
+  "pipe_authorized_user_sid": "S-1-5-21-1000",
   "tray_timeout": "10s",
   "dashboard_refresh_interval": "30s"
 }`
@@ -59,7 +60,7 @@ func TestLoadServiceConfigLoadsServiceConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadServiceConfig returned error: %v", err)
 	}
-	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != filepath.Join(configDir, "ca.pem") || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.CertificateRenewBefore != 12*time.Hour || config.CertificateRenewCheckInterval != time.Hour || config.CertificateRenewTimeout != 20*time.Second || config.SessionRenewBefore != 2*time.Minute || config.SessionRenewRetryInterval != 15*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH || !config.TrafficInterceptionEnabled || config.TrafficProxyListenAddress != "127.0.0.1:18787" || config.WFPDriverDevicePath != `\\.\TrustAgentWfp` || !config.WFPFailClosed {
+	if config.PDPGRPCEndpoint != "pdp.example.com:443" || config.PDPTLSServerName != "pdp.example.com" || config.PDPCAFile != filepath.Join(configDir, "ca.pem") || config.EnrollmentTimeout != 10*time.Minute || config.EnrollmentPollInterval != 3*time.Second || config.CertificateRenewBefore != 12*time.Hour || config.CertificateRenewCheckInterval != time.Hour || config.CertificateRenewTimeout != 20*time.Second || config.SessionRenewBefore != 2*time.Minute || config.SessionRenewRetryInterval != 15*time.Second || config.DeviceDataSyncInterval != 30*time.Minute || config.DeviceDataSyncChangeScanInterval != 30*time.Second || config.LocalDNSListenAddress != "127.0.0.1:53" || config.LocalDNSServer != "127.0.0.1" || config.SyntheticIPCIDR != "100.64.0.0/10" || !config.HardenBrowserDoH || !config.TrafficInterceptionEnabled || config.TrafficProxyListenAddress != "127.0.0.1:18787" || config.WFPDriverDevicePath != `\\.\TrustAgentWfp` || !config.WFPFailClosed || config.PipeAuthorizedUserSID != "S-1-5-21-1000" {
 		t.Fatalf("service config = %+v", config)
 	}
 }

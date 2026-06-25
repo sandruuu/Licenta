@@ -82,7 +82,7 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, d
 		IPSANs:     ipStrings(certIPNames),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("Vault sign CSR: %w", err)
+		return nil, fmt.Errorf("vault sign CSR: %w", err)
 	}
 
 	// 5. Get CA certificate for mTLS client verification

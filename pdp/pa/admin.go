@@ -82,10 +82,3 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store, runtimeState *re
 
 	return pa
 }
-
-func (pa *PolicyAdministrator) ReportDeviceData(report *models.DeviceDataReport) {
-	if pa == nil || pa.Devices == nil {
-		return
-	}
-	pa.Devices.RecordDeviceData(report)
-}

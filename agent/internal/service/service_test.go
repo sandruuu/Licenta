@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
 	flowauthorization "agent/internal/service/flow-authorization"
 	trafficinterception "agent/internal/service/traffic-interception"
@@ -35,6 +36,16 @@ func newTestService(options serviceTestOptions) *Service {
 		DeviceDataSyncClientFactory: options.DeviceDataSyncClientFactory,
 		ProtectedResources:          options.ProtectedResources,
 		Clock:                       options.Clock,
+	})
+}
+
+func verifiedPeerContext() context.Context {
+	return ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		ProcessID:             1234,
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
 	})
 }
 
@@ -110,13 +121,28 @@ func TestServiceReturnsAgentDashboard(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsInteractiveEnrollmentWithoutVerifiedPeer(t *testing.T) {
+	service := newTestService(serviceTestOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartEnrollmentInteractive, ipc.StartEnrollmentInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	response, err := service.HandleIPC(context.Background(), request)
+	if err != nil {
+		t.Fatalf("HandleIPC returned error: %v", err)
+	}
+	if response.OK || response.Error == nil || response.Error.Code != ipc.ErrorCodeInvalidRequest {
+		t.Fatalf("response = %+v, want invalid_request", response)
+	}
+}
+
 func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	store := &memoryEnrollmentStore{}
 	client := &fakeEnrollmentClient{
 		start: enrollment.EnrollmentStartSessionResponse{
 			EnrollmentSessionID: "erq_123",
-			AuthURL:             "https://pdp.example.com/browser/enroll/erq_123",
+			AuthURL:             "https://pdp.example.com/enroll/erq_123",
 			DeviceChallenge:     "device-challenge",
 			PollSecret:          "poll-secret",
 			ExpiresAt:           now.Add(time.Minute),
@@ -153,7 +179,7 @@ func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
 	}
-	response, err := service.HandleIPC(context.Background(), request)
+	response, err := service.HandleIPC(verifiedPeerContext(), request)
 	if err != nil {
 		t.Fatalf("HandleIPC returned error: %v", err)
 	}
@@ -185,7 +211,7 @@ func TestServiceDoesNotStartInteractiveEnrollmentWhenAlreadyEnrolled(t *testing.
 	client := &fakeEnrollmentClient{
 		start: enrollment.EnrollmentStartSessionResponse{
 			EnrollmentSessionID: "erq_new",
-			AuthURL:             "https://pdp.example.com/browser/enroll/erq_new",
+			AuthURL:             "https://pdp.example.com/enroll/erq_new",
 			DeviceChallenge:     "device-challenge",
 			PollSecret:          "poll-secret",
 			ExpiresAt:           now.Add(time.Minute),
@@ -203,7 +229,7 @@ func TestServiceDoesNotStartInteractiveEnrollmentWhenAlreadyEnrolled(t *testing.
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
 	}
-	response, err := service.HandleIPC(context.Background(), request)
+	response, err := service.HandleIPC(verifiedPeerContext(), request)
 	if err != nil {
 		t.Fatalf("HandleIPC returned error: %v", err)
 	}
@@ -226,14 +252,14 @@ func TestServiceDoesNotStartInteractiveEnrollmentWhenAlreadyEnrolled(t *testing.
 	}
 }
 
-func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
+func TestServiceReportsDeviceDataAfterUserAuthentication(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	store := &memoryEnrollmentStore{}
 	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
 	client := &fakeEnrollmentClient{
 		start: enrollment.EnrollmentStartSessionResponse{
 			EnrollmentSessionID: "erq_123",
-			AuthURL:             "https://pdp.example.com/browser/enroll/erq_123",
+			AuthURL:             "https://pdp.example.com/enroll/erq_123",
 			DeviceChallenge:     "device-challenge",
 			PollSecret:          "poll-secret",
 			ExpiresAt:           now.Add(time.Minute),
@@ -247,9 +273,12 @@ func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
 			ExpiresAt:             now.Add(time.Hour),
 		},
 	}
+	sessionClient := authenticatedFakeUserSessionClient(now)
 	service := New(Config{
 		EnrollmentPollInterval:           10 * time.Millisecond,
 		EnrollmentTimeout:                time.Minute,
+		LoginPollInterval:                10 * time.Millisecond,
+		LoginTimeout:                     time.Minute,
 		DeviceDataSyncInterval:           30 * time.Minute,
 		DeviceDataSyncChangeScanInterval: time.Hour,
 	}, Dependencies{
@@ -267,6 +296,7 @@ func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
 			},
 		},
 		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
 		DeviceDataCollector: fakeDeviceDataCollector{report: testDeviceDataReport(now, ipc.DeviceDataStatusGood)},
 		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
 			return deviceDataSyncClient, nil
@@ -280,13 +310,19 @@ func TestServiceReportsDeviceDataImmediatelyAfterEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest returned error: %v", err)
 	}
-	if response, err := service.HandleIPC(context.Background(), request); err != nil || !response.OK {
+	if response, err := service.HandleIPC(verifiedPeerContext(), request); err != nil || !response.OK {
 		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
 	}
 	waitForEnrollmentState(t, service, ipc.EnrollmentStateEnrolled)
+	deviceDataSyncClient.expectReportCount(t, 0, 80*time.Millisecond)
+
+	authenticateServiceUser(t, service)
 	report := deviceDataSyncClient.waitForReports(t, 1)[0]
 	if report.DeviceID != "dev_123" || len(report.Checks) != 1 {
 		t.Fatalf("device data sync report = %+v", report)
+	}
+	if session := deviceDataSyncClient.sessionContexts()[0]; session.AgentSessionID != "sess_123" || session.AgentSessionToken != "session-token" {
+		t.Fatalf("device data sync session = %+v", session)
 	}
 }
 
@@ -300,6 +336,7 @@ func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
 		CertificateExpiry:    now.Add(time.Hour),
 	}}
 	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	sessionClient := authenticatedFakeUserSessionClient(now)
 	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
 		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
 		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
@@ -311,6 +348,7 @@ func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:               func() time.Time { return now },
 		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
 		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
@@ -320,11 +358,58 @@ func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go service.runDeviceDataSync(ctx)
+	deviceDataSyncClient.expectReportCount(t, 0, 80*time.Millisecond)
+
+	authenticateServiceUser(t, service)
 
 	reports := deviceDataSyncClient.waitForReports(t, 2)
 	if reports[0].Checks[0].Status != ipc.DeviceDataStatusGood || reports[1].Checks[0].Status != ipc.DeviceDataStatusCritical {
 		t.Fatalf("device data sync reports = %+v", reports)
 	}
+}
+
+func TestServiceDoesNotReportDeviceDataWhenOnlyDetailsChange(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	sessionClient := authenticatedFakeUserSessionClient(now)
+	first := testDeviceDataReport(now, ipc.DeviceDataStatusGood)
+	second := testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusGood)
+	second.Checks[0].Description = "Firewall state refreshed"
+	second.Checks[0].Details = map[string]string{"LastUpdated": now.Add(time.Second).Format(time.RFC3339)}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{first, second}}
+	service := New(Config{
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: 10 * time.Millisecond,
+	}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+	deviceDataSyncClient.expectReportCount(t, 0, 80*time.Millisecond)
+
+	authenticateServiceUser(t, service)
+
+	reports := deviceDataSyncClient.waitForReports(t, 1)
+	if reports[0].Checks[0].Status != ipc.DeviceDataStatusGood {
+		t.Fatalf("first device data sync report = %+v", reports[0])
+	}
+	deviceDataSyncClient.expectReportCount(t, 1, 120*time.Millisecond)
 }
 
 func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T) {
@@ -337,6 +422,7 @@ func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T
 		CertificateExpiry:    now.Add(time.Hour),
 	}}
 	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	sessionClient := authenticatedFakeUserSessionClient(now)
 	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
 		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
 		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
@@ -348,6 +434,7 @@ func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:               func() time.Time { return now },
 		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
 		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
@@ -357,6 +444,9 @@ func TestServiceReportsDeviceDataImmediatelyOnDeviceDataSyncTrigger(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go service.runDeviceDataSync(ctx)
+	deviceDataSyncClient.expectReportCount(t, 0, 80*time.Millisecond)
+
+	authenticateServiceUser(t, service)
 
 	first := deviceDataSyncClient.waitForReports(t, 1)
 	if first[0].Checks[0].Status != ipc.DeviceDataStatusGood {
@@ -381,7 +471,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	sessionClient := &fakeUserSessionClient{
 		start: usersession.StartSessionResponse{
 			SessionRequestID: "srq_123",
-			AuthURL:          "https://pdp.example.com/browser/session/srq_123",
+			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
 			PollInterval:     10 * time.Millisecond,
@@ -464,7 +554,7 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 	sessionClient := &fakeUserSessionClient{
 		start: usersession.StartSessionResponse{
 			SessionRequestID: "srq_123",
-			AuthURL:          "https://pdp.example.com/browser/session/srq_123",
+			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
 			PollInterval:     10 * time.Millisecond,
@@ -559,7 +649,7 @@ func TestServiceLogoutRevokesSessionAndClearsCatalog(t *testing.T) {
 	sessionClient := &fakeUserSessionClient{
 		start: usersession.StartSessionResponse{
 			SessionRequestID: "srq_123",
-			AuthURL:          "https://pdp.example.com/browser/session/srq_123",
+			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
 			PollInterval:     10 * time.Millisecond,
@@ -854,6 +944,51 @@ func waitForEnrollmentState(t *testing.T, service *Service, expected ipc.Enrollm
 	}
 }
 
+func authenticatedFakeUserSessionClient(now time.Time) *fakeUserSessionClient {
+	return &fakeUserSessionClient{
+		start: usersession.StartSessionResponse{
+			SessionRequestID: "srq_123",
+			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
+			ClaimSecret:      "claim-secret",
+			ExpiresAt:        now.Add(time.Minute),
+			PollInterval:     10 * time.Millisecond,
+			Status:           usersession.StatusWaitingForUserLogin,
+		},
+		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
+		claim: usersession.ClaimSessionResponse{
+			AgentSessionID:    "sess_123",
+			AgentSessionToken: "session-token",
+			ExpiresAt:         now.Add(time.Minute),
+			DisplayName:       "user@example.com",
+			Email:             "user@example.com",
+		},
+		catalog: usersession.CatalogResponse{
+			Version:     "cat_1",
+			TTLSeconds:  300,
+			PolicyEpoch: "1",
+		},
+	}
+}
+
+func authenticateServiceUser(t *testing.T, service *Service) context.Context {
+	t.Helper()
+	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	})
+	request, err := ipc.NewRequest("req-user-login", ipc.OperationStartUserLoginInteractive, ipc.StartUserLoginInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if response, err := service.HandleIPC(peerCtx, request); err != nil || !response.OK {
+		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
+	}
+	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	return peerCtx
+}
+
 type fakeEnrollmentClient struct {
 	start      enrollment.EnrollmentStartSessionResponse
 	startCalls int
@@ -984,15 +1119,17 @@ func (manager *fakeProtectedResources) clearCount() int {
 }
 
 type fakeDeviceDataSyncClient struct {
-	mu      sync.Mutex
-	reports []ipc.DeviceDataReport
-	closed  bool
+	mu       sync.Mutex
+	reports  []ipc.DeviceDataReport
+	sessions []devicedatasync.SessionContext
+	closed   bool
 }
 
-func (client *fakeDeviceDataSyncClient) ReportDeviceData(_ context.Context, report ipc.DeviceDataReport) error {
+func (client *fakeDeviceDataSyncClient) ReportDeviceData(_ context.Context, report ipc.DeviceDataReport, session devicedatasync.SessionContext) error {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.reports = append(client.reports, cloneDeviceDataReport(report))
+	client.sessions = append(client.sessions, session)
 	return nil
 }
 
@@ -1026,6 +1163,39 @@ func (client *fakeDeviceDataSyncClient) waitForReports(t *testing.T, count int) 
 			client.mu.Unlock()
 		}
 	}
+}
+
+func (client *fakeDeviceDataSyncClient) expectReportCount(t *testing.T, count int, duration time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-timer.C:
+			client.mu.Lock()
+			got := len(client.reports)
+			client.mu.Unlock()
+			if got != count {
+				t.Fatalf("device data sync reports = %d, want %d", got, count)
+			}
+			return
+		case <-ticker.C:
+			client.mu.Lock()
+			got := len(client.reports)
+			client.mu.Unlock()
+			if got > count {
+				t.Fatalf("device data sync reports = %d, want %d", got, count)
+			}
+		}
+	}
+}
+
+func (client *fakeDeviceDataSyncClient) sessionContexts() []devicedatasync.SessionContext {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return append([]devicedatasync.SessionContext(nil), client.sessions...)
 }
 
 type fakeDeviceIdentity struct {

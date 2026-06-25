@@ -169,6 +169,21 @@ const stepUpBrowserJS = `
     status.innerHTML = '<div class="page-alert stepup-alert" role="alert">' + alertIcon + '<span>' + escapeHTML(message) + '</span></div>';
   }
 
+  function showRecoveryCodes(codes) {
+    if (!Array.isArray(codes) || codes.length === 0) return false;
+    root.classList.add('recovery-codes-stepup');
+    root.innerHTML =
+      '<div class="brand">' +
+      '<div class="brand-icon"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="logo-ring" cx="50" cy="50" r="44" fill="none" stroke="currentColor" stroke-width="8"/><path class="logo-check" d="M30 52.5 44 66 71 34" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
+      '<div class="brand-title">TrustCloud</div>' +
+      '</div>' +
+      '<div class="stepup-heading"><h1>Verification complete</h1><p class="stepup-copy">Save these recovery codes before closing this page. Each code can be used once if you lose access to your MFA method.</p></div>' +
+      '<div class="recovery-codes">' + codes.map((code) => '<code>' + escapeHTML(code) + '</code>').join('') + '</div>' +
+      '<p class="stepup-copy recovery-complete-copy">You can close this tab and try to access the resource again.</p>' +
+      '<a class="button-link" href="/verify/' + encodeURIComponent(challengeID) + '?completed=1">I saved these codes</a>';
+    return true;
+  }
+
   function isExpired() {
     return Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() >= expiresAt;
   }
@@ -243,7 +258,7 @@ const stepUpBrowserJS = `
       });
       if (!finish.ok) throw new Error('passkey verification failed');
       clearStatus();
-      window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
+      window.location.href = '/verify/' + encodeURIComponent(challengeID) + '?completed=1';
     } catch (_) {
       if (markExpired()) return;
       showError('Passkey verification failed. Try again.');
@@ -273,8 +288,10 @@ const stepUpBrowserJS = `
         body: JSON.stringify(credentialToJSON(credential)),
       });
       if (!finish.ok) throw new Error('passkey setup failed');
+      const result = await finish.json().catch(() => ({}));
       clearStatus();
-      window.location.href = '/browser/step-up/' + encodeURIComponent(challengeID) + '?completed=1';
+      if (showRecoveryCodes(result.recovery_codes)) return;
+      window.location.href = '/verify/' + encodeURIComponent(challengeID) + '?completed=1';
     } catch (_) {
       if (markExpired()) return;
       showError('Passkey setup failed. Try again.');

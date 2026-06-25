@@ -290,16 +290,16 @@ func normalizeInternalHost(value string) (string, error) {
 	host := strings.ToLower(strings.TrimSpace(value))
 	host = strings.TrimSuffix(host, ".")
 	if host == "" {
-		return "", errors.New("Internal Host is required")
+		return "", errors.New("internal host is required")
 	}
 	if looksLikeIPv4(host) {
 		if ip := net.ParseIP(host); ip == nil || ip.To4() == nil {
-			return "", errors.New("Internal Host must be a valid IPv4 address or DNS hostname")
+			return "", errors.New("internal host must be a valid IPv4 address or DNS hostname")
 		}
 		return host, nil
 	}
 	if !validDNSName(host, false) {
-		return "", errors.New("Internal Host must be a valid IPv4 address or DNS hostname")
+		return "", errors.New("internal host must be a valid IPv4 address or DNS hostname")
 	}
 	return host, nil
 }
@@ -307,30 +307,30 @@ func normalizeInternalHost(value string) (string, error) {
 func validateExternalHost(value string) (string, error) {
 	raw := strings.TrimSpace(value)
 	if raw == "" {
-		return "", errors.New("External Host is required")
+		return "", errors.New("external host is required")
 	}
 	host := raw
 	if strings.Contains(raw, "://") {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Hostname() == "" {
-			return "", errors.New("External Host must be a valid HTTP/HTTPS URL or DNS hostname")
+			return "", errors.New("external host must be a valid HTTP/HTTPS URL or DNS hostname")
 		}
 		if parsed.Port() != "" {
-			return "", errors.New("External Host cannot include a port. Use External Port instead")
+			return "", errors.New("external host cannot include a port. Use external port instead")
 		}
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
-			return "", errors.New("External Host URL must use HTTP or HTTPS")
+			return "", errors.New("external host URL must use HTTP or HTTPS")
 		}
 		host = parsed.Hostname()
 	} else if strings.ContainsAny(raw, "/?#") || strings.Contains(raw, ":") {
-		return "", errors.New("External Host must be a valid HTTP/HTTPS URL or DNS hostname")
+		return "", errors.New("external host must be a valid HTTP/HTTPS URL or DNS hostname")
 	}
 	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
 	if net.ParseIP(host) != nil || looksLikeIPv4(host) {
-		return "", errors.New("External Host must be a valid DNS hostname")
+		return "", errors.New("external host must be a valid DNS hostname")
 	}
 	if !validDNSName(host, true) {
-		return "", errors.New("External Host must be a valid DNS hostname")
+		return "", errors.New("external host must be a valid DNS hostname")
 	}
 	return raw, nil
 }

@@ -89,6 +89,8 @@ html[data-theme='dark'] {
     color: var(--color-text-primary);
     line-height: 1.6;
     overflow-y: auto;
+    user-select: none;
+    cursor: default;
     -webkit-font-smoothing: antialiased;
   }
 
@@ -106,6 +108,26 @@ html[data-theme='dark'] {
   select,
   textarea {
     color-scheme: inherit;
+  }
+
+  input,
+  textarea,
+  [contenteditable='true'],
+  code,
+  pre,
+  .text-mono,
+  .select-text {
+    user-select: text;
+    cursor: text;
+  }
+
+  button,
+  a,
+  label,
+  select,
+  summary,
+  [role='button'] {
+    user-select: none;
   }
 
   ::-webkit-scrollbar {

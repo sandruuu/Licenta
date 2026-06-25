@@ -3,6 +3,7 @@ package devices
 import (
 	"errors"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +18,6 @@ var (
 	ErrServiceUnavailable = errors.New("device data service is not available")
 	ErrDeviceIDRequired   = errors.New("device_id is required")
 	ErrDeviceIDMismatch   = errors.New("device_id does not match certificate identity")
-	ErrNoPriorDeviceData  = errors.New("no prior device data report on file")
 )
 
 type EventPublisher interface {
@@ -60,8 +60,12 @@ func (service *Service) RecordDeviceDataWithSourceIP(report *models.DeviceDataRe
 	}
 	service.store.SaveDeviceData(report)
 	if service.audit != nil {
-		service.audit.LogEvent("device_data_report", "", "", strings.TrimSpace(sourceIP), report.DeviceID,
-			"", "Device data received", true)
+		details := "Device data received"
+		if sessionID := strings.TrimSpace(report.AgentSessionID); sessionID != "" {
+			details = "Device data received for agent session " + sessionID
+		}
+		service.audit.LogEvent("device_data_report", strings.TrimSpace(report.UserID), strings.TrimSpace(report.Username),
+			strings.TrimSpace(sourceIP), report.DeviceID, "", details, true)
 	}
 	log.Printf("[PA] Device data report received: device=%s checks=%d", report.DeviceID, len(report.Checks))
 }
@@ -89,32 +93,33 @@ func (service *Service) AcceptDeviceDataReportWithSourceIP(certDeviceID string, 
 	} else {
 		report.CollectedAt = report.CollectedAt.UTC()
 	}
+	previous, hadPrevious := service.store.GetDeviceData(report.DeviceID)
 	service.RecordDeviceDataWithSourceIP(&report, sourceIP)
-	service.publish(events.TopicHealthChanged, map[string]string{
-		"device_id":       report.DeviceID,
-		"organization_id": report.OrganizationID,
-		"reason":          "device_data_reported",
-	})
+	if !hadPrevious || devicePostureStatusFingerprint(previous) != devicePostureStatusFingerprint(&report) {
+		service.publish(events.TopicHealthChanged, map[string]string{
+			"device_id":       report.DeviceID,
+			"organization_id": report.OrganizationID,
+			"reason":          "device_posture_status_changed",
+		})
+	}
 	return report, nil
 }
 
-func (service *Service) TouchDeviceDataHeartbeat(deviceID string) (time.Time, error) {
-	if err := service.ready(); err != nil {
-		return time.Time{}, err
+func devicePostureStatusFingerprint(report *models.DeviceDataReport) string {
+	if report == nil {
+		return ""
 	}
-	deviceID = strings.TrimSpace(deviceID)
-	if deviceID == "" {
-		return time.Time{}, ErrDeviceIDRequired
+	checks := make([]string, 0, len(report.Checks))
+	for _, check := range report.Checks {
+		name := strings.ToLower(strings.TrimSpace(check.Name))
+		if name == "" {
+			continue
+		}
+		status := strings.ToLower(strings.TrimSpace(check.Status))
+		checks = append(checks, name+"="+status)
 	}
-	now := service.nowTime().UTC()
-	if !service.store.TouchDeviceData(deviceID, now) {
-		return now, ErrNoPriorDeviceData
-	}
-	service.publish(events.TopicHealthChanged, map[string]string{
-		"device_id": deviceID,
-		"reason":    "device_data_heartbeat",
-	})
-	return now, nil
+	sort.Strings(checks)
+	return strings.Join(checks, "|")
 }
 
 func (service *Service) ready() error {

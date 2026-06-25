@@ -95,7 +95,7 @@ Serviciul LocalSystem:
 - pastreaza `agent_session_token` in memoria serviciului, per user local;
 - sterge sesiunea userului la logout, curata regulile NRPT si nu sterge enrollment-ul device-ului.
 - colecteaza device-data pentru 6 controale Windows;
-- trimite device-data la PDP prin gRPC mTLS imediat dupa enrollment, la evenimente relevante, la schimbare detectata si periodic;
+- trimite device-data la PDP prin gRPC mTLS doar cand exista o sesiune de utilizator autentificata, la autentificare, la evenimente relevante, la schimbare detectata si periodic;
 - pastreaza in cache ultimul device-data report pentru dashboard si pentru device data revision in login.
 
 Tray-ul:
@@ -330,7 +330,7 @@ Campuri citite de `internal/app/config.go`:
 - `certificate_renew_timeout`: timeout-ul pentru un apel concret de renewal; default intern `20s`.
 - `session_renew_before`: cat timp inainte de expirarea access tokenului agentul incearca `RenewSession`; default intern `2m`.
 - `session_renew_retry_interval`: intervalul de retry cand `RenewSession` esueaza temporar; default intern `15s`.
-- `device_data_sync_interval`: heartbeat-ul periodic pentru device-data; default intern `30m`.
+- `device_data_sync_interval`: intervalul raportarii periodice pentru device-data; default intern `30m`.
 - `device_data_sync_change_scan_interval`: scan fallback pentru detectarea schimbarilor; default intern in runner este `30s`, iar configul curent il seteaza la `5s`. Evenimentele Windows pot declansa raportare mai devreme.
 - `enrollment_state_path`: cale optionala pentru fisierul de enrollment. Daca lipseste, store-ul foloseste `%ProgramData%\TrustAgent\enrollment.json`.
 - `local_dns_listen_address`: adresa pe care asculta resolverul DNS local; default `127.0.0.1:53`.
@@ -691,7 +691,7 @@ Validari locale pe raspunsul `StartSession`:
 
 Browser si IdP:
 
-1. Browserul ajunge la `https://pdp.example.com/browser/enroll/{enrollment_session_id}`.
+1. Browserul ajunge la `https://pdp.example.com/enroll/{enrollment_session_id}`.
 2. PDP afiseaza Home Realm Discovery.
 3. Userul introduce emailul organizational.
 4. PDP rezolva domeniul catre `auth_realm_id` si `idp_profile_id`.
@@ -856,7 +856,7 @@ Pornire login:
 
 Browser si IdP:
 
-1. Tray deschide browserul catre `https://pdp.example.com/browser/session/{session_request_id}`.
+1. Tray deschide browserul catre `https://pdp.example.com/sign-in/{session_request_id}`.
 2. PDP stie organizatia/auth realm-ul din certificatul device si din enrollment.
 3. User login nu poate schimba organizatia/contextul device-ului.
 4. PDP alege IdP-ul configurat sau face discovery limitat la contextul device-ului.
@@ -1030,7 +1030,7 @@ Step-up:
 
 - decizia `step_up_required` vine din flow authorization, nu din IPC;
 - URL-ul de step-up trebuie sa fie HTTPS;
-- path-ul URL-ului trebuie sa inceapa cu `/browser/step-up/`;
+- path-ul URL-ului trebuie sa inceapa cu `/verify/`;
 - host-ul trebuie sa se potriveasca cu `pdp_tls_server_name`, host-ul din `pdp_grpc_endpoint` sau varianta host:port derivata;
 - mesajul si URL-ul sunt pastrate in `UserSessionInfo.step_up_url`;
 - dupa acces permis pentru aceeasi resursa, step-up state-ul poate fi marcat ca allowed;
@@ -1767,14 +1767,14 @@ Descrieri exacte:
 
 Device-data sync runner-ul reciteste device-data si calculeaza un fingerprint peste `device_id`, `hostname`, `os` si lista de checks. Campul `collected_at` nu intra in fingerprint, ca sa nu produca schimbari false.
 
-Raportarea catre PDP se face:
+Raportarea catre PDP se face doar cat timp exista o sesiune de utilizator autentificata:
 
-- imediat dupa enrollment;
+- imediat dupa autentificarea utilizatorului;
 - imediat cand watcher-ul Windows observa un eveniment relevant;
 - la scan fallback, daca fingerprint-ul s-a schimbat;
 - periodic la `device_data_sync_interval`, chiar daca nu s-a schimbat nimic.
 
-Evenimentele Windows sunt folosite doar ca trigger de recitire. Agentul nu trimite evenimentul brut la PDP si nu trateaza evenimentul ca adevar final. Dupa fiecare trigger, service-ul colecteaza din nou toate cele 6 checks si trimite raportul doar daca s-a schimbat sau daca heartbeat-ul periodic este scadent.
+Evenimentele Windows sunt folosite doar ca trigger de recitire. Agentul nu trimite evenimentul brut la PDP si nu trateaza evenimentul ca adevar final. Dupa fiecare trigger, service-ul colecteaza din nou toate cele 6 checks si trimite raportul doar daca exista o sesiune autentificata si daca raportul s-a schimbat sau raportarea periodica este scadenta.
 
 Watcher-ul Windows monitorizeaza:
 
@@ -1815,6 +1815,7 @@ Transmiterea catre PDP:
 - path complet: `/trustagent.device.DeviceDataService/ReportDeviceData`;
 - transport: gRPC peste clientul PDP mTLS partajat;
 - certificatul mTLS este certificatul de device instalat dupa enrollment;
+- cererea include `agent_session_token`, emis dupa autentificarea utilizatorului;
 - PDP nu are incredere in `device_id` din payload, ci il compara cu identitatea din certificatul mTLS.
 
 Payload `ReportDeviceData`:
@@ -1822,6 +1823,8 @@ Payload `ReportDeviceData`:
 - `device_id`;
 - `hostname`;
 - `os`;
+- `agent_session_id`;
+- `agent_session_token`;
 - `checks`;
 - `checks[].name`;
 - `checks[].status`;
@@ -1834,7 +1837,7 @@ Cache si client:
 - runner-ul tine minte ultimul fingerprint trimis;
 - tine minte timpul ultimului report periodic;
 - tine minte `last_enrolled_device_id`;
-- daca device ID-ul enrollment-ului se schimba, cache-ul de fingerprint si heartbeat se reseteaza;
+- daca device ID-ul enrollment-ului se schimba, cache-ul de fingerprint si raportare periodica se reseteaza;
 - clientul gRPC device-data este refolosit cat timp `device_id` si `device_cert_thumbprint` raman aceleasi;
 - daca enrollment-ul dispare sau `device_id` este gol, clientul se inchide si state-ul runner-ului se reseteaza;
 - coada de trigger are capacitate `8`;

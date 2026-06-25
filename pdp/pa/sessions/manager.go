@@ -239,20 +239,6 @@ func (sm *SessionManager) nextSessionExpiry(session *models.Session, now time.Ti
 	return expiresAt
 }
 
-func (sm *SessionManager) revokeSessionSnapshot(session *models.Session, reason string) bool {
-	if sm == nil || sm.store == nil || session == nil {
-		return false
-	}
-	if !sm.store.RevokeSession(session.ID) {
-		return false
-	}
-	session.Revoked = true
-	sm.publishDeleted(session, reason)
-	log.Printf("[PA] Session revoked: %s reason=%s user=%s device=%s resource=%s gateway=%s",
-		session.ID, reason, session.UserID, session.DeviceID, session.Resource, session.GatewayID)
-	return true
-}
-
 func sameResourceSessionSubject(session *models.Session, req models.AccessRequest) bool {
 	if session == nil {
 		return false

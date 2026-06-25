@@ -83,11 +83,11 @@ func securityHeadersMiddleware() func(http.Handler) http.Handler {
 }
 
 func contentSecurityPolicy(r *http.Request) string {
-	if r != nil && strings.HasPrefix(r.URL.Path, "/browser/step-up/") {
-		return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+	if r != nil && isPublicStepUpPath(r.URL.Path) {
+		return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 	}
-	policy := "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
-	if r == nil || (!strings.HasPrefix(r.URL.Path, "/browser/enroll/") && !strings.HasPrefix(r.URL.Path, "/browser/session/")) {
+	policy := "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+	if r == nil || !isPublicEnrollOrSignInPath(r.URL.Path) {
 		policy += "; form-action 'self'"
 	}
 	return policy
@@ -285,6 +285,13 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 		if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "user is not available",
+			})
+			return
+		}
+		if user.PasswordChangeRequired {
+			s.adminSessions.revoke(session.ID)
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "password change required",
 			})
 			return
 		}

@@ -12,11 +12,12 @@ import (
 // the old token is revoked and a new refresh token is issued. The caller must
 // issue a new access token (JWT) using the returned user identity.
 func (m *OIDCManager) RefreshAccessToken(refreshToken, clientID, clientSecret string) (*RefreshToken, string, error) {
+	refreshTokenHash := hashOIDCRefreshToken(refreshToken)
 	rt := &RefreshToken{}
-	if ok := loadOIDCState(m.state, oidcRefreshStateKind, refreshToken, rt); !ok {
+	if ok := loadOIDCState(m.state, oidcRefreshStateKind, refreshTokenHash, rt); !ok {
 		return nil, "", fmt.Errorf("invalid refresh token")
 	}
-	if rt.Token != refreshToken {
+	if subtle.ConstantTimeCompare([]byte(rt.TokenHash), []byte(refreshTokenHash)) != 1 {
 		return nil, "", fmt.Errorf("invalid refresh token")
 	}
 
@@ -43,7 +44,7 @@ func (m *OIDCManager) RefreshAccessToken(refreshToken, clientID, clientSecret st
 		return nil, "", fmt.Errorf("invalid client_secret")
 	}
 
-	raw, ok, err := m.state.TakeEphemeralState(oidcRefreshStateKind, refreshToken)
+	raw, ok, err := m.state.TakeEphemeralState(oidcRefreshStateKind, refreshTokenHash)
 	if err != nil {
 		return nil, "", fmt.Errorf("consume refresh token: %w", err)
 	}
@@ -51,7 +52,7 @@ func (m *OIDCManager) RefreshAccessToken(refreshToken, clientID, clientSecret st
 		return nil, "", fmt.Errorf("refresh token already used (possible replay)")
 	}
 	consumed := &RefreshToken{}
-	if err := json.Unmarshal(raw, consumed); err != nil || consumed.Token != rt.Token {
+	if err := json.Unmarshal(raw, consumed); err != nil || subtle.ConstantTimeCompare([]byte(consumed.TokenHash), []byte(rt.TokenHash)) != 1 {
 		return nil, "", fmt.Errorf("invalid refresh token")
 	}
 	if consumed.Used {
@@ -64,15 +65,16 @@ func (m *OIDCManager) RefreshAccessToken(refreshToken, clientID, clientSecret st
 	if !usedUntil.After(time.Now()) {
 		usedUntil = time.Now().Add(m.refreshTokenTTL)
 	}
-	_ = saveOIDCState(m.state, oidcRefreshStateKind, refreshToken, rt, usedUntil)
+	_ = saveOIDCState(m.state, oidcRefreshStateKind, refreshTokenHash, rt, usedUntil)
 
 	newToken, err := generateOIDCCode()
 	if err != nil {
 		return nil, "", fmt.Errorf("generate new refresh token: %w", err)
 	}
+	newTokenHash := hashOIDCRefreshToken(newToken)
 
 	newRT := &RefreshToken{
-		Token:     newToken,
+		TokenHash: newTokenHash,
 		ClientID:  clientID,
 		UserID:    rt.UserID,
 		Username:  rt.Username,
@@ -84,7 +86,7 @@ func (m *OIDCManager) RefreshAccessToken(refreshToken, clientID, clientSecret st
 		ExpiresAt: time.Now().Add(m.refreshTokenTTL),
 		Used:      false,
 	}
-	if err := saveOIDCState(m.state, oidcRefreshStateKind, newToken, newRT, newRT.ExpiresAt); err != nil {
+	if err := saveOIDCState(m.state, oidcRefreshStateKind, newTokenHash, newRT, newRT.ExpiresAt); err != nil {
 		return nil, "", err
 	}
 

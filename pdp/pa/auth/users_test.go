@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,29 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 )
+
+func TestPasswordPolicyFollowsNISTLengthAndBlocklist(t *testing.T) {
+	user := &models.User{
+		ID:       "usr_policy",
+		Username: "maria.sandru@mta.ro",
+		Email:    "maria.sandru@mta.ro",
+	}
+
+	if _, err := validateNewPassword(user, "short password"); err == nil || !strings.Contains(err.Error(), "at least 15") {
+		t.Fatalf("short password error = %v, want minimum length rejection", err)
+	}
+	if _, err := validateNewPassword(user, "passwordpassword"); err == nil || !strings.Contains(err.Error(), "commonly used") {
+		t.Fatalf("common password error = %v, want blocklist rejection", err)
+	} else if policyErr, ok := err.(*PasswordPolicyError); !ok || len(policyErr.Requirements) == 0 {
+		t.Fatalf("common password error = %T %+v, want password policy details", err, err)
+	}
+	if _, err := validateNewPassword(user, "maria.sandru@mta.ro"); err == nil || !strings.Contains(err.Error(), "account information") {
+		t.Fatalf("context password error = %v, want account information rejection", err)
+	}
+	if _, err := validateNewPassword(user, "correct horse battery"); err != nil {
+		t.Fatalf("passphrase with spaces rejected: %v", err)
+	}
+}
 
 func TestAuthenticateByEmail(t *testing.T) {
 	dataStore := testdb.NewStore(t)

@@ -364,9 +364,7 @@ func normalizeVaultSerial(serial string) (string, error) {
 		return trimmed, nil
 	}
 
-	if strings.HasPrefix(trimmed, "0x") {
-		trimmed = strings.TrimPrefix(trimmed, "0x")
-	}
+	trimmed = strings.TrimPrefix(trimmed, "0x")
 
 	hexSerial := ""
 	if isDigits(trimmed) {

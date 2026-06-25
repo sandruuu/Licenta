@@ -1,16 +1,16 @@
 import { Check } from 'lucide-react';
 import SelectDropdown from './SelectDropdown';
 
-export default function FormField({ label, children, hint, htmlFor, className = '' }) {
+export default function FormField({ label, children, hint, htmlFor, className = '', labelClassName = '', hintClassName = '' }) {
   return (
     <div className={`mb-4 ${className}`}>
       {label && (
-        <label htmlFor={htmlFor} className="block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5">
+        <label htmlFor={htmlFor} className={`block text-[11px] font-semibold text-text-secondary uppercase tracking-[0.2px] mb-1.5 ${labelClassName}`}>
           {label}
         </label>
       )}
       {children}
-      {hint && <p className="text-[11px] text-text-muted mt-1">{hint}</p>}
+      {hint && <p className={`text-[11px] text-text-muted mt-1 ${hintClassName}`}>{hint}</p>}
     </div>
   );
 }

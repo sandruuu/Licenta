@@ -10,7 +10,7 @@ Fiecare componenta are overlay separat:
 
 Pentru DigitalOcean Kubernetes, endpoint-ul mTLS al PDP-ului este expus prin `Service type: LoadBalancer` in `pdp/service-mtls.yaml`. UI/API/OIDC raman expuse prin Ingress normal, iar gateway-urile folosesc `https://mtls.trust-cloud.dev` pe portul standard `443`.
 
-Gateway-ul din DMZ si resursele interne nu sunt definite aici. Pentru acea zona foloseste `deploy/digitalocean/edge-private`, unde gateway-ul si resursele sunt create in acelasi VPC privat DigitalOcean.
+Gateway-ul de acces si resursele interne nu sunt definite aici. Pentru acea zona foloseste `deploy/digitalocean/edge-private`, unde gateway-ul si resursele sunt create in acelasi VPC privat DigitalOcean.
 
 Ordinea recomandata de deploy:
 

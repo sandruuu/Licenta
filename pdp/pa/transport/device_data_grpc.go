@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,12 +18,10 @@ import (
 const (
 	deviceDataGRPCServiceName          = "trustagent.device.DeviceDataService"
 	deviceDataGRPCReportDeviceDataPath = "/" + deviceDataGRPCServiceName + "/ReportDeviceData"
-	deviceDataGRPCHeartbeatPath        = "/" + deviceDataGRPCServiceName + "/Heartbeat"
 )
 
 type deviceDataGRPCServer interface {
 	ReportDeviceData(context.Context, *structpb.Struct) (*structpb.Struct, error)
-	Heartbeat(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 type deviceDataGRPCService struct {
@@ -45,11 +42,29 @@ func (service *deviceDataGRPCService) ReportDeviceData(ctx context.Context, requ
 	if service.server.pa == nil || service.server.pa.Devices == nil {
 		return nil, status.Error(codes.Unavailable, devices.ErrServiceUnavailable.Error())
 	}
+	peerCert, ok := clientCertificateFromGRPCContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "client certificate required")
+	}
+	token := strings.TrimSpace(structFieldString(request, "agent_session_token"))
+	if token == "" {
+		return nil, status.Error(codes.Unauthenticated, "agent session token is required")
+	}
+	claims, err := service.server.pa.ValidateDeviceUserTokenBoundForScope(token, enrollment.DeviceID, clientCertificateFingerprint(peerCert), "device-data:write")
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
+	if sessionID := strings.TrimSpace(structFieldString(request, "agent_session_id")); sessionID != "" && sessionID != strings.TrimSpace(claims.SessionID) {
+		return nil, status.Error(codes.PermissionDenied, "agent session id does not match token")
+	}
 	report, err := deviceDataReportFromStruct(request)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	report.OrganizationID = enrollment.OrganizationID
+	report.UserID = strings.TrimSpace(claims.UserID)
+	report.Username = strings.TrimSpace(claims.Username)
+	report.AgentSessionID = strings.TrimSpace(claims.SessionID)
 	report, err = service.server.pa.Devices.AcceptDeviceDataReportWithSourceIP(enrollment.DeviceID, report, grpcPeerIP(ctx))
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(statusCodeForDeviceDataError(err)), err.Error())
@@ -58,30 +73,6 @@ func (service *deviceDataGRPCService) ReportDeviceData(ctx context.Context, requ
 		"success":     true,
 		"message":     "Device data report received",
 		"reported_at": report.ReportedAt.UTC().Format(time.RFC3339Nano),
-	})
-}
-
-func (service *deviceDataGRPCService) Heartbeat(ctx context.Context, _ *structpb.Struct) (*structpb.Struct, error) {
-	if service == nil || service.server == nil {
-		return nil, status.Error(codes.Internal, "device data service is not initialized")
-	}
-	enrollment, ok := deviceEnrollmentFromContextValue(ctx)
-	if !ok || strings.TrimSpace(enrollment.DeviceID) == "" {
-		return nil, status.Error(codes.PermissionDenied, "missing client certificate identity")
-	}
-	if service.server.pa == nil || service.server.pa.Devices == nil {
-		return nil, status.Error(codes.Unavailable, devices.ErrServiceUnavailable.Error())
-	}
-	reportedAt, err := service.server.pa.Devices.TouchDeviceDataHeartbeat(enrollment.DeviceID)
-	if err != nil {
-		if errors.Is(err, devices.ErrNoPriorDeviceData) {
-			return nil, status.Error(codes.FailedPrecondition, err.Error())
-		}
-		return nil, status.Error(grpcCodeForHTTPStatus(statusCodeForDeviceDataError(err)), err.Error())
-	}
-	return structpb.NewStruct(map[string]interface{}{
-		"success":     true,
-		"reported_at": reportedAt.Format(time.RFC3339Nano),
 	})
 }
 
@@ -145,27 +136,11 @@ func deviceDataGRPCReportDeviceDataHandler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, request, info, handler)
 }
 
-func deviceDataGRPCHeartbeatHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	request := &structpb.Struct{}
-	if err := decoder(request); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(deviceDataGRPCServer).Heartbeat(ctx, request)
-	}
-	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: deviceDataGRPCHeartbeatPath}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(deviceDataGRPCServer).Heartbeat(ctx, req.(*structpb.Struct))
-	}
-	return interceptor(ctx, request, info, handler)
-}
-
 var deviceDataGRPCServiceDesc = grpc.ServiceDesc{
 	ServiceName: deviceDataGRPCServiceName,
 	HandlerType: (*deviceDataGRPCServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{MethodName: "ReportDeviceData", Handler: deviceDataGRPCReportDeviceDataHandler},
-		{MethodName: "Heartbeat", Handler: deviceDataGRPCHeartbeatHandler},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "device_data.proto",

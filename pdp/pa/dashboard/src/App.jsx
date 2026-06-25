@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import {
   clearToken,
-  getRefreshToken,
   getSessionRefreshDelay,
   getToken,
   logoutAdminSession,
@@ -24,6 +23,7 @@ import Audit from './pages/Audit';
 import DeviceHealth from './pages/DeviceHealth';
 import Gateways from './pages/Gateways';
 import GatewayDetail from './pages/GatewayDetail';
+import Settings from './pages/Settings';
 
 const DASHBOARD_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -36,7 +36,7 @@ function SessionLoading() {
 }
 
 function PrivateRoute({ children }) {
-  const [status, setStatus] = useState(() => (getToken() || getRefreshToken() ? 'checking' : 'guest'));
+  const [status, setStatus] = useState('checking');
 
   useEffect(() => {
     let cancelled = false;
@@ -56,7 +56,7 @@ function PrivateRoute({ children }) {
 
     function scheduleRefresh() {
       clearRefreshTimer();
-      if (cancelled || (!getToken() && !getRefreshToken())) return;
+      if (cancelled || !getToken()) return;
       refreshTimer = window.setTimeout(() => {
         void refreshSessionIfActive();
       }, getSessionRefreshDelay());
@@ -82,12 +82,6 @@ function PrivateRoute({ children }) {
     }
 
     async function checkSession(showLoading = true) {
-      if (!getToken() && !getRefreshToken()) {
-        clearRefreshTimer();
-        setStatus('guest');
-        return;
-      }
-
       if (showLoading) setStatus('checking');
       try {
         await validateAdminSession();
@@ -143,6 +137,7 @@ function App() {
           <Route path="device-data" element={<DeviceHealth />} />
           <Route path="device-health" element={<Navigate to="/device-data" replace />} />
           <Route path="audit" element={<Audit />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -24,6 +24,7 @@ type ServiceConfig struct {
 	TrafficProxyListenAddress        string
 	WFPDriverDevicePath              string
 	WFPFailClosed                    bool
+	PipeAuthorizedUserSID            string
 }
 
 type TrayConfig struct {

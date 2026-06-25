@@ -132,7 +132,7 @@ func TestRenderEnrollmentPageShowsDeniedMark(t *testing.T) {
 }
 
 func TestRedirectBrowserCancelledUsesSeeOther(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "https://localhost:8443/browser/enroll/erq_test", nil)
+	request := httptest.NewRequest(http.MethodPost, "https://localhost:8443/enroll/erq_test", nil)
 	recorder := httptest.NewRecorder()
 
 	redirectBrowserCancelled(recorder, request)
@@ -140,7 +140,7 @@ func TestRedirectBrowserCancelledUsesSeeOther(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusSeeOther)
 	}
-	if got, want := recorder.Header().Get("Location"), "/browser/enroll/erq_test?cancelled=1"; got != want {
+	if got, want := recorder.Header().Get("Location"), "/enroll/erq_test?cancelled=1"; got != want {
 		t.Fatalf("Location = %q, want %q", got, want)
 	}
 }

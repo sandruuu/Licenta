@@ -56,6 +56,7 @@ func serviceConfigFromConfig(config ServiceConfig) service.Config {
 		TrafficProxyListenAddress:        config.TrafficProxyListenAddress,
 		WFPDriverDevicePath:              config.WFPDriverDevicePath,
 		WFPFailClosed:                    config.WFPFailClosed,
+		PipeAuthorizedUserSID:            config.PipeAuthorizedUserSID,
 	}
 }
 

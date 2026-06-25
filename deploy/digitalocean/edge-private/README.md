@@ -1,4 +1,4 @@
-# Gateway DMZ si Resurse Private
+# Gateway de acces si Resurse Private
 
 Acest pachet creeaza o zona simpla pentru demo/licenta:
 

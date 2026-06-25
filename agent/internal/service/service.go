@@ -53,6 +53,7 @@ type Config struct {
 	TrafficProxyListenAddress        string
 	WFPDriverDevicePath              string
 	WFPFailClosed                    bool
+	PipeAuthorizedUserSID            string
 }
 
 type Dependencies struct {

@@ -150,6 +150,12 @@ func (s *Store) DeleteWebAuthnCredential(id string) error {
 	return err
 }
 
+// DeleteWebAuthnCredentialsForUser removes all WebAuthn credentials for a user.
+func (s *Store) DeleteWebAuthnCredentialsForUser(userID string) error {
+	_, err := s.db.Exec(`DELETE FROM webauthn_credentials WHERE user_id = ?`, userID)
+	return err
+}
+
 // GetUserDevices returns device IDs bound to a user, most recently bound first.
 func (s *Store) GetUserDevices(userID string) []string {
 	rows, err := s.db.Query(

@@ -6,11 +6,18 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 )
 
 type Handler interface {
 	HandleIPC(context.Context, *Request) (*Response, error)
 }
+
+var (
+	ipcMaxActiveConnections = 32
+	ipcReadTimeout          = 30 * time.Second
+	ipcWriteTimeout         = 10 * time.Second
+)
 
 func Serve(ctx context.Context, listener net.Listener, handler Handler) error {
 	if ctx == nil {
@@ -29,6 +36,12 @@ func Serve(ctx context.Context, listener net.Listener, handler Handler) error {
 		_ = listener.Close()
 	}()
 
+	limit := ipcMaxActiveConnections
+	if limit <= 0 {
+		limit = 1
+	}
+	activeConnections := make(chan struct{}, limit)
+
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -37,7 +50,14 @@ func Serve(ctx context.Context, listener net.Listener, handler Handler) error {
 			}
 			return fmt.Errorf("accept ipc connection: %w", err)
 		}
+		select {
+		case activeConnections <- struct{}{}:
+		default:
+			_ = connection.Close()
+			continue
+		}
 		go func() {
+			defer func() { <-activeConnections }()
 			_ = ServeConn(ctx, connection, handler)
 		}()
 	}
@@ -57,6 +77,7 @@ func ServeConn(ctx context.Context, connection net.Conn, handler Handler) error 
 	defer connection.Close()
 
 	for {
+		setIPCReadDeadline(connection)
 		requestPayload, err := ReadFrame(connection)
 		if err != nil {
 			if errors.Is(err, io.EOF) || ctx.Err() != nil {
@@ -67,7 +88,7 @@ func ServeConn(ctx context.Context, connection net.Conn, handler Handler) error 
 		request, err := DecodeRequest(requestPayload)
 		if err != nil {
 			response := NewErrorResponse("invalid", ErrorCodeInvalidRequest, err.Error())
-			if writeErr := WriteJSON(connection, response); writeErr != nil {
+			if writeErr := writeIPCResponse(connection, response); writeErr != nil {
 				return writeErr
 			}
 			continue
@@ -81,8 +102,29 @@ func ServeConn(ctx context.Context, connection net.Conn, handler Handler) error 
 		if err := response.Validate(); err != nil {
 			response = NewErrorResponse(request.ID, ErrorCodeInternal, err.Error())
 		}
-		if err := WriteJSON(connection, response); err != nil {
+		if err := writeIPCResponse(connection, response); err != nil {
 			return err
 		}
 	}
+}
+
+func writeIPCResponse(connection net.Conn, response *Response) error {
+	setIPCWriteDeadline(connection)
+	return WriteJSON(connection, response)
+}
+
+func setIPCReadDeadline(connection net.Conn) {
+	if ipcReadTimeout <= 0 {
+		_ = connection.SetReadDeadline(time.Time{})
+		return
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(ipcReadTimeout))
+}
+
+func setIPCWriteDeadline(connection net.Conn) {
+	if ipcWriteTimeout <= 0 {
+		_ = connection.SetWriteDeadline(time.Time{})
+		return
+	}
+	_ = connection.SetWriteDeadline(time.Now().Add(ipcWriteTimeout))
 }

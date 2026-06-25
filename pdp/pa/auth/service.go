@@ -71,10 +71,10 @@ func loadJWTSigningKey(cfg *config.Config, runtimeState *redisstate.Client) (*ec
 		strings.TrimSpace(cfg.PKIToken) == "" ||
 		strings.TrimSpace(cfg.JWTTransitKey) == "" ||
 		strings.TrimSpace(cfg.JWTKeyEncryptedPath) == "" {
-		return nil, fmt.Errorf("Vault Transit configuration is required for JWT signing key")
+		return nil, fmt.Errorf("vault transit configuration is required for JWT signing key")
 	}
 	if runtimeState == nil {
-		return nil, fmt.Errorf("Redis runtime state is required for JWT signing key lock")
+		return nil, fmt.Errorf("redis runtime state is required for JWT signing key lock")
 	}
 
 	vaultCfg := pki.VaultConfig{

@@ -8,11 +8,6 @@ import (
 	"pdp/models"
 )
 
-func (e *Engine) matchesRule(rule *models.PolicyRule, ctx AccessContext, now time.Time, observedAccess models.AccessConditions) bool {
-	return e.matchesRuleScope(rule, ctx, now, observedAccess) &&
-		matchesHealthRequirements(rule.Conditions, ctx.Request.DeviceHealth)
-}
-
 func (e *Engine) matchesRuleScope(rule *models.PolicyRule, ctx AccessContext, now time.Time, observedAccess models.AccessConditions) bool {
 	req := ctx.Request
 	cond := rule.Conditions

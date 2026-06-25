@@ -15,6 +15,9 @@ type DeviceHealthReport struct {
 // DeviceDataReport is the normalized raw device data payload used by policies.
 type DeviceDataReport struct {
 	DeviceID       string        `json:"device_id"`
+	UserID         string        `json:"user_id,omitempty"`
+	Username       string        `json:"username,omitempty"`
+	AgentSessionID string        `json:"agent_session_id,omitempty"`
 	Hostname       string        `json:"hostname"`
 	OS             string        `json:"os"`
 	Checks         []HealthCheck `json:"checks"`

@@ -88,6 +88,7 @@ func newHRDResolutionTestServer(t *testing.T, organizationDomain string, idpDoma
 		Domains:        idpDomains,
 		Issuer:         "https://idp1.example.test",
 		ClientID:       "client-1",
+		ClientSecret:   "secret-1",
 		Scopes:         "openid profile email",
 		CreatedAt:      now,
 		UpdatedAt:      now,

@@ -35,6 +35,7 @@ func resetTestStore(t *testing.T, s *Store) {
 		directory_groups,
 		directory_users,
 		identity_provider_configs,
+		mfa_recovery_codes,
 		webauthn_credentials,
 		login_locations,
 		oidc_clients,

@@ -28,6 +28,7 @@ func NewManager(config Config, dependencies Dependencies) *Manager {
 		deviceDataSnapshot: dependencies.DeviceDataSnapshot,
 		onCatalog:          dependencies.OnCatalog,
 		onLogout:           dependencies.OnLogout,
+		onAuthenticated:    dependencies.OnAuthenticated,
 		clock:              dependencies.Clock,
 		sessions:           make(map[string]*sessionState),
 		signedOutMessages:  make(map[string]string),
@@ -407,7 +408,6 @@ func (manager *Manager) RefreshCatalog(ctx context.Context, sessionID string) er
 			continue
 		}
 		session.catalog = catalogInfo
-		session.message = "Protected resource catalog updated"
 	}
 	manager.mu.Unlock()
 	return nil
@@ -517,6 +517,9 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 	manager.mu.Unlock()
 	if startExpiryWatcher {
 		manager.startAuthenticatedSessionExpiryWatcher(session.key)
+		if manager.onAuthenticated != nil {
+			manager.onAuthenticated(ctx, session.peer)
+		}
 	}
 	return nil
 }
@@ -768,7 +771,7 @@ func (manager *Manager) validStepUpURL(raw string) bool {
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 		return false
 	}
-	if !strings.HasPrefix(parsed.EscapedPath(), "/browser/step-up/") {
+	if !strings.HasPrefix(parsed.EscapedPath(), "/verify/") {
 		return false
 	}
 	if len(manager.config.TrustedStepUpHosts) == 0 {

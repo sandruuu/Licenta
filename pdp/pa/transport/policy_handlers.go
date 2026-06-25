@@ -544,10 +544,6 @@ func (s *Server) policyAssignmentFromPayload(payload policyAssignmentPayload, ex
 	return assignment, ""
 }
 
-func normalizePolicyAction(action string) (string, bool) {
-	return models.NormalizePolicyAction(action)
-}
-
 func normalizePolicyLayer(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "", "organization":

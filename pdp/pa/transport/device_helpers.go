@@ -17,8 +17,6 @@ func statusCodeForDeviceDataError(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, devices.ErrDeviceIDMismatch):
 		return http.StatusForbidden
-	case errors.Is(err, devices.ErrNoPriorDeviceData):
-		return http.StatusPreconditionFailed
 	case errors.Is(err, devices.ErrServiceUnavailable):
 		return http.StatusServiceUnavailable
 	default:
@@ -26,7 +24,6 @@ func statusCodeForDeviceDataError(err error) int {
 	}
 }
 
-// We deliberately do NOT accept any payload body — heartbeats must be
 func (s *Server) validateDeviceCatalogToken(token, deviceID, certificateThumbprint string) (*auth.CustomClaims, int, error) {
 	if s == nil || s.pa == nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("identity services are not available")

@@ -166,15 +166,19 @@ export default function IdPDetail() {
   };
 
   const saveEdit = async () => {
-    setEditSaving(true);
     setError('');
+    if (editForm.enabled !== false && !idp?.has_client_secret && !editForm.client_secret?.trim()) {
+      setError('OIDC client secret is required');
+      return;
+    }
+    setEditSaving(true);
     try {
       await updateIdP(idp.id, {
         name: editForm.name?.trim(),
         type: editForm.type || idp.type || 'oidc',
         issuer: editForm.issuer?.trim(),
         client_id: editForm.client_id?.trim(),
-        client_secret: editForm.client_secret || undefined,
+        client_secret: editForm.client_secret?.trim() || undefined,
         scopes: (editForm.scopes || '').trim(),
         enabled: editForm.enabled !== false,
         auto_discovery: editForm.auto_discovery !== false,
@@ -228,6 +232,8 @@ export default function IdPDetail() {
     );
   }
 
+  const editNeedsClientSecret = editForm.enabled !== false && !idp.has_client_secret && !editForm.client_secret?.trim();
+
   return (
     <div className="space-y-7">
       {error && <div className="rounded-md border border-danger bg-danger-muted p-3 text-sm text-danger">{error}</div>}
@@ -273,6 +279,11 @@ export default function IdPDetail() {
             <DetailField label="Name" value={idp.name} />
             <DetailField label="Issuer" value={idp.issuer} mono />
             <DetailField label="Client ID" value={idp.client_id} mono />
+            <DetailField label="OIDC client secret">
+              <p className={`mt-2 text-sm font-bold uppercase ${idp.has_client_secret ? 'text-[#638f67]' : 'text-[#b46a62]'}`}>
+                {idp.has_client_secret ? 'CONFIGURED' : 'NOT CONFIGURED'}
+              </p>
+            </DetailField>
             <DetailField label="Type" value={(idp.type || 'oidc').toUpperCase()} />
             <DetailField label="Scopes" value={idp.scopes || 'openid profile email groups'} mono />
             <DetailField label="SCIM token">
@@ -383,7 +394,7 @@ export default function IdPDetail() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setEditOpen(false)}>Cancel</Button>
-            <Button onClick={saveEdit} disabled={editSaving || !editForm.name?.trim() || !editForm.issuer?.trim() || !editForm.client_id?.trim()}>
+            <Button onClick={saveEdit} disabled={editSaving || !editForm.name?.trim() || !editForm.issuer?.trim() || !editForm.client_id?.trim() || editNeedsClientSecret}>
               {editSaving ? 'Saving...' : 'Save Changes'}
             </Button>
           </>
@@ -400,7 +411,7 @@ export default function IdPDetail() {
             <FormInput value={editForm.issuer || ''} onChange={(event) => setEditForm({ ...editForm, issuer: event.target.value })} className="font-mono" />
           </FormField>
           <FormField label="OIDC client secret" className="mb-3">
-            <FormInput type="password" value={editForm.client_secret || ''} onChange={(event) => setEditForm({ ...editForm, client_secret: event.target.value })} placeholder="Leave blank to keep unchanged" />
+            <FormInput type="password" value={editForm.client_secret || ''} onChange={(event) => setEditForm({ ...editForm, client_secret: event.target.value })} placeholder={idp.has_client_secret ? 'Leave blank to keep unchanged' : 'Required'} />
           </FormField>
           <div className="mb-3 rounded-md border border-border bg-surface-secondary px-4 py-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.2px] text-text-secondary">SCIM provisioning token</p>

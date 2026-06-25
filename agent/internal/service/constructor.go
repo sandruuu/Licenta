@@ -21,7 +21,7 @@ import (
 
 func New(config Config, dependencies Dependencies) *Service {
 	config = normalizeConfig(config)
-	dependencies = dependenciesWithDefaults(dependencies)
+	dependencies = dependenciesWithDefaults(config, dependencies)
 	return newBaseService(config, dependencies)
 }
 
@@ -31,6 +31,7 @@ func normalizeConfig(config Config) Config {
 	config.PDPCAFile = strings.TrimSpace(config.PDPCAFile)
 	config.EnrollmentStatePath = strings.TrimSpace(config.EnrollmentStatePath)
 	config.DeviceKeyName = strings.TrimSpace(config.DeviceKeyName)
+	config.PipeAuthorizedUserSID = strings.TrimSpace(config.PipeAuthorizedUserSID)
 	if config.DeviceKeyName == "" {
 		config.DeviceKeyName = defaultDeviceKeyName
 	}
@@ -70,14 +71,17 @@ func normalizeConfig(config Config) Config {
 	return config
 }
 
-func dependenciesWithDefaults(dependencies Dependencies) Dependencies {
+func dependenciesWithDefaults(config Config, dependencies Dependencies) Dependencies {
 	logger := dependencies.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 	listenerFactory := dependencies.ListenerFactory
 	if listenerFactory == nil {
-		listenerFactory = ipc.Listen
+		authorizedUserSID := config.PipeAuthorizedUserSID
+		listenerFactory = func() (net.Listener, error) {
+			return ipc.ListenForUserSID(authorizedUserSID)
+		}
 	}
 	clock := dependencies.Clock
 	if clock == nil {
@@ -140,6 +144,11 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 			}
 			return service.protectedResources.Clear(ctx)
 		},
+		OnAuthenticated: func(_ context.Context, _ ipc.PeerIdentity) {
+			if service != nil && service.deviceDataSync != nil {
+				service.deviceDataSync.Trigger("user_authenticated")
+			}
+		},
 		Clock: dependencies.Clock,
 	})
 	resourceConnector := newResourceStreamConnector(resourceStreamConnectorConfig{
@@ -187,6 +196,7 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		Watcher:       dependencies.DeviceDataWatcher,
 		Enrollment:    enrollmentManager,
 		ClientFactory: deviceDataSyncClientFactory(dependencies.DeviceDataSyncClientFactory, pdpClient),
+		Session:       deviceDataSyncSessionProvider(&service),
 		Clock:         dependencies.Clock,
 	})
 	service = &Service{
@@ -298,6 +308,26 @@ func deviceDataSyncCollector(service **Service) devicedatasync.Collector {
 		}
 		return (*service).collectDeviceData(ctx, deviceID)
 	})
+}
+
+func deviceDataSyncSessionProvider(service **Service) devicedatasync.SessionProvider {
+	return func() (devicedatasync.SessionContext, bool) {
+		if service == nil || *service == nil || (*service).userSessions == nil {
+			return devicedatasync.SessionContext{}, false
+		}
+		active := (*service).userSessions.ActiveAuthenticatedSessions()
+		if len(active) != 1 {
+			return devicedatasync.SessionContext{}, false
+		}
+		session := active[0]
+		if strings.TrimSpace(session.AgentSessionToken) == "" {
+			return devicedatasync.SessionContext{}, false
+		}
+		return devicedatasync.SessionContext{
+			AgentSessionID:    strings.TrimSpace(session.AgentSessionID),
+			AgentSessionToken: strings.TrimSpace(session.AgentSessionToken),
+		}, true
+	}
 }
 
 func deviceDataCollectorFromDependencies(dependencies Dependencies) DeviceDataCollector {

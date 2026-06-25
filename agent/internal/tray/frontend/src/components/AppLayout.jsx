@@ -42,7 +42,7 @@ function AppLayout({
   const authenticated = userSessionState === 'AUTHENTICATED';
   const stepUpURL = userSession.step_up_url || '';
   const stepUpMessage = stepUpURL ? formatStepUpToastMessage(userSession.message) : '';
-  const sessionMessage = authenticated && !stepUpURL && userSession.message && userSession.message !== 'Authenticated'
+  const sessionMessage = authenticated && !stepUpURL && isDisplayableSessionMessage(userSession.message)
     ? userSession.message
     : '';
   const sessionError = authenticated ? (loginError || userSession.last_error || dashboardError) : '';
@@ -199,6 +199,18 @@ function formatStepUpToastMessage(message) {
     return 'Additional security verification is required to access this resource.';
   }
   return trimmed.replace(/^Additional verification is required/i, 'Additional security verification is required');
+}
+
+function isDisplayableSessionMessage(message) {
+  const text = String(message || '').trim();
+  if (!text || text === 'Authenticated') {
+    return false;
+  }
+  const normalized = text.toLowerCase();
+  if (normalized.includes('catalog')) {
+    return false;
+  }
+  return true;
 }
 
 function sessionToastVariant(message) {

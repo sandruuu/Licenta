@@ -17,7 +17,7 @@ import (
 
 func renderTOTPMethodBody(challengeID string, method stepUpPageMethod, setup *models.MFAEnrollResponse, csrfToken string) string {
 	if method.Configured {
-		return `<form class="mfa-form" method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">` + renderTOTPCodeInputs() + `<button type="submit">Verify</button></form>`
+		return `<form class="mfa-form" method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="totp">` + renderTOTPCodeInputs() + `<button type="submit">Verify</button></form>` + renderRecoveryCodeBody(method.ID, csrfToken)
 	}
 	if !method.EnrollmentAuthorized {
 		return renderStepUpReauthBody(challengeID, method.ID, method.ReauthMode, csrfToken)
@@ -86,12 +86,20 @@ func totpCodeFromRequest(r *http.Request) string {
 
 func renderWebAuthnMethodBody(challengeID string, method stepUpPageMethod, csrfToken string) string {
 	if method.Configured {
-		return `<button type="button" id="webauthn-verify-button">Use passkey</button>`
+		return `<button type="button" id="webauthn-verify-button">Use passkey</button>` + renderRecoveryCodeBody(method.ID, csrfToken)
 	}
 	if !method.EnrollmentAuthorized {
 		return renderStepUpReauthBody(challengeID, method.ID, method.ReauthMode, csrfToken)
 	}
 	return `<button type="button" id="webauthn-register-button">Create</button>`
+}
+
+func renderRecoveryCodeBody(targetMethod, csrfToken string) string {
+	targetMethod = strings.ToLower(strings.TrimSpace(targetMethod))
+	if targetMethod != "totp" && targetMethod != "webauthn" {
+		return ""
+	}
+	return `<details class="recovery-panel"><summary>Use recovery code</summary><form class="mfa-form" method="post"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrfToken) + `"><input type="hidden" name="method" value="recovery"><input type="hidden" name="target_method" value="` + html.EscapeString(targetMethod) + `"><div><label for="stepup-recovery-code">Recovery code</label><input id="stepup-recovery-code" type="text" name="recovery_code" autocomplete="one-time-code" placeholder="XXXX-XXXX-XXXX" required></div><button type="submit">Continue</button></form></details>`
 }
 
 func renderStepUpReauthBody(challengeID, targetMethod, mode, csrfToken string) string {
@@ -262,11 +270,11 @@ func activeStepUpMethod(methods []stepUpPageMethod) string {
 }
 
 func stepUpMethodURL(challengeID, method string) string {
-	return "/browser/step-up/" + url.PathEscape(strings.TrimSpace(challengeID)) + "?method=" + url.QueryEscape(strings.TrimSpace(method))
+	return publicStepUpPathPrefix + url.PathEscape(strings.TrimSpace(challengeID)) + "?method=" + url.QueryEscape(strings.TrimSpace(method))
 }
 
 func stepUpSelectionURL(challengeID string) string {
-	return "/browser/step-up/" + url.PathEscape(strings.TrimSpace(challengeID))
+	return publicStepUpPathPrefix + url.PathEscape(strings.TrimSpace(challengeID))
 }
 
 func stepUpMethodReauthURL(challengeID, method string) string {

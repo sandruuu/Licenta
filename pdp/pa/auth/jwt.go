@@ -364,11 +364,11 @@ func (j *JWTManager) ParseEnrollmentToken(tokenString string) (*CustomClaims, er
 // Use this for endpoints that must inspect freshly issued tokens before full API auth.
 func (j *JWTManager) ParseAuthToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodECDSA); !ok {
+		if token.Method != jwt.SigningMethodES256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return j.publicKey, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodES256.Alg()}), jwt.WithIssuer(j.issuer), jwt.WithExpirationRequired())
 
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)

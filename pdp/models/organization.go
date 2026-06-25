@@ -42,6 +42,9 @@ type IdentityProviderConfig struct {
 	Scopes        string `json:"scopes"`
 	AutoDiscovery bool   `json:"auto_discovery"`
 
+	SCIMTokenExpiresAt time.Time `json:"scim_token_expires_at,omitempty"`
+	SCIMTokenRotatedAt time.Time `json:"scim_token_rotated_at,omitempty"`
+
 	ClaimMapping     map[string]string `json:"claim_mapping,omitempty"`
 	GroupRoleMapping []GroupRoleRule   `json:"group_role_mapping,omitempty"`
 

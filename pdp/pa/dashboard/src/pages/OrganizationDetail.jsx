@@ -270,8 +270,8 @@ export default function OrganizationDetail() {
   const saveIdP = async () => {
     const claimDefaults = publicConfig.oidc_default_claim_mapping || {};
     setIdPError('');
-    if (!idpForm.name?.trim() || !idpForm.issuer?.trim() || !idpForm.client_id?.trim()) {
-      setIdPError('Provider name, Issuer URL, and OIDC client ID are required');
+    if (!idpForm.name?.trim() || !idpForm.issuer?.trim() || !idpForm.client_id?.trim() || !idpForm.client_secret?.trim()) {
+      setIdPError('Provider name, Issuer URL, OIDC client ID, and OIDC client secret are required');
       return;
     }
 
@@ -282,7 +282,7 @@ export default function OrganizationDetail() {
         type: idpForm.type || 'oidc',
         issuer: idpForm.issuer.trim(),
         client_id: idpForm.client_id.trim(),
-        client_secret: idpForm.client_secret || undefined,
+        client_secret: idpForm.client_secret.trim(),
         scopes: (idpForm.scopes || '').trim(),
         enabled: idpForm.enabled !== false,
         auto_discovery: idpForm.auto_discovery !== false,
@@ -709,7 +709,7 @@ export default function OrganizationDetail() {
         footer={(
           <>
             <Button variant="secondary" onClick={() => setIdPOpen(false)}>Cancel</Button>
-            <Button onClick={saveIdP} disabled={idpSaving || !idpForm.name || !idpForm.issuer || !idpForm.client_id}>
+            <Button onClick={saveIdP} disabled={idpSaving || !idpForm.name?.trim() || !idpForm.issuer?.trim() || !idpForm.client_id?.trim() || !idpForm.client_secret?.trim()}>
               {idpSaving ? 'Saving...' : 'Add IdP'}
             </Button>
           </>
@@ -728,7 +728,7 @@ export default function OrganizationDetail() {
             <FormInput value={idpForm.issuer || ''} onChange={(event) => setIdPForm({ ...idpForm, issuer: event.target.value })} placeholder="https://idp.company.com/realms/company" className="font-mono" />
           </FormField>
           <FormField label="OIDC client secret" className="mb-3">
-            <FormInput type="password" value={idpForm.client_secret || ''} onChange={(event) => setIdPForm({ ...idpForm, client_secret: event.target.value })} placeholder="Required for confidential clients" />
+            <FormInput type="password" value={idpForm.client_secret || ''} onChange={(event) => setIdPForm({ ...idpForm, client_secret: event.target.value })} placeholder="Required" />
           </FormField>
           <FormField label="Scopes" className="mb-3 md:col-span-2">
             <FormInput value={idpForm.scopes || ''} onChange={(event) => setIdPForm({ ...idpForm, scopes: event.target.value })} className="font-mono" />

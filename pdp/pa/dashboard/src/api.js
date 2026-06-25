@@ -1,45 +1,44 @@
 // API client for the TrustCloud/PA backend
 const API_BASE = '/api';
-const ACCESS_TOKEN_KEY = 'admin_token';
-const REFRESH_TOKEN_KEY = 'admin_refresh_token';
-const SESSION_ID_KEY = 'admin_session_id';
+const LEGACY_AUTH_STORAGE_KEYS = ['admin_token', 'admin_refresh_token', 'admin_session_id'];
 
-// Get the auth token from localStorage
-export function getToken() {
-  return localStorage.getItem(ACCESS_TOKEN_KEY);
-}
+let accessToken = '';
 
-export function getRefreshToken() {
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
-}
-
-export function getSessionID() {
-  return localStorage.getItem(SESSION_ID_KEY);
-}
-
-// Set the auth token
-export function setToken(token) {
-  if (token) {
-    localStorage.setItem(ACCESS_TOKEN_KEY, token);
+function clearLegacyStoredAuth() {
+  try {
+    LEGACY_AUTH_STORAGE_KEYS.forEach((key) => window.localStorage?.removeItem(key));
+  } catch {
+    // Ignore storage failures. Auth state is no longer stored in web storage.
   }
+}
+
+clearLegacyStoredAuth();
+
+class APIError extends Error {
+  constructor(message, details = []) {
+    super(message);
+    this.name = 'APIError';
+    this.details = Array.isArray(details) ? details : [];
+  }
+}
+
+export function getToken() {
+  return accessToken;
+}
+
+export function setToken(token) {
+  accessToken = token || '';
 }
 
 export function setAuthSession(session) {
   if (!session) return;
   setToken(session.auth_token || session.token);
-  if (session.refresh_token) {
-    localStorage.setItem(REFRESH_TOKEN_KEY, session.refresh_token);
-  }
-  if (session.session_id) {
-    localStorage.setItem(SESSION_ID_KEY, session.session_id);
-  }
+  clearLegacyStoredAuth();
 }
 
-// Clear auth
 export function clearAuthSession() {
-  localStorage.removeItem(ACCESS_TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
-  localStorage.removeItem(SESSION_ID_KEY);
+  accessToken = '';
+  clearLegacyStoredAuth();
 }
 
 export function clearToken() {
@@ -101,7 +100,7 @@ async function readJSONResponse(res, path) {
   }
 
   if (!res.ok) {
-    throw new Error(json?.error || res.statusText);
+    throw new APIError(json?.error || res.statusText, json?.password_requirements);
   }
 
   if (json !== null && typeof json === 'object' && 'data' in json) {
@@ -121,12 +120,13 @@ async function apiFetch(path, options = {}) {
 
   const run = () => fetch(`${API_BASE}${path}`, {
     ...fetchOptions,
+    credentials: fetchOptions.credentials || 'same-origin',
     headers: authHeaders(fetchOptions.headers),
   });
 
   let res = await run();
 
-  if (res.status === 401 && retryOnUnauthorized && getRefreshToken() && getSessionID()) {
+  if (res.status === 401 && retryOnUnauthorized) {
     try {
       await refreshAdminSession();
       res = await run();
@@ -189,11 +189,37 @@ export async function login(email, password, purpose = '') {
   return res.json();
 }
 
+export async function changeInitialPassword(challengeId, newPassword, confirmPassword) {
+  const res = await fetch(`${API_BASE}/auth/password/change-initial`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      challenge_id: challengeId,
+      new_password: newPassword,
+      confirm_password: confirmPassword,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new APIError(data.error || data.message || 'Password change failed', data.password_requirements);
+  }
+  return data;
+}
+
 export async function verifyMFA(challengeId, code) {
   const res = await fetch(`${API_BASE}/auth/mfa/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ challenge_id: challengeId, code }),
+  });
+  return res.json();
+}
+
+export async function verifyMFARecovery(challengeId, recoveryCode) {
+  const res = await fetch(`${API_BASE}/auth/mfa/recovery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challenge_id: challengeId, recovery_code: recoveryCode }),
   });
   return res.json();
 }
@@ -258,15 +284,10 @@ export async function finishPasskeyRegistration(token, credential) {
 }
 
 export async function refreshAdminSession() {
-  const sessionID = getSessionID();
-  const refreshToken = getRefreshToken();
-  if (!sessionID || !refreshToken) {
-    throw new Error('Missing session refresh credentials');
-  }
   const res = await fetch(`${API_BASE}/auth/session/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionID, refresh_token: refreshToken }),
+    credentials: 'same-origin',
   });
   const session = await readJSONResponse(res, '/auth/session/refresh');
   setAuthSession(session);
@@ -275,16 +296,14 @@ export async function refreshAdminSession() {
 
 export async function logoutAdminSession() {
   const token = getToken();
-  const sessionID = getSessionID();
-  const refreshToken = getRefreshToken();
   try {
     await fetch(`${API_BASE}/auth/logout`, {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ session_id: sessionID, refresh_token: refreshToken }),
     });
   } finally {
     clearAuthSession();
@@ -302,14 +321,35 @@ export async function validateAdminSession() {
       clearOnUnauthorized: false,
     });
   } catch (err) {
-    if (getRefreshToken() && getSessionID()) {
-      return refreshAdminSession();
-    }
-    throw err;
+    return refreshAdminSession();
   }
 }
 
 // ─── Dashboard ──────────────────────────────
+
+export async function getAdminAccount() {
+  return apiFetch('/admin/account');
+}
+
+export async function changeAdminPassword(currentPassword, newPassword, confirmPassword) {
+  return apiFetch('/admin/account/password', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+      confirm_password: confirmPassword,
+    }),
+  });
+}
+
+export async function regenerateAdminRecoveryCodes(currentPassword) {
+  return apiFetch('/admin/account/recovery-codes', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+    }),
+  });
+}
 
 export async function getDashboardStats() {
   return apiFetch('/admin/dashboard');

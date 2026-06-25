@@ -155,12 +155,13 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		UpdatedAt:      now,
 	})
 	server := &Server{
-		pa:            policyAdmin,
-		mtlsCAPool:    x509.NewCertPool(),
-		stepUpAuth:    newStepUpBrowserAuthStore(runtimeState, cfg.Runtime.BrowserAuthSessionTTL),
-		adminSessions: newAdminSessionStore(runtimeState, cfg.Runtime.AdminAccessTokenTTL, cfg.Runtime.AdminSessionIdleTTL, cfg.Runtime.AdminSessionAbsoluteTTL),
-		adminMFA:      newAdminMFAStore(runtimeState),
-		agentSessions: newAgentSessionStore(runtimeState),
+		pa:                   policyAdmin,
+		mtlsCAPool:           x509.NewCertPool(),
+		stepUpAuth:           newStepUpBrowserAuthStore(runtimeState, cfg.Runtime.BrowserAuthSessionTTL),
+		adminSessions:        newAdminSessionStore(runtimeState, cfg.Runtime.AdminAccessTokenTTL, cfg.Runtime.AdminSessionIdleTTL, cfg.Runtime.AdminSessionAbsoluteTTL),
+		adminMFA:             newAdminMFAStore(runtimeState),
+		adminPasswordChanges: newAdminPasswordChangeStore(runtimeState),
+		agentSessions:        newAgentSessionStore(runtimeState),
 	}
 	server.wireSessionDeleteSink()
 	return server, dataStore

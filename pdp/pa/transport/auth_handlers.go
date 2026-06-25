@@ -65,6 +65,25 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
+	if user.PasswordChangeRequired {
+		challenge, err := s.adminPasswordChanges.create(user, ttl)
+		if err != nil {
+			log.Printf("[AUTH] Password change challenge error: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "password change setup failed"})
+			return
+		}
+		if s.pa.Audit != nil {
+			s.pa.Audit.LogEvent("admin_password_change_required", user.ID, user.Username, r.RemoteAddr, "", "", "Initial password change required", true)
+		}
+		writeJSON(w, http.StatusOK, models.LoginResponse{
+			Status:                 "password_change_required",
+			Message:                "Password change required",
+			UserID:                 user.ID,
+			ChallengeID:            challenge.ID,
+			PasswordChangeRequired: true,
+		})
+		return
+	}
 	if s.userHasTOTPConfigured(user) {
 		challenge, err := s.adminMFA.create(user, "", ttl, purpose)
 		if err != nil {
@@ -95,24 +114,72 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
 		return
 	}
-	qrURI := paauth.BuildTOTPURI(secret, s.appConfig().TOTPIssuer, user.Username)
-	qrImage, err := paauth.BuildTOTPQRCodeImage(qrURI)
+	response, err := s.adminMFASetupResponse(user, challenge, secret, "Set up MFA to continue", false)
 	if err != nil {
 		log.Printf("[AUTH] TOTP QR code error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
 		return
 	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleInitialPasswordChange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.checkAuthRateLimit(w, r) {
+		return
+	}
+
+	var req models.InitialPasswordChangeRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.ChallengeID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password change challenge is required"})
+		return
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password confirmation does not match"})
+		return
+	}
+
+	challenge, found := s.adminPasswordChanges.get(req.ChallengeID)
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "password change challenge expired or invalid"})
+		return
+	}
+	user, exists := s.pa.Auth.Users.GetUser(challenge.UserID)
+	if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
+		s.adminPasswordChanges.consume(challenge.ID)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return
+	}
+	if !user.PasswordChangeRequired {
+		s.adminPasswordChanges.consume(challenge.ID)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password change is not required"})
+		return
+	}
+	if err := s.pa.Auth.Users.CompleteRequiredPasswordChange(user.ID, req.NewPassword); err != nil {
+		log.Printf("[AUTH] Initial password change failed for user=%s: %v", user.Username, err)
+		if writePasswordPolicyError(w, http.StatusBadRequest, err) {
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.adminPasswordChanges.consume(challenge.ID)
+	_ = s.pa.Runtime.ResetLoginAttempts(user.Username)
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_password_changed", user.ID, user.Username, r.RemoteAddr, "", "", "Initial password changed", true)
+	}
 	writeJSON(w, http.StatusOK, models.LoginResponse{
-		Status:      "mfa_setup_required",
-		Message:     "Set up MFA to continue",
-		UserID:      user.ID,
-		Purpose:     purpose,
-		ChallengeID: challenge.ID,
-		MFARequired: true,
-		MFASetup:    true,
-		Secret:      secret,
-		QRCodeURL:   qrURI,
-		QRCodeImage: qrImage,
+		Status:  "password_changed",
+		Message: "Password changed. Sign in again with the new password.",
+		UserID:  user.ID,
 	})
 }
 
@@ -184,11 +251,6 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type adminSessionRefreshRequest struct {
-	SessionID    string `json:"session_id"`
-	RefreshToken string `json:"refresh_token"`
-}
-
 func (s *Server) handleAdminSessionRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -197,14 +259,16 @@ func (s *Server) handleAdminSessionRefresh(w http.ResponseWriter, r *http.Reques
 	if s.checkAuthRateLimit(w, r) {
 		return
 	}
-	var req adminSessionRefreshRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+	sessionID, refreshTokenValue, ok := adminSessionCredentialsFromCookies(r)
+	if !ok {
+		clearAdminSessionCookies(w)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired session"})
 		return
 	}
-	session, refreshToken, err := s.adminSessions.refresh(req.SessionID, req.RefreshToken, s.lookupAdminSessionUser)
+	session, refreshToken, err := s.adminSessions.refresh(sessionID, refreshTokenValue, s.lookupAdminSessionUser)
 	if err != nil {
 		if errors.Is(err, errAdminSessionNotFound) || errors.Is(err, errAdminSessionExpired) || errors.Is(err, errAdminSessionRefreshMismatch) {
+			clearAdminSessionCookies(w)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid or expired session"})
 			return
 		}
@@ -223,7 +287,7 @@ func (s *Server) handleAdminSessionRefresh(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "session refresh failed"})
 		return
 	}
-	writeJSON(w, http.StatusOK, response)
+	s.writeAdminSessionResponse(w, http.StatusOK, response)
 }
 
 func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
@@ -231,8 +295,7 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	var req adminSessionRefreshRequest
-	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req)
+	sessionID, refreshToken, hasSessionCookies := adminSessionCredentialsFromCookies(r)
 
 	if token, err := bearerToken(r); err == nil {
 		if claims, err := s.pa.Auth.ValidateToken(token); err == nil && claims != nil {
@@ -244,9 +307,10 @@ func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if strings.TrimSpace(req.SessionID) != "" && strings.TrimSpace(req.RefreshToken) != "" {
-		s.adminSessions.revokeWithRefresh(req.SessionID, req.RefreshToken)
+	if hasSessionCookies {
+		s.adminSessions.revokeWithRefresh(sessionID, refreshToken)
 	}
+	clearAdminSessionCookies(w)
 
 	writeJSON(w, http.StatusOK, models.APIResponse{
 		Success: true,
@@ -279,10 +343,19 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
 		return
 	}
+	if user.PasswordChangeRequired {
+		s.adminMFA.consume(challenge.ID)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required"})
+		return
+	}
 
 	var verifyErr error
+	var recoveryCodes []string
 	if strings.TrimSpace(challenge.PendingTOTPSecret) != "" {
 		verifyErr = s.pa.Auth.Users.ActivateTOTPSecret(user.ID, challenge.PendingTOTPSecret, req.Code)
+		if verifyErr == nil {
+			recoveryCodes, verifyErr = s.pa.Auth.Users.GenerateRecoveryCodes(user.ID)
+		}
 	} else {
 		verifyErr = s.pa.Auth.Users.VerifyMFA(user.ID, req.Code)
 	}
@@ -314,12 +387,13 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, models.LoginResponse{
-			Status:      "authenticated",
-			Message:     "Authentication successful",
-			AuthToken:   authToken,
-			UserID:      user.ID,
-			Purpose:     challenge.Purpose,
-			MFARequired: true,
+			Status:        "authenticated",
+			Message:       "Authentication successful",
+			AuthToken:     authToken,
+			UserID:        user.ID,
+			Purpose:       challenge.Purpose,
+			MFARequired:   true,
+			RecoveryCodes: recoveryCodes,
 		})
 		return
 	}
@@ -330,10 +404,112 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.MFARequired = true
+	response.RecoveryCodes = recoveryCodes
+	s.writeAdminSessionResponse(w, http.StatusOK, response)
+}
+
+func (s *Server) handleMFARecovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.checkAuthRateLimit(w, r) {
+		return
+	}
+
+	var req models.MFARecoveryRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	challenge, found := s.adminMFA.get(req.ChallengeID)
+	if !found {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "MFA challenge expired or invalid"})
+		return
+	}
+	if strings.TrimSpace(challenge.PendingTOTPSecret) != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "recovery code cannot be used during MFA setup"})
+		return
+	}
+	user, exists := s.pa.Auth.Users.GetUser(challenge.UserID)
+	if !exists || user == nil || user.Disabled {
+		s.adminMFA.consume(challenge.ID)
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return
+	}
+	if user.PasswordChangeRequired {
+		s.adminMFA.consume(challenge.ID)
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "password change required"})
+		return
+	}
+	if err := s.pa.Auth.Users.VerifyRecoveryCode(user.ID, req.RecoveryCode); err != nil {
+		log.Printf("[AUTH] MFA recovery failed for user=%s: %v", user.Username, err)
+		if retry := s.adminMFA.recordFailure(challenge.ID, s.appConfig().MaxLoginAttempts); !retry {
+			_ = s.pa.Runtime.RecordFailedLogin(user.Username, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "too many failed recovery attempts"})
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid recovery code"})
+		return
+	}
+
+	secret, err := paauth.GenerateTOTPSecret()
+	if err != nil {
+		log.Printf("[AUTH] TOTP setup after recovery error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
+	ttl := time.Until(challenge.ExpiresAt)
+	setupChallenge, err := s.adminMFA.create(user, secret, ttl, challenge.Purpose)
+	if err != nil {
+		log.Printf("[AUTH] MFA setup challenge after recovery error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
+	s.adminMFA.consume(challenge.ID)
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_recovery_code_used", user.ID, user.Username, r.RemoteAddr, "", "", "MFA recovery code accepted", true)
+	}
+	response, err := s.adminMFASetupResponse(user, setupChallenge, secret, "Recovery code accepted. Set up MFA to continue.", true)
+	if err != nil {
+		log.Printf("[AUTH] TOTP QR code after recovery error: %v", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "MFA setup failed"})
+		return
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) adminMFASetupResponse(user *models.User, challenge *adminMFAChallenge, secret, message string, recoveryUsed bool) (*models.LoginResponse, error) {
+	if user == nil || challenge == nil {
+		return nil, errors.New("MFA setup response requires user and challenge")
+	}
+	qrURI := paauth.BuildTOTPURI(secret, s.appConfig().TOTPIssuer, user.Username)
+	qrImage, err := paauth.BuildTOTPQRCodeImage(qrURI)
+	if err != nil {
+		return nil, err
+	}
+	return &models.LoginResponse{
+		Status:       "mfa_setup_required",
+		Message:      message,
+		UserID:       user.ID,
+		Purpose:      challenge.Purpose,
+		ChallengeID:  challenge.ID,
+		MFARequired:  true,
+		MFASetup:     true,
+		RecoveryUsed: recoveryUsed,
+		Secret:       secret,
+		QRCodeURL:    qrURI,
+		QRCodeImage:  qrImage,
+	}, nil
+}
+
 func (s *Server) startAdminSession(user *models.User, message string) (*models.LoginResponse, error) {
+	if user == nil {
+		return nil, errors.New("admin session requires user")
+	}
+	if user.PasswordChangeRequired {
+		return nil, errors.New("password change required")
+	}
 	session, refreshToken, err := s.adminSessions.create(user)
 	if err != nil {
 		return nil, err
@@ -369,7 +545,7 @@ func (s *Server) adminSessionLoginResponse(user *models.User, session *adminSess
 
 func (s *Server) lookupAdminSessionUser(userID string) (*models.User, bool) {
 	user, ok := s.pa.Auth.Users.GetUser(strings.TrimSpace(userID))
-	if !ok || user == nil || user.Disabled || user.Role != "platform_admin" {
+	if !ok || user == nil || user.Disabled || user.Role != "platform_admin" || user.PasswordChangeRequired {
 		return nil, false
 	}
 	return user, true

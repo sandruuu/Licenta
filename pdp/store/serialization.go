@@ -46,14 +46,3 @@ func fromJSON[T any](s string) T {
 	json.Unmarshal([]byte(s), &v)
 	return v
 }
-
-func fromJSONPtr[T any](s string) *T {
-	if s == "" {
-		return nil
-	}
-	var v T
-	if err := json.Unmarshal([]byte(s), &v); err != nil {
-		return nil
-	}
-	return &v
-}

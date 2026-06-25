@@ -11,6 +11,7 @@ import {
   LogOut,
   Building2,
   ShieldCheck,
+  Settings,
 } from 'lucide-react';
 
 const navSections = [
@@ -83,7 +84,24 @@ export default function Layout() {
             ))}
           </nav>
 
-          <div className="shrink-0 p-3">
+          <div className="shrink-0 space-y-1 p-3">
+            <NavLink
+              to="/settings"
+              title="Settings"
+              className={({ isActive }) =>
+                [
+                  'flex h-11 items-center justify-center gap-0 overflow-hidden rounded-md px-3 text-sm font-bold no-underline transition-all duration-200 hover:text-[15px] hover:[&>svg]:h-5 hover:[&>svg]:w-5 group-hover:justify-start group-hover:gap-3',
+                  isActive
+                    ? 'text-[15px] text-accent [&>svg]:h-5 [&>svg]:w-5'
+                    : 'text-text-secondary hover:text-text-primary',
+                ].join(' ')
+              }
+            >
+              <Settings className="h-[18px] w-[18px] shrink-0 transition-all duration-200" />
+              <span className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
+                Settings
+              </span>
+            </NavLink>
             <button
               type="button"
               onClick={handleLogout}

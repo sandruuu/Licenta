@@ -65,6 +65,154 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type adminAccountResponse struct {
+	ID                string   `json:"id"`
+	Username          string   `json:"username"`
+	Email             string   `json:"email"`
+	Role              string   `json:"role"`
+	MFAEnabled        bool     `json:"mfa_enabled"`
+	MFAMethods        []string `json:"mfa_methods"`
+	RecoveryCodeCount int      `json:"recovery_code_count"`
+	PasswordChangedAt string   `json:"password_changed_at,omitempty"`
+	LastLogin         string   `json:"last_login,omitempty"`
+}
+
+type adminChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password"`
+}
+
+type adminRegenerateRecoveryCodesRequest struct {
+	CurrentPassword string `json:"current_password"`
+}
+
+func (s *Server) handleAdminAccount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	user, ok := s.currentAdminUser(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data:    s.adminAccountPayload(user),
+	})
+}
+
+func (s *Server) handleAdminAccountPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	user, ok := s.currentAdminUser(w, r)
+	if !ok {
+		return
+	}
+	var req adminChangePasswordRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password confirmation does not match"})
+		return
+	}
+	if err := s.pa.Auth.Users.ChangePassword(user.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		if writePasswordPolicyError(w, http.StatusBadRequest, err) {
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_password_changed", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard password changed", true)
+	}
+	updated, _ := s.pa.Auth.Users.GetUser(user.ID)
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "Password changed",
+		Data:    s.adminAccountPayload(updated),
+	})
+}
+
+func (s *Server) handleAdminAccountRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	user, ok := s.currentAdminUser(w, r)
+	if !ok {
+		return
+	}
+	var req adminRegenerateRecoveryCodesRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := s.pa.Auth.Users.VerifyPassword(user.ID, req.CurrentPassword); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	codes, err := s.pa.Auth.Users.GenerateRecoveryCodes(user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_recovery_codes_regenerated", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard recovery codes regenerated", true)
+	}
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "Recovery codes regenerated",
+		Data: map[string]any{
+			"recovery_codes": codes,
+		},
+	})
+}
+
+func (s *Server) currentAdminUser(w http.ResponseWriter, r *http.Request) (*models.User, bool) {
+	userID := currentAdminUserID(r)
+	if strings.TrimSpace(userID) == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return nil, false
+	}
+	user, exists := s.pa.Auth.Users.GetUser(userID)
+	if !exists || user == nil || user.Disabled || user.Role != "platform_admin" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user is not available"})
+		return nil, false
+	}
+	return user, true
+}
+
+func (s *Server) adminAccountPayload(user *models.User) adminAccountResponse {
+	if user == nil {
+		return adminAccountResponse{}
+	}
+	recoveryCodeCount := 0
+	if codes, err := s.pa.Store.ListActiveMFARecoveryCodes(user.ID); err == nil {
+		recoveryCodeCount = len(codes)
+	}
+	payload := adminAccountResponse{
+		ID:                user.ID,
+		Username:          user.Username,
+		Email:             user.Email,
+		Role:              user.Role,
+		MFAEnabled:        user.MFAEnabled(),
+		MFAMethods:        append([]string(nil), user.MFAMethods...),
+		RecoveryCodeCount: recoveryCodeCount,
+	}
+	if !user.PasswordChangedAt.IsZero() {
+		payload.PasswordChangedAt = user.PasswordChangedAt.Format("2006-01-02 15:04:05")
+	}
+	if !user.LastLoginAt.IsZero() {
+		payload.LastLogin = user.LastLoginAt.Format("2006-01-02 15:04:05")
+	}
+	return payload
+}
+
 func (s *Server) handleAdminOrganizations(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:

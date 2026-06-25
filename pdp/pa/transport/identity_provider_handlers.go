@@ -21,6 +21,40 @@ import (
 // Query param: organization_id (required).
 // GET  — list IdP configs for an organization
 // POST — create a new IdP config
+const scimTokenValidity = 90 * 24 * time.Hour
+
+func newSCIMTokenExpiresAt(now time.Time) time.Time {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return now.UTC().Add(scimTokenValidity)
+}
+
+func scimTokenExpired(cfg *models.IdentityProviderConfig, now time.Time) bool {
+	if cfg == nil || strings.TrimSpace(cfg.SCIMToken) == "" {
+		return true
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return cfg.SCIMTokenExpiresAt.IsZero() || !cfg.SCIMTokenExpiresAt.After(now.UTC())
+}
+
+func (s *Server) logSCIMTokenAudit(r *http.Request, eventType, idpID, decision, details string, success bool) {
+	if s == nil || s.pa == nil || s.pa.Audit == nil {
+		return
+	}
+	userID := ""
+	username := ""
+	sourceIP := ""
+	if r != nil {
+		userID = r.Header.Get("X-User-ID")
+		username = r.Header.Get("X-Username")
+		sourceIP = r.RemoteAddr
+	}
+	s.pa.Audit.LogEvent(eventType, userID, username, sourceIP, idpID, decision, details, success)
+}
+
 func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Request) {
 	organizationID := organizationIDFromQuery(r)
 	if organizationID == "" {
@@ -72,6 +106,10 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		makeDefault := idpMakeDefaultRequested(raw)
 
 		cfg.OrganizationID = organizationID
+		cfg.Name = strings.TrimSpace(cfg.Name)
+		cfg.Issuer = strings.TrimSpace(cfg.Issuer)
+		cfg.ClientID = strings.TrimSpace(cfg.ClientID)
+		cfg.ClientSecret = strings.TrimSpace(cfg.ClientSecret)
 		if cfg.ID == "" {
 			var err error
 			cfg.ID, err = util.GenerateID("idp")
@@ -86,6 +124,10 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 		}
 		if cfg.Issuer == "" || cfg.ClientID == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "issuer and client_id are required"})
+			return
+		}
+		if cfg.ClientSecret == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "client_secret is required"})
 			return
 		}
 		if cfg.Type == "" {
@@ -108,9 +150,12 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate SCIM token"})
 			return
 		}
+		now := time.Now().UTC()
 		cfg.SCIMToken = scimToken
-		cfg.CreatedAt = time.Now()
-		cfg.UpdatedAt = cfg.CreatedAt
+		cfg.SCIMTokenRotatedAt = now
+		cfg.SCIMTokenExpiresAt = newSCIMTokenExpiresAt(now)
+		cfg.CreatedAt = now
+		cfg.UpdatedAt = now
 
 		s.pa.Store.SaveIdentityProviderConfig(&cfg)
 		if makeDefault {
@@ -122,6 +167,7 @@ func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Req
 			s.reconcileOrganizationDefaultIdP(organizationID)
 		}
 		log.Printf("[ADMIN] IdP config created: %s (%s) organization=%s", cfg.ID, cfg.Name, organizationID)
+		s.logSCIMTokenAudit(r, "scim_token_created", cfg.ID, models.DecisionAllow, "SCIM token created for organization "+organizationID, true)
 
 		safe := s.sanitizeIdPConfigForOrganization(&cfg, organizationID)
 		safe["scim_token"] = scimToken
@@ -183,18 +229,19 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		makeDefault := idpMakeDefaultRequested(raw)
 		regenerateSCIMToken := idpRegenerateSCIMTokenRequested(raw)
 		var scimToken string
+		now := time.Now().UTC()
 
 		if update.Name != "" {
-			existing.Name = update.Name
+			existing.Name = strings.TrimSpace(update.Name)
 		}
 		if update.Issuer != "" {
-			existing.Issuer = update.Issuer
+			existing.Issuer = strings.TrimSpace(update.Issuer)
 		}
 		if update.ClientID != "" {
-			existing.ClientID = update.ClientID
+			existing.ClientID = strings.TrimSpace(update.ClientID)
 		}
 		if update.ClientSecret != "" {
-			existing.ClientSecret = update.ClientSecret
+			existing.ClientSecret = strings.TrimSpace(update.ClientSecret)
 		}
 		if regenerateSCIMToken {
 			generatedToken, err := util.GenerateSecretToken("tc_scim", 32)
@@ -204,6 +251,8 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			}
 			scimToken = generatedToken
 			existing.SCIMToken = generatedToken
+			existing.SCIMTokenRotatedAt = now
+			existing.SCIMTokenExpiresAt = newSCIMTokenExpiresAt(now)
 		}
 		if update.Scopes != "" {
 			existing.Scopes = update.Scopes
@@ -220,10 +269,14 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 		if _, ok := raw["enabled"]; ok {
 			existing.Enabled = update.Enabled
 		}
+		if existing.Enabled && strings.TrimSpace(existing.ClientSecret) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "client_secret is required"})
+			return
+		}
 		if _, ok := raw["auto_discovery"]; ok {
 			existing.AutoDiscovery = update.AutoDiscovery
 		}
-		existing.UpdatedAt = time.Now()
+		existing.UpdatedAt = now
 
 		s.pa.Store.SaveIdentityProviderConfig(existing)
 		if makeDefault {
@@ -235,6 +288,9 @@ func (s *Server) handleAdminIdentityProviderByID(w http.ResponseWriter, r *http.
 			s.reconcileOrganizationDefaultIdP(existing.OrganizationID)
 		}
 		log.Printf("[ADMIN] IdP config updated: %s (%s)", existing.ID, existing.Name)
+		if regenerateSCIMToken {
+			s.logSCIMTokenAudit(r, "scim_token_rotated", existing.ID, models.DecisionAllow, "SCIM token rotated for organization "+existing.OrganizationID, true)
+		}
 
 		safe := s.sanitizeIdPConfigForOrganization(existing, existing.OrganizationID)
 		if scimToken != "" {
@@ -349,24 +405,27 @@ func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{
 		return nil
 	}
 	return map[string]interface{}{
-		"id":                 cfg.ID,
-		"organization_id":    cfg.OrganizationID,
-		"name":               cfg.Name,
-		"type":               cfg.Type,
-		"enabled":            cfg.Enabled,
-		"domains":            cfg.Domains,
-		"issuer":             cfg.Issuer,
-		"client_id":          cfg.ClientID,
-		"client_secret":      "",
-		"has_client_secret":  cfg.ClientSecret != "",
-		"scim_token":         "",
-		"has_scim_token":     cfg.SCIMToken != "",
-		"scopes":             cfg.Scopes,
-		"auto_discovery":     cfg.AutoDiscovery,
-		"claim_mapping":      cfg.ClaimMapping,
-		"group_role_mapping": cfg.GroupRoleMapping,
-		"created_at":         cfg.CreatedAt,
-		"updated_at":         cfg.UpdatedAt,
+		"id":                    cfg.ID,
+		"organization_id":       cfg.OrganizationID,
+		"name":                  cfg.Name,
+		"type":                  cfg.Type,
+		"enabled":               cfg.Enabled,
+		"domains":               cfg.Domains,
+		"issuer":                cfg.Issuer,
+		"client_id":             cfg.ClientID,
+		"client_secret":         "",
+		"has_client_secret":     cfg.ClientSecret != "",
+		"scim_token":            "",
+		"has_scim_token":        cfg.SCIMToken != "",
+		"scim_token_expires_at": cfg.SCIMTokenExpiresAt,
+		"scim_token_rotated_at": cfg.SCIMTokenRotatedAt,
+		"scim_token_expired":    scimTokenExpired(cfg, time.Now().UTC()),
+		"scopes":                cfg.Scopes,
+		"auto_discovery":        cfg.AutoDiscovery,
+		"claim_mapping":         cfg.ClaimMapping,
+		"group_role_mapping":    cfg.GroupRoleMapping,
+		"created_at":            cfg.CreatedAt,
+		"updated_at":            cfg.UpdatedAt,
 	}
 }
 

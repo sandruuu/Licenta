@@ -154,7 +154,7 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 		DeviceChallenge: deviceChallenge,
 		PollSecretHash:  sha256HexString(pollSecret),
 		Status:          InteractiveStatusWaitingForIDPDiscovery,
-		AuthURL:         authBase + "/browser/enroll/" + sessionID,
+		AuthURL:         authBase + "/enroll/" + sessionID,
 		CreatedAt:       now,
 		ExpiresAt:       expiresAt,
 	}

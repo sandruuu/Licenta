@@ -227,18 +227,6 @@ func (store *adminSessionStore) revokeWithRefresh(sessionID, refreshToken string
 	return revoked
 }
 
-func (store *adminSessionStore) get(sessionID string) (*adminSessionRecord, bool) {
-	session, ok := store.load(strings.TrimSpace(sessionID))
-	if !ok || session == nil {
-		return nil, false
-	}
-	if store.sessionExpired(session, time.Now().UTC()) {
-		_ = store.state.DeleteEphemeralState(adminSessionStateKind, sessionID)
-		return nil, false
-	}
-	return copyAdminSession(session), true
-}
-
 func (store *adminSessionStore) accessTokenTTL(session *adminSessionRecord) time.Duration {
 	if store == nil || session == nil {
 		return 0

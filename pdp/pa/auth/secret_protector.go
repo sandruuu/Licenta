@@ -93,10 +93,10 @@ func (p *SecretProtector) Persistent() bool {
 
 func loadOrCreateSecretKey(cfg *config.Config, runtimeState *redisstate.Client) ([]byte, bool, error) {
 	if !vaultTransitAvailable(cfg) {
-		return nil, false, fmt.Errorf("Vault Transit configuration is required for MFA secret protection")
+		return nil, false, fmt.Errorf("vault transit configuration is required for MFA secret protection")
 	}
 	if runtimeState == nil {
-		return nil, false, fmt.Errorf("Redis runtime state is required for MFA secret key lock")
+		return nil, false, fmt.Errorf("redis runtime state is required for MFA secret key lock")
 	}
 	var key []byte
 	err := runtimeState.WithLock(context.Background(), "mfa-secret-key", 2*time.Minute, 2*time.Minute, func() error {

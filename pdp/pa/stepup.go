@@ -138,7 +138,7 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 		AllowedAAGUIDs:     append([]string(nil), requirement.AllowedAAGUIDs...),
 		RequiredACR:        models.StepUpACR(requirement.RequiredACR),
 		MaxAgeSeconds:      maxAgeSeconds,
-		URL:                strings.TrimRight(strings.TrimSpace(req.PublicOrigin), "/") + "/browser/step-up/" + id,
+		URL:                strings.TrimRight(strings.TrimSpace(req.PublicOrigin), "/") + "/verify/" + id,
 		Reason:             strings.TrimSpace(requirement.Reason),
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(defaultStepUpChallengeTTL),

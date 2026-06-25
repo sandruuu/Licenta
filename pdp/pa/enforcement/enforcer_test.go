@@ -69,9 +69,33 @@ func TestHealthChangedRevokesSessionsThatNoLongerPassPolicy(t *testing.T) {
 	}
 }
 
-func TestHealthChangedRevokesSessionsWithPostureChangeControl(t *testing.T) {
+func TestHealthChangedKeepsPostureChangeControlSessionWhenPolicyStillAllows(t *testing.T) {
 	policyAdmin, dataStore := newEnforcementTestPA(t)
 	seedEnforcementScope(dataStore)
+	now := time.Now()
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:      "pol-allow",
+		Name:    "Allow SSH",
+		Enabled: true,
+		Action:  "allow",
+		Conditions: models.RuleConditions{
+			Session: models.SessionPolicyControls{
+				RevokeOnPostureChange: true,
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:             "assign-allow",
+		PolicyID:       "pol-allow",
+		OrganizationID: "organization-1",
+		Level:          "resource",
+		ResourceID:     "res-ssh",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
 	session := activeSession("sess-posture-change", "device-1", "res-ssh", "gw-1", "organization-1")
 	session.RevokeOnPostureChange = true
 	dataStore.SaveSession(session)
@@ -84,10 +108,10 @@ func TestHealthChangedRevokesSessionsWithPostureChangeControl(t *testing.T) {
 		},
 	})
 
-	if revoked != 1 {
-		t.Fatalf("revoked = %d, want 1", revoked)
+	if revoked != 0 {
+		t.Fatalf("revoked = %d, want 0", revoked)
 	}
-	assertRevoked(t, dataStore, "sess-posture-change", true)
+	assertRevoked(t, dataStore, "sess-posture-change", false)
 }
 
 func TestPolicyUpdatedRevokesDeniedSessionsWithinScope(t *testing.T) {

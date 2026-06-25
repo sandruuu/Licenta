@@ -14,7 +14,7 @@ import (
 )
 
 func (s *Server) handleBrowserEnroll(w http.ResponseWriter, r *http.Request) {
-	sessionID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/browser/enroll/"), "/")
+	sessionID := publicPathID(r.URL.Path, publicEnrollPathPrefix)
 	if sessionID == "" {
 		http.NotFound(w, r)
 		return
@@ -121,14 +121,11 @@ func (s *Server) redirectBrowserEnrollToIDP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	fedCfg := &models.FederationConfig{
-		Issuer:        idpCfg.Issuer,
-		ClientID:      idpCfg.ClientID,
-		ClientSecret:  idpCfg.ClientSecret,
-		Scopes:        idpCfg.Scopes,
-		Prompt:        "login",
-		AutoDiscovery: idpCfg.AutoDiscovery,
-		ClaimMapping:  idpCfg.ClaimMapping,
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, nil, "login")
+	if err != nil {
+		log.Printf("[ENROLL] Invalid IdP configuration: session=%s idp=%s err=%v", session.ID, idpCfg.ID, err)
+		http.Error(w, "Identity provider configuration error", http.StatusInternalServerError)
+		return
 	}
 	authURL, err := s.pa.Auth.Federation.GenerateExternalAuthURL(fedCfg, s.federatedCallbackURL(), state, nonce, pkceChallenge)
 	if err != nil {
@@ -177,13 +174,11 @@ func (s *Server) handleEnrollmentFederatedCallback(w http.ResponseWriter, r *htt
 	if claimMapping == nil {
 		claimMapping = map[string]string{}
 	}
-	fedCfg := &models.FederationConfig{
-		Issuer:        idpCfg.Issuer,
-		ClientID:      idpCfg.ClientID,
-		ClientSecret:  idpCfg.ClientSecret,
-		Scopes:        idpCfg.Scopes,
-		AutoDiscovery: idpCfg.AutoDiscovery,
-		ClaimMapping:  claimMapping,
+	fedCfg, err := federationConfigFromIdentityProvider(idpCfg, claimMapping, "")
+	if err != nil {
+		log.Printf("[ENROLL] Invalid IdP configuration during callback: session=%s idp=%s err=%v", state, idpCfg.ID, err)
+		http.Error(w, "Federation configuration invalid", http.StatusInternalServerError)
+		return true
 	}
 	tokenResp, err := s.pa.Auth.Federation.ExchangeExternalCode(fedCfg, code, s.federatedCallbackURL(), session.PKCEVerifier)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"pdp/models"
 	"pdp/util"
@@ -31,13 +32,20 @@ func (s *Server) authenticateSCIMRequest(w http.ResponseWriter, r *http.Request,
 		writeSCIMError(w, http.StatusUnauthorized, "SCIM bearer token is required", "")
 		return nil, nil, false
 	}
+	now := time.Now().UTC()
 	for _, cfg := range s.pa.Store.ListIdentityProviderConfigsForOrganization(organization.ID) {
 		if cfg == nil || !cfg.Enabled || strings.TrimSpace(cfg.SCIMToken) == "" {
 			continue
 		}
-		if util.VerifySecretToken(cfg.SCIMToken, token) {
-			return organization, cfg, true
+		if !util.VerifySecretToken(cfg.SCIMToken, token) {
+			continue
 		}
+		if scimTokenExpired(cfg, now) {
+			s.logSCIMTokenAudit(r, "scim_token_expired", cfg.ID, models.DecisionDeny, "Expired SCIM token rejected for organization "+organization.ID, false)
+			writeSCIMError(w, http.StatusUnauthorized, "SCIM bearer token expired", "invalidToken")
+			return nil, nil, false
+		}
+		return organization, cfg, true
 	}
 	writeSCIMError(w, http.StatusUnauthorized, "invalid SCIM bearer token", "")
 	return nil, nil, false
@@ -207,20 +215,42 @@ func decodeSCIMEmails(raw json.RawMessage) ([]scimEmail, bool) {
 	return nil, false
 }
 
-func parseSCIMFilter(raw string) (scimFilter, bool) {
+func parseSCIMFilter(raw string) (scimFilter, bool, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return scimFilter{}, false
+		return scimFilter{}, false, nil
 	}
 	parts := strings.SplitN(raw, " eq ", 2)
 	if len(parts) != 2 {
 		parts = strings.SplitN(raw, " EQ ", 2)
 	}
 	if len(parts) != 2 {
-		return scimFilter{}, false
+		return scimFilter{}, false, fmt.Errorf("unsupported SCIM filter")
 	}
+	attribute := strings.ToLower(strings.TrimSpace(parts[0]))
 	value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
-	return scimFilter{Attribute: strings.ToLower(strings.TrimSpace(parts[0])), Value: value}, true
+	if attribute == "" || value == "" {
+		return scimFilter{}, false, fmt.Errorf("invalid SCIM filter")
+	}
+	return scimFilter{Attribute: attribute, Value: value}, true, nil
+}
+
+func validSCIMUserFilterAttribute(attribute string) bool {
+	switch strings.ToLower(strings.TrimSpace(attribute)) {
+	case "id", "externalid", "username", "emails.value":
+		return true
+	default:
+		return false
+	}
+}
+
+func validSCIMGroupFilterAttribute(attribute string) bool {
+	switch strings.ToLower(strings.TrimSpace(attribute)) {
+	case "id", "externalid", "displayname":
+		return true
+	default:
+		return false
+	}
 }
 
 func matchesSCIMUserFilter(user *models.DirectoryUser, filter scimFilter) bool {
@@ -234,7 +264,7 @@ func matchesSCIMUserFilter(user *models.DirectoryUser, filter scimFilter) bool {
 	case "emails.value":
 		return strings.EqualFold(user.Email, filter.Value)
 	default:
-		return true
+		return false
 	}
 }
 
@@ -247,7 +277,7 @@ func matchesSCIMGroupFilter(group *models.DirectoryGroup, filter scimFilter) boo
 	case "displayname":
 		return strings.EqualFold(group.DisplayName, filter.Value)
 	default:
-		return true
+		return false
 	}
 }
 

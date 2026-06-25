@@ -85,6 +85,90 @@ func TestSCIMRejectsInvalidBearerToken(t *testing.T) {
 	}
 }
 
+func TestSCIMRejectsExpiredBearerToken(t *testing.T) {
+	dataStore := newSCIMTestStore(t)
+	cfgs := dataStore.ListIdentityProviderConfigsForOrganization("organization-1")
+	if len(cfgs) != 1 {
+		t.Fatalf("IdP count = %d, want 1", len(cfgs))
+	}
+	cfgs[0].SCIMTokenExpiresAt = time.Now().UTC().Add(-time.Minute)
+	dataStore.SaveIdentityProviderConfig(cfgs[0])
+	server := newSCIMTestServer(dataStore)
+
+	recorder := performSCIMRequest(server, http.MethodGet, "/scim/v2/organization-1/Users", "", "scim-secret")
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s, want 401", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "expired") {
+		t.Fatalf("response body = %s, want expired token message", recorder.Body.String())
+	}
+}
+
+func TestSCIMRejectsBearerTokenWithoutExpiry(t *testing.T) {
+	dataStore := newSCIMTestStore(t)
+	cfgs := dataStore.ListIdentityProviderConfigsForOrganization("organization-1")
+	if len(cfgs) != 1 {
+		t.Fatalf("IdP count = %d, want 1", len(cfgs))
+	}
+	cfgs[0].SCIMTokenExpiresAt = time.Time{}
+	dataStore.SaveIdentityProviderConfig(cfgs[0])
+	server := newSCIMTestServer(dataStore)
+
+	recorder := performSCIMRequest(server, http.MethodGet, "/scim/v2/organization-1/Users", "", "scim-secret")
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s, want 401", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "expired") {
+		t.Fatalf("response body = %s, want expired token message", recorder.Body.String())
+	}
+}
+
+func TestSCIMRejectsUnknownUserFilter(t *testing.T) {
+	dataStore := newSCIMTestStore(t)
+	now := time.Now().UTC()
+	dataStore.SaveDirectoryUser(&models.DirectoryUser{
+		ID:             "dirusr-1",
+		OrganizationID: "organization-1",
+		IdPID:          "idp-1",
+		UserName:       "alice@example.test",
+		Email:          "alice@example.test",
+		Active:         true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	server := newSCIMTestServer(dataStore)
+
+	recorder := performSCIMRequest(server, http.MethodGet, `/scim/v2/organization-1/Users?filter=unknown%20eq%20%22alice%22`, "", "scim-secret")
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "invalidFilter") {
+		t.Fatalf("response body = %s, want invalidFilter", recorder.Body.String())
+	}
+}
+
+func TestSCIMRejectsUnknownGroupFilter(t *testing.T) {
+	dataStore := newSCIMTestStore(t)
+	now := time.Now().UTC()
+	dataStore.SaveDirectoryGroup(&models.DirectoryGroup{
+		ID:             "dirgrp-1",
+		OrganizationID: "organization-1",
+		IdPID:          "idp-1",
+		DisplayName:    "Engineering",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	server := newSCIMTestServer(dataStore)
+
+	recorder := performSCIMRequest(server, http.MethodGet, `/scim/v2/organization-1/Groups?filter=unknown%20eq%20%22Engineering%22`, "", "scim-secret")
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "invalidFilter") {
+		t.Fatalf("response body = %s, want invalidFilter", recorder.Body.String())
+	}
+}
+
 func newSCIMTestStore(t *testing.T) *store.Store {
 	t.Helper()
 	dataStore := testdb.NewStore(t)
@@ -92,16 +176,18 @@ func newSCIMTestStore(t *testing.T) *store.Store {
 	now := time.Now().UTC()
 	dataStore.SaveOrganization(&models.Organization{ID: "organization-1", Name: "Organization 1", Enabled: true, CreatedAt: now, UpdatedAt: now})
 	dataStore.SaveIdentityProviderConfig(&models.IdentityProviderConfig{
-		ID:             "idp-1",
-		OrganizationID: "organization-1",
-		Name:           "Organization 1 IdP",
-		Type:           "oidc",
-		Enabled:        true,
-		Issuer:         "https://idp.example.test",
-		ClientID:       "client-1",
-		SCIMToken:      "scim-secret",
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:                 "idp-1",
+		OrganizationID:     "organization-1",
+		Name:               "Organization 1 IdP",
+		Type:               "oidc",
+		Enabled:            true,
+		Issuer:             "https://idp.example.test",
+		ClientID:           "client-1",
+		SCIMToken:          "scim-secret",
+		SCIMTokenExpiresAt: now.Add(24 * time.Hour),
+		SCIMTokenRotatedAt: now,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	})
 	return dataStore
 }

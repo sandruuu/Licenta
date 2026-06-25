@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -206,8 +207,9 @@ func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, co
 	if err != nil {
 		return nil, "", fmt.Errorf("generate refresh token: %w", err)
 	}
+	refreshTokenHash := hashOIDCRefreshToken(refreshToken)
 	refresh := &RefreshToken{
-		Token:     refreshToken,
+		TokenHash: refreshTokenHash,
 		ClientID:  clientID,
 		UserID:    authCode.UserID,
 		Username:  authCode.Username,
@@ -219,13 +221,18 @@ func (m *OIDCManager) ExchangeCode(code, clientID, clientSecret, redirectURI, co
 		ExpiresAt: time.Now().Add(m.refreshTokenTTL),
 		Used:      false,
 	}
-	if err := saveOIDCState(m.state, oidcRefreshStateKind, refreshToken, refresh, refresh.ExpiresAt); err != nil {
+	if err := saveOIDCState(m.state, oidcRefreshStateKind, refreshTokenHash, refresh, refresh.ExpiresAt); err != nil {
 		return nil, "", err
 	}
 
 	log.Printf("[OIDC] Authorization code exchanged: user=%s client=%s (refresh_token issued)", authCode.Username, clientID)
 
 	return authCode, refreshToken, nil
+}
+
+func hashOIDCRefreshToken(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
 }
 
 func saveOIDCState(store RuntimeStateStore, kind, key string, value interface{}, expiresAt time.Time) error {

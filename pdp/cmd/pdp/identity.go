@@ -78,7 +78,7 @@ func pdpVaultConfig(cfg *config.Config) (pki.VaultConfig, error) {
 
 func restoreOrEnrollPDPIdentity(ctx context.Context, cfg *config.Config, vaultCfg pki.VaultConfig, runtimeState *redisstate.Client) (*ecdsa.PrivateKey, *tls.Certificate, error) {
 	if runtimeState == nil {
-		return nil, nil, fmt.Errorf("Redis runtime state is required for PDP identity lock")
+		return nil, nil, fmt.Errorf("redis runtime state is required for PDP identity lock")
 	}
 	var privKey *ecdsa.PrivateKey
 	var cert *tls.Certificate

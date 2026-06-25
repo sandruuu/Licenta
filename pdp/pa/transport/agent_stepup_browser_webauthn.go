@@ -209,6 +209,10 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 		return
 	}
 	s.pa.Auth.Users.AddMFAMethod(user.ID, "webauthn")
+	recoveryCodes, err := s.pa.Auth.Users.GenerateRecoveryCodes(user.ID)
+	if err != nil {
+		log.Printf("[STEP-UP] Recovery code generation failed after WebAuthn enrollment: challenge=%s user=%s err=%v", challenge.ID, user.ID, err)
+	}
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("agent_mfa_enrolled", user.ID, user.Username, r.RemoteAddr, challenge.ResourceID, models.DecisionAllow, "Passkey enrolled during resource step-up", true)
 	}
@@ -221,7 +225,11 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Passkey enrollment", true)
 	}
 	log.Printf("[STEP-UP] WebAuthn enrolled and completed challenge=%s user=%s resource=%s expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
-	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
+	response := map[string]any{"status": "completed"}
+	if len(recoveryCodes) > 0 {
+		response["recovery_codes"] = recoveryCodes
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) validateStepUpJSONMutation(w http.ResponseWriter, r *http.Request) bool {

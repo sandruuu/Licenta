@@ -29,7 +29,7 @@ func TestBrowserStepUpOffersTOTPSetupForUserWithoutMFA(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
@@ -61,7 +61,7 @@ func TestBrowserStepUpOffersTOTPSetupForUserWithoutMFA(t *testing.T) {
 	csrf := csrfCookie(t, rr)
 	authCookie := completeStepUpReauth(t, server, challenge, csrf, "secret")
 
-	req = httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	req.AddCookie(csrf)
 	req.AddCookie(authCookie)
 	rr = httptest.NewRecorder()
@@ -130,7 +130,7 @@ func TestBrowserStepUpSelectionMatchesAdminMFAStyle(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID, nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
@@ -169,14 +169,14 @@ func TestBrowserStepUpSelectionMatchesAdminMFAStyle(t *testing.T) {
 		}
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	rr = httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 body=%s", rr.Code, rr.Body.String())
 	}
 	body = rr.Body.String()
-	for _, want := range []string{"Back", `href="/browser/step-up/` + challenge.ID + `"`} {
+	for _, want := range []string{"Back", `href="/verify/` + challenge.ID + `"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("active method page missing %q: %s", want, body)
 		}
@@ -211,7 +211,7 @@ func TestBrowserStepUpConfiguredTOTPMatchesAdminMFALayout(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp", "webauthn"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
@@ -228,7 +228,7 @@ func TestBrowserStepUpConfiguredTOTPMatchesAdminMFALayout(t *testing.T) {
 		`max-width:300px`,
 		"Verify",
 		"Back",
-		`href="/browser/step-up/` + challenge.ID + `"`,
+		`href="/verify/` + challenge.ID + `"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("configured TOTP page missing %q: %s", want, body)
@@ -277,7 +277,7 @@ func TestBrowserStepUpPasskeySetupUsesIdentityVerificationCopy(t *testing.T) {
 		UpdatedAt:       time.Now(),
 	}, []string{"webauthn"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=webauthn", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=webauthn", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
@@ -325,13 +325,13 @@ func TestBrowserStepUpPasskeyCreatePageUsesAdminMFAStyle(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"webauthn"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=webauthn", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=webauthn", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 	csrf := csrfCookie(t, rr)
 
 	authCookie := completeStepUpReauthForMethod(t, server, challenge, csrf, "webauthn", "secret")
-	req = httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=webauthn", nil)
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=webauthn", nil)
 	req.AddCookie(csrf)
 	req.AddCookie(authCookie)
 	rr = httptest.NewRecorder()
@@ -380,7 +380,7 @@ func TestBrowserStepUpCancelDeniesChallenge(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID, nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID, nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 	csrf := csrfCookie(t, rr)
@@ -388,7 +388,7 @@ func TestBrowserStepUpCancelDeniesChallenge(t *testing.T) {
 	form := url.Values{}
 	form.Set("csrf_token", csrf.Value)
 	form.Set("action", "cancel")
-	req = httptest.NewRequest(http.MethodPost, "/browser/step-up/"+challenge.ID, strings.NewReader(form.Encode()))
+	req = httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(csrf)
 	rr = httptest.NewRecorder()
@@ -397,7 +397,7 @@ func TestBrowserStepUpCancelDeniesChallenge(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("status = %d, want 303 body=%s", rr.Code, rr.Body.String())
 	}
-	if got, want := rr.Header().Get("Location"), "/browser/step-up/"+challenge.ID+"?cancelled=1"; got != want {
+	if got, want := rr.Header().Get("Location"), "/verify/"+challenge.ID+"?cancelled=1"; got != want {
 		t.Fatalf("redirect location = %q, want %q", got, want)
 	}
 	updated, ok := server.pa.StepUps.Get(challenge.ID)
@@ -430,7 +430,7 @@ func TestBrowserStepUpCompletedStatusUsesResourceRetryMessage(t *testing.T) {
 		t.Fatalf("complete step-up challenge: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?completed=1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?completed=1", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
@@ -465,14 +465,14 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 
 	csrf := csrfCookie(t, rr)
 	authCookie := completeStepUpReauth(t, server, challenge, csrf, "secret")
 
-	req = httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	req.AddCookie(csrf)
 	req.AddCookie(authCookie)
 	rr = httptest.NewRecorder()
@@ -491,7 +491,7 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 	form.Set("csrf_token", csrf.Value)
 	form.Set("method", "totp")
 	form.Set("totp_code", code)
-	req = httptest.NewRequest(http.MethodPost, "/browser/step-up/"+challenge.ID, strings.NewReader(form.Encode()))
+	req = httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(csrf)
 	req.AddCookie(authCookie)
@@ -508,6 +508,9 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 	if !strings.Contains(body, stepUpResourceCompleteMessage) {
 		t.Fatalf("completion page missing resource retry message: %s", body)
 	}
+	if !strings.Contains(body, "Save these recovery codes") {
+		t.Fatalf("completion page missing recovery codes: %s", body)
+	}
 	if strings.Contains(body, "go back to the TRUSTAgent app") {
 		t.Fatalf("resource step-up page should not use TrustAgent login message: %s", body)
 	}
@@ -518,6 +521,86 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 	completed, ok := server.pa.StepUps.Get(challenge.ID)
 	if !ok || completed.Status != pa.StepUpStatusCompleted || completed.CompletedMethod != "totp" {
 		t.Fatalf("challenge not completed via TOTP: %+v ok=%v", completed, ok)
+	}
+}
+
+func TestBrowserStepUpRecoveryCodeResetsTOTPAndStartsSetup(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	secret, err := auth.GenerateTOTPSecret()
+	if err != nil {
+		t.Fatalf("generate TOTP secret: %v", err)
+	}
+	challenge := newStepUpBrowserChallenge(t, server, &models.User{
+		ID:              "user-stepup-recovery",
+		Username:        "recovery@example.test",
+		Email:           "recovery@example.test",
+		PasswordHash:    testPasswordHash(t, "secret"),
+		TOTPSecret:      secret,
+		MFAMethods:      []string{"totp"},
+		Role:            "user",
+		OrganizationID:  transportTestOrganizationID,
+		LastTOTPCounter: -1,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}, []string{"totp"})
+	recoveryCodes, err := server.pa.Auth.Users.GenerateRecoveryCodes("user-stepup-recovery")
+	if err != nil {
+		t.Fatalf("generate recovery codes: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
+	rr := httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Use recovery code") {
+		t.Fatalf("configured TOTP page missing recovery option: %s", rr.Body.String())
+	}
+	csrf := csrfCookie(t, rr)
+
+	form := url.Values{}
+	form.Set("csrf_token", csrf.Value)
+	form.Set("method", "recovery")
+	form.Set("target_method", "totp")
+	form.Set("recovery_code", recoveryCodes[0])
+	req = httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("recovery status = %d, want 303 body=%s", rr.Code, rr.Body.String())
+	}
+	authCookie := stepUpAuthCookie(t, rr)
+	if got, want := rr.Header().Get("Location"), "/verify/"+challenge.ID+"?method=totp"; got != want {
+		t.Fatalf("recovery redirect = %q, want %q", got, want)
+	}
+	user, ok := dataStore.GetUser("user-stepup-recovery")
+	if !ok || strings.TrimSpace(user.TOTPSecret) != "" || hasMFAMethod(user.MFAMethods, "totp") {
+		t.Fatalf("TOTP was not reset after recovery: user=%+v ok=%v", user, ok)
+	}
+	activeCodes, err := dataStore.ListActiveMFARecoveryCodes("user-stepup-recovery")
+	if err != nil {
+		t.Fatalf("list recovery codes: %v", err)
+	}
+	if len(activeCodes) != len(recoveryCodes)-1 {
+		t.Fatalf("active recovery codes = %d, want %d", len(activeCodes), len(recoveryCodes)-1)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
+	req.AddCookie(csrf)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("setup status = %d, want 200 body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "Set up Authenticator app") {
+		t.Fatalf("recovery should start TOTP setup: %s", rr.Body.String())
+	}
+	if _, ok := server.pa.StepUps.PendingTOTPSecret(challenge.ID); !ok {
+		t.Fatalf("recovery did not create pending TOTP setup")
 	}
 }
 
@@ -536,7 +619,7 @@ func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
 		UpdatedAt:      time.Now(),
 	}, []string{"totp"})
 
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/"+challenge.ID+"?method=totp", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
 	rr := httptest.NewRecorder()
 	server.handleBrowserStepUp(rr, req)
 	csrf := csrfCookie(t, rr)
@@ -547,7 +630,7 @@ func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
 		form.Set("method", "reauth")
 		form.Set("target_method", "totp")
 		form.Set("password", "wrong")
-		req = httptest.NewRequest(http.MethodPost, "/browser/step-up/"+challenge.ID, strings.NewReader(form.Encode()))
+		req = httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.AddCookie(csrf)
 		rr = httptest.NewRecorder()
@@ -560,13 +643,27 @@ func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
 }
 
 func TestStepUpCSPDisallowsInlineScripts(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/browser/step-up/stepup-1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/verify/stepup-1", nil)
 	policy := contentSecurityPolicy(req)
 	if !strings.Contains(policy, "script-src 'self';") {
 		t.Fatalf("step-up CSP did not restrict script-src to self: %s", policy)
 	}
-	if strings.Contains(policy, "script-src 'self' 'unsafe-inline'") {
-		t.Fatalf("step-up CSP allows inline scripts: %s", policy)
+	if strings.Contains(policy, "'unsafe-inline'") {
+		t.Fatalf("step-up CSP allows inline content: %s", policy)
+	}
+}
+
+func TestDashboardCSPDisallowsInlineScriptsAndStyles(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	policy := contentSecurityPolicy(req)
+	if !strings.Contains(policy, "script-src 'self';") {
+		t.Fatalf("dashboard CSP did not restrict script-src to self: %s", policy)
+	}
+	if !strings.Contains(policy, "style-src 'self' https://fonts.googleapis.com;") {
+		t.Fatalf("dashboard CSP did not restrict style-src to self and trusted font CSS: %s", policy)
+	}
+	if strings.Contains(policy, "'unsafe-inline'") {
+		t.Fatalf("dashboard CSP allows inline content: %s", policy)
 	}
 }
 
@@ -631,7 +728,7 @@ func completeStepUpReauthForMethod(t *testing.T, server *Server, challenge *pa.S
 	form.Set("method", "reauth")
 	form.Set("target_method", targetMethod)
 	form.Set("password", password)
-	req := httptest.NewRequest(http.MethodPost, "/browser/step-up/"+challenge.ID, strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(csrf)
 	rr := httptest.NewRecorder()
@@ -639,6 +736,11 @@ func completeStepUpReauthForMethod(t *testing.T, server *Server, challenge *pa.S
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("reauth status = %d, want 303 body=%s", rr.Code, rr.Body.String())
 	}
+	return stepUpAuthCookie(t, rr)
+}
+
+func stepUpAuthCookie(t *testing.T, rr *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
 	for _, cookie := range rr.Result().Cookies() {
 		if cookie.Name == stepUpAuthCookieName && cookie.MaxAge > 0 {
 			if cookie.Path != "/" {

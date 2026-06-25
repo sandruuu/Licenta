@@ -78,26 +78,7 @@ func (s *Store) ListResources() []*models.Resource {
 		return nil
 	}
 	defer rows.Close()
-
-	var resources []*models.Resource
-	for rows.Next() {
-		r := &models.Resource{}
-		var enabled int
-		var tagsJSON, metaJSON, createdAt, updatedAt string
-
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.Type, &r.Host, &r.ExternalPort, &r.InternalPort, &r.ExternalURL,
-			&enabled, &tagsJSON, &metaJSON, &r.OrganizationID, &r.GatewayID, &createdAt, &updatedAt); err != nil {
-			continue
-		}
-
-		r.Enabled = i2b(enabled)
-		r.Tags = fromJSON[[]string](tagsJSON)
-		r.Metadata = fromJSON[map[string]string](metaJSON)
-		r.CreatedAt = parseTime(createdAt)
-		r.UpdatedAt = parseTime(updatedAt)
-		resources = append(resources, r)
-	}
-	return resources
+	return s.scanResources(rows)
 }
 
 func (s *Store) ListResourcesByOrganization(organizationID string) []*models.Resource {
