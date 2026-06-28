@@ -28,6 +28,7 @@ import FormField, { FormCheckbox, FormInput, FormSelect, FormTextarea } from '..
 import StatusText from '../components/ui/StatusText';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
 import { layerIcons } from '../components/policies/policyIcons';
+import { displayGatewayName, displayOrganizationName, displayResourceName } from '../utils/displayNames';
 import { navigateBack } from '../utils/navigation';
 
 const detailPanelClass = 'rounded-md border border-border bg-transparent';
@@ -69,9 +70,9 @@ function assignmentTypeLabel(assignment) {
 
 function assignmentTargetText(resource, assignment, group) {
   if (assignment?.level === 'resource_group') {
-    return `${resource?.name || assignment.resource_id || 'Resource'} + ${group?.display_name || assignment.group_name || assignment.group_id || 'Group'}`;
+    return `${displayResourceName(resource)} + ${group?.display_name || assignment.group_name || 'Group'}`;
   }
-  return resource?.name || assignment?.resource_id || 'Resource';
+  return displayResourceName(resource);
 }
 
 function externalHost(resource) {
@@ -266,7 +267,7 @@ export default function ResourceDetail() {
               </button>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{resource.name || resource.id}</h1>
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{displayResourceName(resource)}</h1>
                   <StatusText variant={resource.enabled ? 'success' : 'danger'}>{resource.enabled ? 'Enabled' : 'Disabled'}</StatusText>
                 </div>
               </div>
@@ -291,8 +292,8 @@ export default function ResourceDetail() {
             <DetailField label="External port" value={externalPort} mono />
             <DetailField label="Internal host" value={resource.host} mono />
             <DetailField label="Internal port" value={internalPort} mono />
-            <DetailField label="Organization" value={organization?.name || resource.organization_id} />
-            <DetailField label="Gateway" value={gateway?.name || '-'} />
+            <DetailField label="Organization" value={displayOrganizationName(organization)} />
+            <DetailField label="Gateway" value={gateway ? displayGatewayName(gateway) : '-'} />
           </div>
         </section>
 

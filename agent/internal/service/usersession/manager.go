@@ -11,6 +11,12 @@ import (
 	"agent/internal/shared/ipc"
 )
 
+const (
+	authenticatedMessage                    = "Authenticated"
+	preparingResourceAccessMessage          = "Authenticated. Preparing resource access..."
+	resourceAccessSetupFailureMessagePrefix = "Resource access setup failed: "
+)
+
 func NewManager(config Config, dependencies Dependencies) *Manager {
 	config = normalizeConfig(config)
 	if dependencies.Logger == nil {
@@ -408,6 +414,14 @@ func (manager *Manager) RefreshCatalog(ctx context.Context, sessionID string) er
 			continue
 		}
 		session.catalog = catalogInfo
+		if strings.TrimSpace(session.stepUpURL) == "" {
+			if session.message == preparingResourceAccessMessage {
+				session.message = authenticatedMessage
+			}
+			if strings.HasPrefix(session.lastError, resourceAccessSetupFailureMessagePrefix) {
+				session.lastError = ""
+			}
+		}
 	}
 	manager.mu.Unlock()
 	return nil
@@ -476,27 +490,6 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 	if err != nil {
 		return err
 	}
-	catalog, err := client.GetCatalog(ctx, GetCatalogRequest{AgentSessionToken: claimed.AgentSessionToken})
-	if err != nil {
-		return err
-	}
-	catalogInfo := ipc.CatalogInfo{
-		Version:          catalog.Version,
-		Resources:        catalog.Resources,
-		TTLSeconds:       catalog.TTLSeconds,
-		PolicyEpoch:      catalog.PolicyEpoch,
-		DeviceDataPolicy: catalog.DeviceDataPolicy,
-		UpdatedAt:        manager.clock().UTC(),
-	}
-	if manager.onCatalog != nil {
-		if err := manager.onCatalog(ctx, session.peer, catalogInfo); err != nil {
-			_ = client.RevokeSession(ctx, RevokeSessionRequest{
-				AgentSessionToken: claimed.AgentSessionToken,
-				SessionID:         claimed.AgentSessionID,
-			})
-			return fmt.Errorf("apply protected resource catalog: %w", err)
-		}
-	}
 	startExpiryWatcher := false
 	manager.mu.Lock()
 	current := manager.sessions[session.key]
@@ -508,10 +501,9 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 		current.displayName = firstNonEmpty(claimed.DisplayName, claimed.Email)
 		current.email = claimed.Email
 		current.expiresAt = claimed.ExpiresAt
-		current.message = "Authenticated"
+		current.message = preparingResourceAccessMessage
 		current.lastError = ""
 		clearStepUpLocked(current)
-		current.catalog = catalogInfo
 		startExpiryWatcher = true
 	}
 	manager.mu.Unlock()
@@ -520,8 +512,44 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 		if manager.onAuthenticated != nil {
 			manager.onAuthenticated(ctx, session.peer)
 		}
+		go manager.refreshCatalogAfterClaim(claimed.AgentSessionID)
 	}
 	return nil
+}
+
+func (manager *Manager) refreshCatalogAfterClaim(sessionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultCatalogRefreshTimeout)
+	defer cancel()
+	if err := manager.RefreshCatalog(ctx, sessionID); err != nil {
+		manager.logger.Warn("failed to refresh protected resource catalog after user authentication", "session_id", sessionID, "error", err)
+		manager.setAuthenticatedCatalogError(sessionID, err)
+	}
+}
+
+func (manager *Manager) setAuthenticatedCatalogError(sessionID string, err error) {
+	if manager == nil || err == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	displayMessage := userSessionFailureMessage(err.Error())
+	if displayMessage == "" {
+		displayMessage = err.Error()
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for _, session := range manager.sessions {
+		if session == nil || session.state != ipc.UserSessionStateAuthenticated {
+			continue
+		}
+		if sessionID != "" && strings.TrimSpace(session.agentSessionID) != sessionID {
+			continue
+		}
+		if strings.TrimSpace(session.stepUpURL) != "" {
+			continue
+		}
+		session.message = authenticatedMessage
+		session.lastError = resourceAccessSetupFailureMessagePrefix + displayMessage
+	}
 }
 
 func (manager *Manager) startAuthenticatedSessionExpiryWatcher(key string) {
@@ -846,6 +874,32 @@ func (manager *Manager) MarkAuthenticatedStepUpAllowed(resourceID, target string
 		clearStepUpLocked(session)
 		session.lastError = ""
 		session.message = "Access granted to " + displayTarget + "."
+	}
+}
+
+func (manager *Manager) MarkAuthenticatedStepUpCompleted(sessionID, resourceID, target string) {
+	if manager == nil {
+		return
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	resourceID = strings.TrimSpace(resourceID)
+	target = strings.TrimSpace(target)
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	for _, session := range manager.sessions {
+		if session == nil || session.state != ipc.UserSessionStateAuthenticated {
+			continue
+		}
+		if sessionID != "" && strings.TrimSpace(session.agentSessionID) != sessionID {
+			continue
+		}
+		if resourceID != "" && strings.TrimSpace(session.stepUpResourceID) != "" && !stepUpMatches(session, resourceID, target) {
+			continue
+		}
+		displayTarget := stepUpDisplayTarget(session, resourceID, target)
+		clearStepUpLocked(session)
+		session.lastError = ""
+		session.message = "Security verification completed for " + displayTarget + "."
 	}
 }
 

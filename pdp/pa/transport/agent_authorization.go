@@ -71,7 +71,7 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 		s.rememberGatewaySession(result.SessionID, result.GatewayID)
 	}
 	if result.Decision == models.DecisionAllow {
-		s.touchAgentSessionActivity(token, deviceID, certificateThumbprint)
+		s.touchAgentSessionActivityWithClaims(result.AgentSessionClaims, token, deviceID, certificateThumbprint)
 	}
 	return agentAuthorizeResponseFromPA(result), http.StatusOK, nil
 }

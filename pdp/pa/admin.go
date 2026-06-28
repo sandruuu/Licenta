@@ -77,7 +77,8 @@ func NewPolicyAdministrator(cfg *config.Config, s *store.Store, runtimeState *re
 		if strings.TrimSpace(session.Hostname) != "" {
 			details += " for " + strings.TrimSpace(session.Hostname)
 		}
-		auditLogger.LogEvent("enrollment_expired", "", "", strings.TrimSpace(session.SourceIP), resource, models.DecisionDeny, details, false)
+		auditLogger.LogEvent("enrollment_expired", strings.TrimSpace(session.AuthenticatedUserID), strings.TrimSpace(session.AuthenticatedUsername),
+			strings.TrimSpace(session.SourceIP), resource, models.DecisionDeny, details, false)
 	})
 
 	return pa

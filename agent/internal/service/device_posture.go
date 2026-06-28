@@ -24,6 +24,22 @@ func (service *Service) enforceLocalDevicePosture(ctx context.Context, report ip
 	}
 
 	catalog, policy := catalogPolicyForLocalPosture(active)
+	if len(policy.RequiredChecks) == 0 {
+		if !service.clearLocalAccessSuspension() || len(catalog.Resources) == 0 {
+			return
+		}
+		applyCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := service.protectedResources.ApplyCatalog(applyCtx, catalog); err != nil {
+			service.logger.Warn("failed to restore protected resources after clearing local suspension", "error", err)
+			service.markLocalAccessSuspended("protected resource catalog could not be restored")
+			return
+		}
+		service.userSessions.SetAuthenticatedMessage("Authenticated")
+		service.logger.Info("protected resources restored after clearing local suspension", "catalog_version", catalog.Version)
+		return
+	}
+
 	allowed, reason := deviceDataSatisfiesPolicy(report, policy)
 	if !allowed {
 		if service.markLocalAccessSuspended(reason) {

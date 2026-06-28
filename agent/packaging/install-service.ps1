@@ -9,6 +9,43 @@ $ErrorActionPreference = "Stop"
 $serviceName = "TrustAgent"
 $displayName = "TrustAgent"
 $description = "Privileged TrustAgent endpoint service."
+$pipePath = "\\.\pipe\trust-agent"
+
+function Test-TrustAgentPipe {
+    try {
+        return [System.IO.Directory]::GetFiles("\\.\pipe\") -contains $pipePath
+    } catch {
+        return Test-Path -LiteralPath $pipePath
+    }
+}
+
+function Wait-TrustAgentReady {
+    param(
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $service = Get-Service -Name $serviceName -ErrorAction Stop
+        if ($service.Status -eq "Stopped") {
+            throw "TrustAgent service stopped before creating the IPC pipe."
+        }
+        if (Test-TrustAgentPipe) {
+            return
+        }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "TrustAgent service did not create the IPC pipe $pipePath within $TimeoutSeconds seconds."
+}
+
+function Set-TrustAgentAutomaticStart {
+    & sc.exe config $serviceName start= auto | Out-Null
+    $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
+    if (Test-Path -LiteralPath $serviceKey) {
+        New-ItemProperty -Path $serviceKey -Name "DelayedAutoStart" -PropertyType DWord -Value 0 -Force | Out-Null
+    }
+}
 
 $runtime = (Resolve-Path -LiteralPath $RuntimePath).ProviderPath
 $binaryPath = '"' + $runtime + '"'
@@ -30,15 +67,28 @@ if ($null -ne $existing) {
 
 $wfpService = Get-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
 if ($null -ne $wfpService -and $wfpService.Status -ne "Running") {
-    Start-Service -Name trustagent_wfp -ErrorAction SilentlyContinue
-    (Get-Service -Name trustagent_wfp).WaitForStatus("Running", [TimeSpan]::FromSeconds(15))
+    try {
+        Start-Service -Name trustagent_wfp -ErrorAction Stop
+        (Get-Service -Name trustagent_wfp -ErrorAction Stop).WaitForStatus("Running", [TimeSpan]::FromSeconds(15))
+    } catch {
+        Write-Warning "TrustAgent WFP driver service is not running yet: $($_.Exception.Message)"
+    }
 }
 
-& $preflightScript -RuntimePath $runtime -RepairPaths
+& $preflightScript -RuntimePath $runtime -RepairPaths -SkipEnvironmentChecks
 
 & sc.exe description $serviceName $description | Out-Null
-& sc.exe config $serviceName start= delayed-auto | Out-Null
+Set-TrustAgentAutomaticStart
 & sc.exe failure $serviceName reset= 86400 actions= restart/10000/restart/30000/restart/60000 | Out-Null
 & sc.exe failureflag $serviceName 1 | Out-Null
 
 Start-Service -Name $serviceName
+try {
+    Wait-TrustAgentReady -TimeoutSeconds 30
+} catch {
+    Write-Warning "$($_.Exception.Message) Restarting TrustAgent once."
+    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-Service -Name $serviceName
+    Wait-TrustAgentReady -TimeoutSeconds 30
+}

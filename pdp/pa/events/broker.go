@@ -218,6 +218,7 @@ const (
 	TopicPolicyUpdated    = "policy.updated"
 	TopicResourcesUpdated = "resources.updated"
 	TopicSessionDeleted   = "session.deleted"
+	TopicStepUpCompleted  = "step_up.completed"
 	TopicHealthChanged    = "health.changed"
 	TopicDeviceRevoked    = "device.revoked"
 	TopicGatewayRevoked   = "gateway.revoked"
@@ -229,6 +230,7 @@ func standardTopics() []string {
 		TopicPolicyUpdated,
 		TopicResourcesUpdated,
 		TopicSessionDeleted,
+		TopicStepUpCompleted,
 		TopicHealthChanged,
 		TopicDeviceRevoked,
 		TopicGatewayRevoked,

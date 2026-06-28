@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-scim-sync
+  namespace: trustcloud-idp
+  labels:
+    app.kubernetes.io/name: keycloak-scim-sync
+    app.kubernetes.io/part-of: trustcloud
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keycloak-scim-sync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keycloak-scim-sync
+        app.kubernetes.io/part-of: trustcloud
+    spec:
+      containers:
+        - name: keycloak-scim-sync
+          image: laurasandru/trustcloud-keycloak-scim-sync:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: keycloak-scim-sync-config
+          env:
+            - name: KEYCLOAK_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secrets
+                  key: KEYCLOAK_ADMIN_USERNAME
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secrets
+                  key: KEYCLOAK_ADMIN_PASSWORD
+            - name: PDP_ORGANIZATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-scim-sync-secrets
+                  key: PDP_ORGANIZATION_ID
+            - name: PDP_SCIM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-scim-sync-secrets
+                  key: PDP_SCIM_TOKEN
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+

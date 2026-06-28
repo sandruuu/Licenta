@@ -97,17 +97,13 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 		ExpiresAt:              expiresAt,
 	}
 	service.server.agentSessions.save(session)
-	if service.server.pa.Audit != nil {
-		service.server.pa.Audit.LogEvent("agent_user_authentication_request", "", "", grpcPeerIP(ctx), deviceID, "",
-			"User authentication requested for TrustAgent session", true)
-	}
 	return structpb.NewStruct(map[string]interface{}{
 		"session_request_id":    session.ID,
 		"auth_url":              session.AuthURL,
 		"claim_secret":          claimSecret,
 		"status":                session.Status,
 		"expires_at":            session.ExpiresAt.Format(time.RFC3339Nano),
-		"poll_interval_seconds": float64(3),
+		"poll_interval_seconds": float64(1),
 	})
 }
 

@@ -412,7 +412,7 @@ Installer Inno Setup:
 - daca serviciul nu exista, il creeaza ca `Automatic`;
 - daca serviciul driver `trustagent_wfp` exista si nu ruleaza, incearca sa il porneasca si asteapta maxim 15s;
 - ruleaza `Test-AgentConfig.ps1 -RepairPaths`;
-- seteaza start delayed-auto;
+- seteaza pornirea automata a serviciului, fara delayed auto-start;
 - configureaza service recovery: restart dupa 10s, 30s si 60s;
 - seteaza failure flag;
 - porneste serviciul.
@@ -2490,7 +2490,6 @@ packaging/build-enterprise-package.ps1
 packaging/install-service.ps1
 packaging/Test-AgentConfig.ps1
 packaging/trust-agent-setup.iss
-reset-local-enrollment.ps1
 wfp-driver/build-driver.ps1
 wfp-driver/install-test-driver.ps1
 wfp-driver/README.md
@@ -2521,28 +2520,6 @@ Proiect driver VCXPROJ:
 - semnare driver: `FileDigestAlgorithm=sha256`;
 - compileaza `trustagent_wfp.c`, include `trustagent_wfp.h`, ambaleaza `trustagent_wfp.inf`;
 - targetul `TrustAgentPackageDriverBinary` adauga `$(TargetPath)` in pachet inainte de `DriverPackageTarget`.
-
-Script reset enrollment local:
-
-- fisier: `agent\reset-local-enrollment.ps1`;
-- cere PowerShell elevated;
-- parametri: `ServiceName`, default `TrustAgent`, si `InstallDir` optional;
-- daca `InstallDir` lipseste, il deduce din serviciu sau foloseste `C:\Program Files\TrustAgent`;
-- cere artefacte build: `build\trust-agent.exe`, `build\config.json`, `build\pdp-ca.pem`;
-- ruleaza preflight `packaging\Test-AgentConfig.ps1 -RepairPaths`;
-- opreste serviciul si procesele `trust-agent`;
-- copiaza binarul/configul/CA-ul cu retry;
-- face backup la `C:\ProgramData\TrustAgent\enrollment.json` in `enrollment.before-reenroll-<timestamp>.json`;
-- sterge enrollment state-ul curent;
-- sterge certificatele din `LocalMachine\My` cu Subject `CN=dev_...`;
-- sterge cheia `TrustAgentDeviceKey` din `Microsoft Platform Crypto Provider`;
-- sterge cheia `TrustAgentDeviceKey` din `Microsoft Software Key Storage Provider`;
-- sterge regulile NRPT cu `Comment = TRUSTAGENT`;
-- ruleaza `ipconfig /flushdns`;
-- porneste serviciul;
-- porneste `trust-agent.exe`;
-- afiseaza SHA256-ul binarului instalat;
-- mesaj final asteptat: UI-ul trebuie sa arate `UNENROLLED DEVICE`.
 
 Fisiere generate Wails:
 

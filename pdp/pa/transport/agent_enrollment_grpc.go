@@ -57,17 +57,6 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 	if err != nil {
 		return nil, enrollmentGRPCError(err)
 	}
-	if service.server.pa.Audit != nil {
-		resource := hostname
-		if resource == "" {
-			resource = result.SessionID
-		}
-		details := "Device enrollment requested"
-		if hostname != "" {
-			details += " for " + hostname
-		}
-		service.server.pa.Audit.LogEvent("enrollment_requested", "", "", sourceIP, resource, "", details, true)
-	}
 	return structpb.NewStruct(map[string]interface{}{
 		"enrollment_session_id":  result.SessionID,
 		"auth_url":               result.AuthURL,

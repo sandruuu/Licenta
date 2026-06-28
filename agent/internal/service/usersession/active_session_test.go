@@ -160,6 +160,31 @@ func TestAuthenticatedStepUpMessagesIncludeResourceTarget(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedStepUpCompletionShowsSuccessMessage(t *testing.T) {
+	manager := NewManager(Config{TrustedStepUpHosts: []string{"pdp.example.test"}}, Dependencies{})
+	manager.sessions["auth"] = &sessionState{
+		key:               "auth",
+		state:             ipc.UserSessionStateAuthenticated,
+		agentSessionID:    "sess-1",
+		agentSessionToken: "agent-token",
+		expiresAt:         time.Now().Add(time.Hour),
+	}
+	manager.SetAuthenticatedStepUp(
+		"Additional security verification is required to access rdp-desktop.trustcloud.test.",
+		"https://pdp.example.test/verify/stepup-1",
+		"res-rdp",
+		"rdp-desktop.trustcloud.test",
+		time.Now().Add(time.Minute),
+	)
+
+	manager.MarkAuthenticatedStepUpCompleted("sess-1", "res-rdp", "")
+
+	session := manager.sessions["auth"]
+	if session.stepUpURL != "" || session.lastError != "" || session.message != "Security verification completed for rdp-desktop.trustcloud.test." {
+		t.Fatalf("completed step-up session = %+v", session)
+	}
+}
+
 func TestAuthenticatedStepUpDeniedKeepsResourceTarget(t *testing.T) {
 	manager := NewManager(Config{TrustedStepUpHosts: []string{"pdp.example.test"}}, Dependencies{})
 	manager.sessions["auth"] = &sessionState{
@@ -457,13 +482,101 @@ func TestRefreshCatalogAppliesUpdatedCatalog(t *testing.T) {
 	}
 }
 
+func TestClaimSessionAuthenticatesBeforeCatalogRefreshCompletes(t *testing.T) {
+	client := &recordingSessionClient{
+		claim: ClaimSessionResponse{
+			AgentSessionID:    "sess-fast-login",
+			AgentSessionToken: "agent-token",
+			ExpiresAt:         time.Now().Add(time.Hour),
+			DisplayName:       "User",
+			Email:             "user@example.test",
+		},
+		catalog: CatalogResponse{
+			Version: "catalog-v1",
+			Resources: []ipc.CatalogResource{{
+				ResourceID: "res-web",
+				FQDN:       "web.internal.example",
+				Protocol:   "https",
+				Port:       443,
+			}},
+			TTLSeconds: 300,
+		},
+		getCatalogStarted: make(chan struct{}, 1),
+		getCatalogRelease: make(chan struct{}),
+	}
+	applied := make(chan ipc.CatalogInfo, 1)
+	manager := NewManager(Config{}, Dependencies{
+		Client: client,
+		Clock:  time.Now,
+		OnCatalog: func(_ context.Context, _ ipc.PeerIdentity, catalog ipc.CatalogInfo) error {
+			applied <- catalog
+			return nil
+		},
+	})
+	peer := ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-4000",
+		WindowsLogonSessionID: "00000000:00000402",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	}
+	key, err := localUserKey(peer)
+	if err != nil {
+		t.Fatalf("localUserKey returned error: %v", err)
+	}
+	state := &sessionState{
+		key:              key,
+		peer:             peer,
+		state:            ipc.UserSessionStateAuthenticating,
+		sessionRequestID: "srq-1",
+		claimSecret:      "claim-secret",
+		expiresAt:        time.Now().Add(time.Minute),
+	}
+	manager.sessions[key] = state
+
+	if err := manager.claimSession(context.Background(), client, state, "", ""); err != nil {
+		t.Fatalf("claimSession() error = %v", err)
+	}
+	snapshot := manager.Snapshot(peer)
+	if snapshot.UserSession.State != ipc.UserSessionStateAuthenticated {
+		t.Fatalf("user session state = %q, want authenticated", snapshot.UserSession.State)
+	}
+	if snapshot.UserSession.Message != preparingResourceAccessMessage {
+		t.Fatalf("message = %q, want preparing resources", snapshot.UserSession.Message)
+	}
+	if len(snapshot.Catalog.Resources) != 0 {
+		t.Fatalf("catalog should not be visible before refresh completes: %+v", snapshot.Catalog)
+	}
+
+	select {
+	case <-client.getCatalogStarted:
+	case <-time.After(time.Second):
+		t.Fatal("catalog refresh did not start")
+	}
+	close(client.getCatalogRelease)
+	select {
+	case catalog := <-applied:
+		if catalog.Version != "catalog-v1" || len(catalog.Resources) != 1 {
+			t.Fatalf("applied catalog = %+v", catalog)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("catalog was not applied after release")
+	}
+	snapshot = manager.Snapshot(peer)
+	if snapshot.UserSession.Message != authenticatedMessage || len(snapshot.Catalog.Resources) != 1 {
+		t.Fatalf("snapshot after catalog refresh = user=%+v catalog=%+v", snapshot.UserSession, snapshot.Catalog)
+	}
+}
+
 type recordingSessionClient struct {
-	mu       sync.Mutex
-	revokes  []RevokeSessionRequest
-	renews   []RenewSessionRequest
-	renew    RenewSessionResponse
-	renewErr error
-	catalog  CatalogResponse
+	mu                sync.Mutex
+	revokes           []RevokeSessionRequest
+	renews            []RenewSessionRequest
+	claim             ClaimSessionResponse
+	renew             RenewSessionResponse
+	renewErr          error
+	catalog           CatalogResponse
+	getCatalogStarted chan struct{}
+	getCatalogRelease chan struct{}
 }
 
 func (client *recordingSessionClient) StartSession(context.Context, StartSessionRequest) (StartSessionResponse, error) {
@@ -475,10 +588,19 @@ func (client *recordingSessionClient) SessionStatus(context.Context, SessionStat
 }
 
 func (client *recordingSessionClient) ClaimSession(context.Context, ClaimSessionRequest) (ClaimSessionResponse, error) {
-	return ClaimSessionResponse{}, nil
+	return client.claim, nil
 }
 
 func (client *recordingSessionClient) GetCatalog(context.Context, GetCatalogRequest) (CatalogResponse, error) {
+	if client.getCatalogStarted != nil {
+		select {
+		case client.getCatalogStarted <- struct{}{}:
+		default:
+		}
+	}
+	if client.getCatalogRelease != nil {
+		<-client.getCatalogRelease
+	}
 	return client.catalog, nil
 }
 

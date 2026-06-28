@@ -1,3 +1,5 @@
+import { displayOrganizationName, displayResourceName } from '../../utils/displayNames';
+
 export const ACTION_META = {
   allow: { label: 'Allow access', short: 'Allow', variant: 'success' },
   step_up_required: { label: 'Enforce MFA', short: 'MFA', variant: 'warning' },
@@ -629,15 +631,21 @@ export function layerWeight(level) {
 }
 
 export function assignmentScopeLabel(assignment, maps) {
-  const organization = maps.organizations?.get(assignment.organization_id)?.name || assignment.organization_id || '';
+  const organization = maps.organizations?.has(assignment.organization_id)
+    ? displayOrganizationName(maps.organizations.get(assignment.organization_id))
+    : '';
   const group = maps.groups?.get(assignment.group_id);
   const idp = group?.idp_id ? maps.idps?.get(group.idp_id) : null;
-  return [organization, idp?.name || group?.idp_id].filter(Boolean).join(' / ');
+  return [organization, idp?.name].filter(Boolean).join(' / ');
 }
 
 export function targetLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
-  const resource = maps.resources.get(assignment.resource_id)?.name || assignment.resource_id || 'Resource';
+  const organization = maps.organizations.has(assignment.organization_id)
+    ? displayOrganizationName(maps.organizations.get(assignment.organization_id))
+    : 'Organization';
+  const resource = maps.resources.has(assignment.resource_id)
+    ? displayResourceName(maps.resources.get(assignment.resource_id))
+    : 'Resource';
   const group = maps.groups.get(assignment.group_id)?.display_name || assignment.group_name || assignment.group_id || 'Group';
   if (assignment.level === 'resource_group') return `${resource} + ${group}`;
   if (assignment.level === 'resource') return resource;
@@ -646,8 +654,12 @@ export function targetLabel(assignment, maps) {
 }
 
 export function assignmentTargetLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
-  const resource = maps.resources.get(assignment.resource_id)?.name || assignment.resource_id || 'Application';
+  const organization = maps.organizations.has(assignment.organization_id)
+    ? displayOrganizationName(maps.organizations.get(assignment.organization_id))
+    : 'Organization';
+  const resource = maps.resources.has(assignment.resource_id)
+    ? displayResourceName(maps.resources.get(assignment.resource_id), 'Application')
+    : 'Application';
   const group = maps.groups.get(assignment.group_id)?.display_name || assignment.group_name || assignment.group_id || 'Group';
   if (assignment.level === 'organization') return `All applications in ${organization}`;
   if (assignment.level === 'resource_group') return `${resource} + ${group}`;
@@ -657,10 +669,12 @@ export function assignmentTargetLabel(assignment, maps) {
 }
 
 export function assignmentContextLabel(assignment, maps) {
-  const organization = maps.organizations.get(assignment.organization_id)?.name || assignment.organization_id || 'Organization';
+  const organization = maps.organizations.has(assignment.organization_id)
+    ? displayOrganizationName(maps.organizations.get(assignment.organization_id))
+    : 'Organization';
   const group = maps.groups?.get(assignment.group_id);
   const idp = group?.idp_id ? maps.idps?.get(group.idp_id) : null;
-  const context = [organization, idp?.name || group?.idp_id].filter(Boolean).join(' / ');
+  const context = [organization, idp?.name].filter(Boolean).join(' / ');
   if (assignment.level === 'organization') return organization;
   return context || organization;
 }

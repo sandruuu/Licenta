@@ -114,6 +114,56 @@ func TestHealthChangedKeepsPostureChangeControlSessionWhenPolicyStillAllows(t *t
 	assertRevoked(t, dataStore, "sess-posture-change", false)
 }
 
+func TestHealthChangedKeepsExpiredStepUpSessionWithoutPosturePolicy(t *testing.T) {
+	policyAdmin, dataStore := newEnforcementTestPA(t)
+	seedEnforcementScope(dataStore)
+	now := time.Now()
+	dataStore.SavePolicyRule(&models.PolicyRule{
+		ID:      "pol-step-up-health",
+		Name:    "Require MFA",
+		Enabled: true,
+		Action:  models.DecisionStepUpRequired,
+		Conditions: models.RuleConditions{
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyEnforceMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	dataStore.SavePolicyAssignment(&models.PolicyAssignment{
+		ID:             "assign-step-up-health",
+		PolicyID:       "pol-step-up-health",
+		OrganizationID: "organization-1",
+		Level:          "resource",
+		ResourceID:     "res-ssh",
+		Enabled:        true,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	session := activeSession("sess-expired-step-up", "device-1", "res-ssh", "gw-1", "organization-1")
+	session.StepUpACR = models.DefaultStepUpACR
+	session.StepUpMethod = "totp"
+	session.StepUpStrength = models.StepUpStrengthOTP
+	session.StepUpVerifiedAt = now.Add(-20 * time.Minute)
+	session.StepUpExpiresAt = now.Add(-10 * time.Minute)
+	dataStore.SaveSession(session)
+
+	revoked := NewService(policyAdmin, nil).HandleEvent(events.Event{
+		Type: events.TopicHealthChanged,
+		Payload: map[string]string{
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
+		},
+	})
+
+	if revoked != 0 {
+		t.Fatalf("revoked = %d, want 0", revoked)
+	}
+	assertRevoked(t, dataStore, "sess-expired-step-up", false)
+}
+
 func TestPolicyUpdatedRevokesDeniedSessionsWithinScope(t *testing.T) {
 	policyAdmin, dataStore := newEnforcementTestPA(t)
 	seedEnforcementScope(dataStore)

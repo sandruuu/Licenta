@@ -31,6 +31,19 @@ func (s *Store) GetDeviceData(deviceID string) (*models.DeviceDataReport, bool) 
 	row := s.db.QueryRow(`SELECT device_id, user_id, username, agent_session_id, hostname, os, checks_json, collected_at, reported_at, organization_id
 		FROM device_data WHERE device_id = ?`, deviceID)
 
+	return scanDeviceDataReport(row)
+}
+
+func (s *Store) GetDeviceDataForSubject(deviceID, userID string) (*models.DeviceDataReport, bool) {
+	row := s.db.QueryRow(`SELECT device_id, user_id, username, agent_session_id, hostname, os, checks_json, collected_at, reported_at, organization_id
+		FROM device_data WHERE device_id = ? AND user_id = ?`, deviceID, userID)
+
+	return scanDeviceDataReport(row)
+}
+
+func scanDeviceDataReport(row interface {
+	Scan(dest ...any) error
+}) (*models.DeviceDataReport, bool) {
 	report := &models.DeviceDataReport{}
 	var checksJSON, collectedAt, reportedAt string
 	if err := row.Scan(&report.DeviceID, &report.UserID, &report.Username, &report.AgentSessionID, &report.Hostname, &report.OS, &checksJSON, &collectedAt, &reportedAt, &report.OrganizationID); err != nil {

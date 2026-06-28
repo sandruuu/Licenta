@@ -41,6 +41,7 @@ import GatewayTokenModal from '../components/organizations/GatewayTokenModal';
 import StatusBadge from '../components/organizations/StatusBadge';
 import useGatewayCreate from '../components/organizations/useGatewayCreate';
 import { usePublicConfig } from '../config/publicConfig';
+import { displayGatewayName, displayResourceName } from '../utils/displayNames';
 import { navigateBack, navigateWithReturn } from '../utils/navigation';
 
 const detailPanelClass = 'rounded-md border border-border bg-transparent';
@@ -522,10 +523,10 @@ export default function OrganizationDetail() {
                           Gateway
                         </span>
                         <span className="mt-1 block truncate text-base font-semibold text-text-primary">
-                          {gateway.name || gateway.id}
+                          {displayGatewayName(gateway)}
                         </span>
                         <span className="mt-1 block truncate text-xs text-text-secondary">
-                          {gateway.fqdn || gateway.id}
+                          {gateway.fqdn || 'No FQDN configured'}
                         </span>
                       </span>
                       <StatusText variant={gateway.status === 'revoked' ? 'danger' : gateway.status === 'pending' ? 'warning' : 'success'}>
@@ -573,7 +574,7 @@ export default function OrganizationDetail() {
                           {resourceProtocolLabel(resource)}
                         </span>
                         <span className="mt-1 block truncate text-base font-semibold text-text-primary">
-                          {resource.name || resource.id}
+                          {displayResourceName(resource)}
                         </span>
                         <span className="mt-1 block truncate text-xs text-text-secondary">
                           {resourceTargetLabel(resource)}

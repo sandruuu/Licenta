@@ -8,6 +8,7 @@ import (
 const (
 	TypeAccessRevoked      = "access.revoked"
 	TypeCatalogInvalidated = "catalog.invalidated"
+	TypeStepUpCompleted    = "step_up.completed"
 )
 
 type WatchRequest struct {

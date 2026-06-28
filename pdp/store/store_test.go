@@ -106,6 +106,55 @@ func TestAddAuditEntrySuppressesOIDCProtocolEvents(t *testing.T) {
 	}
 }
 
+func TestAddAuditEntryResolvesUserContext(t *testing.T) {
+	s := newTestStore(t)
+
+	now := time.Now().UTC()
+	s.SaveUser(&models.User{
+		ID:             "user-1",
+		Username:       "alice@example.test",
+		Email:          "alice@example.test",
+		Role:           "platform_admin",
+		OrganizationID: "organization-1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+
+	s.AddAuditEntry(&models.AuditEntry{
+		ID:        "aud-login",
+		Timestamp: now,
+		EventType: "admin_login",
+		Username:  "alice@example.test",
+		Details:   "Invalid credentials",
+		Success:   false,
+	})
+
+	entries := s.GetAuditLog(10)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(entries))
+	}
+	if entries[0].UserID != "user-1" || entries[0].Username != "alice@example.test" || entries[0].OrganizationID != "organization-1" {
+		t.Fatalf("resolved audit context = %+v", entries[0])
+	}
+}
+
+func TestAddAuditEntrySkipsEventsWithoutUserContext(t *testing.T) {
+	s := newTestStore(t)
+
+	s.AddAuditEntry(&models.AuditEntry{
+		ID:        "aud-system",
+		Timestamp: time.Now().UTC(),
+		EventType: "agent_user_authentication_request",
+		Resource:  "device-1",
+		Details:   "pre-authentication event",
+		Success:   true,
+	})
+
+	if entries := s.GetAuditLog(10); len(entries) != 0 {
+		t.Fatalf("audit entries = %d, want 0", len(entries))
+	}
+}
+
 func TestIdentityProviderConfigsAreUniquePerOrganization(t *testing.T) {
 	s := newTestStore(t)
 

@@ -20,6 +20,7 @@ const (
 
 	agentEventAccessRevoked      = "access.revoked"
 	agentEventCatalogInvalidated = "catalog.invalidated"
+	agentEventStepUpCompleted    = "step_up.completed"
 )
 
 type agentEventsGRPCServer interface {
@@ -40,6 +41,7 @@ func (service *agentEventsGRPCService) Watch(request *structpb.Struct, stream gr
 	}
 	sub := service.server.events.Subscribe(
 		events.TopicSessionDeleted,
+		events.TopicStepUpCompleted,
 		events.TopicPolicyUpdated,
 		events.TopicResourcesUpdated,
 		events.TopicDeviceRevoked,
@@ -87,6 +89,9 @@ func (service *agentEventsGRPCService) authenticate(ctx context.Context, request
 	if err != nil {
 		return nil, status.Error(grpcCodeForHTTPStatus(httpStatusForAccessError(err)), err.Error())
 	}
+	if requestedSessionID := strings.TrimSpace(structFieldString(request, "session_id")); requestedSessionID != "" && requestedSessionID != strings.TrimSpace(claims.SessionID) {
+		return nil, status.Error(codes.PermissionDenied, "session_id does not match agent session token")
+	}
 	return claims, nil
 }
 
@@ -113,6 +118,16 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 		}
 		fields["session_id"] = claims.SessionID
 		return agentEventPayload(agentEventAccessRevoked, claims, fields, "This device enrollment was revoked."), true
+	case events.TopicStepUpCompleted:
+		if !sameEventField(fields, "session_id", claims.SessionID) ||
+			!sameEventField(fields, "device_id", claims.DeviceID) ||
+			!sameEventField(fields, "user_id", claims.UserID) {
+			return nil, false
+		}
+		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
+			return nil, false
+		}
+		return agentEventPayload(agentEventStepUpCompleted, claims, fields, "Security verification completed."), true
 	case events.TopicResourcesUpdated, events.TopicPolicyUpdated, events.TopicGatewayRevoked:
 		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false

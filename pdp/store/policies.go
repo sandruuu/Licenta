@@ -66,16 +66,71 @@ func (s *Store) ListPolicyRules() []*models.PolicyRule {
 }
 
 func (s *Store) ListPolicyRulesForAccessGroups(organizationID, resourceID string, groupIDs, groupNames []string) []*models.PolicyRule {
-	assignments := s.ListPolicyAssignmentsForAccessGroups(organizationID, resourceID, groupIDs, groupNames)
-	rules := make([]*models.PolicyRule, 0, len(assignments))
-	for _, assignment := range assignments {
-		rule, ok := s.GetPolicyRule(assignment.PolicyID)
-		if !ok || rule == nil || !rule.Enabled {
+	organizationID = strings.TrimSpace(organizationID)
+	if organizationID == "" {
+		return nil
+	}
+	rows, err := s.db.Query(`SELECT
+		pa.id, pa.policy_id, pa.level, pa.organization_id, pa.resource_id,
+		pa.group_id, pa.group_name, pa.order_index, pa.enabled, pa.created_at, pa.updated_at,
+		pr.id, pr.name, pr.description, pr.enabled, pr.conditions_json,
+		pr.action, pr.created_at, pr.updated_at
+		FROM policy_assignments pa
+		JOIN policy_rules pr ON pr.id = pa.policy_id
+		WHERE pa.enabled = 1
+		  AND pr.enabled = 1
+		  AND pa.organization_id = ?
+		  AND COALESCE(NULLIF(pa.level, ''), 'organization') IN ('organization', 'group', 'resource', 'resource_group')
+		ORDER BY
+		  CASE COALESCE(NULLIF(pa.level, ''), 'organization')
+			WHEN 'resource_group' THEN 1
+			WHEN 'resource' THEN 2
+			WHEN 'group' THEN 3
+			WHEN 'organization' THEN 4
+			ELSE 5
+		  END,
+		  pa.order_index ASC, pa.created_at ASC, pa.id ASC`, organizationID)
+	if err != nil {
+		log.Printf("[STORE] Failed to list policy rules for access: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	rules := make([]*models.PolicyRule, 0)
+	for rows.Next() {
+		assignment, rule, ok := scanPolicyRuleAssignmentRow(rows)
+		if !ok || !policyAssignmentApplies(assignment, resourceID, groupIDs, groupNames) {
 			continue
 		}
 		rules = append(rules, materializePolicyRuleAssignment(rule, assignment))
 	}
 	return rules
+}
+
+func scanPolicyRuleAssignmentRow(rows *sql.Rows) (*models.PolicyAssignment, *models.PolicyRule, bool) {
+	assignment := &models.PolicyAssignment{}
+	rule := &models.PolicyRule{}
+	var assignmentEnabled, ruleEnabled int
+	var assignmentCreatedAt, assignmentUpdatedAt string
+	var ruleConditionsJSON, ruleCreatedAt, ruleUpdatedAt string
+	if err := rows.Scan(
+		&assignment.ID, &assignment.PolicyID, &assignment.Level, &assignment.OrganizationID, &assignment.ResourceID,
+		&assignment.GroupID, &assignment.GroupName, &assignment.OrderIndex, &assignmentEnabled, &assignmentCreatedAt, &assignmentUpdatedAt,
+		&rule.ID, &rule.Name, &rule.Description, &ruleEnabled, &ruleConditionsJSON,
+		&rule.Action, &ruleCreatedAt, &ruleUpdatedAt,
+	); err != nil {
+		return nil, nil, false
+	}
+	assignment.Enabled = i2b(assignmentEnabled)
+	normalizePolicyAssignment(assignment)
+	assignment.CreatedAt = parseTime(assignmentCreatedAt)
+	assignment.UpdatedAt = parseTime(assignmentUpdatedAt)
+
+	rule.Enabled = i2b(ruleEnabled)
+	rule.Conditions = fromJSON[models.RuleConditions](ruleConditionsJSON)
+	rule.CreatedAt = parseTime(ruleCreatedAt)
+	rule.UpdatedAt = parseTime(ruleUpdatedAt)
+	return assignment, rule, true
 }
 
 func scanPolicyRules(rows *sql.Rows) []*models.PolicyRule {

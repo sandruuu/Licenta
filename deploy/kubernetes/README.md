@@ -6,6 +6,7 @@ Fiecare componenta are overlay separat:
 - `postgres/`: PostgreSQL pentru date persistente.
 - `redis/`: Redis pentru state runtime distribuit.
 - `pdp/`: PDP scalabil, UI/API/OIDC si endpoint mTLS.
+- `keycloak/`: IdP separat, expus prin HTTPS si folosit pentru federarea OIDC.
 - `cert-manager/`: exemplu pentru `ClusterIssuer` Let's Encrypt folosit de Ingress.
 
 Pentru DigitalOcean Kubernetes, endpoint-ul mTLS al PDP-ului este expus prin `Service type: LoadBalancer` in `pdp/service-mtls.yaml`. UI/API/OIDC raman expuse prin Ingress normal, iar gateway-urile folosesc `https://mtls.trust-cloud.dev` pe portul standard `443`.
@@ -29,6 +30,9 @@ kubectl apply -f deploy\kubernetes\pdp\vault-ca-secret.yaml
 kubectl apply -k deploy\kubernetes\pdp
 ```
 
+IdP-ul Keycloak se aplica separat, dupa configurarea DNS-ului pentru `idp.trust-cloud.dev`
+si dupa crearea secretului `deploy/kubernetes/keycloak/secret.yaml`.
+
 Pregateste fisierele reale pornind de la exemple:
 
 ```powershell
@@ -37,6 +41,7 @@ Copy-Item deploy\kubernetes\postgres\secret.example.yaml deploy\kubernetes\postg
 Copy-Item deploy\kubernetes\redis\secret.example.yaml deploy\kubernetes\redis\secret.yaml
 Copy-Item deploy\kubernetes\pdp\secret.example.yaml deploy\kubernetes\pdp\secret.yaml
 Copy-Item deploy\kubernetes\pdp\vault-ca-secret.example.yaml deploy\kubernetes\pdp\vault-ca-secret.yaml
+Copy-Item deploy\kubernetes\keycloak\secret.example.yaml deploy\kubernetes\keycloak\secret.yaml
 ```
 
 Citeste README-ul fiecarei componente inainte de aplicare, pentru valorile care trebuie completate manual.

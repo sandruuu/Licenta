@@ -25,6 +25,8 @@ type serviceTestOptions struct {
 	DeviceDataCollector         DeviceDataCollector
 	DeviceDataSyncClientFactory DeviceDataSyncClientFactory
 	ProtectedResources          ProtectedResourcesManager
+	DeviceIdentity              enrollment.DeviceIdentity
+	EnrollmentStore             enrollment.Store
 	Clock                       func() time.Time
 }
 
@@ -35,6 +37,8 @@ func newTestService(options serviceTestOptions) *Service {
 		DeviceDataCollector:         options.DeviceDataCollector,
 		DeviceDataSyncClientFactory: options.DeviceDataSyncClientFactory,
 		ProtectedResources:          options.ProtectedResources,
+		DeviceIdentity:              options.DeviceIdentity,
+		EnrollmentStore:             options.EnrollmentStore,
 		Clock:                       options.Clock,
 	})
 }
@@ -499,13 +503,17 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		},
 	}
 	protectedResources := &fakeProtectedResources{}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
+	}}
 	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
-		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Clock:              func() time.Time { return now },
-		EnrollmentStore:    store,
-		UserSessionClient:  sessionClient,
-		ProtectedResources: protectedResources,
-		DeviceIdentity:     fakeDeviceIdentity{},
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
+		ProtectedResources:  protectedResources,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
 	})
 	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
 		UserSID:               "S-1-5-21-1000",
@@ -532,6 +540,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		t.Fatalf("start = %+v", start)
 	}
 	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	waitForProtectedResourceApplyCount(t, protectedResources, 1)
 	dashboard := service.dashboard(peerCtx)
 	if dashboard.UserSession.Email != "user@example.com" || len(dashboard.Catalog.Resources) != 1 {
 		t.Fatalf("dashboard user session = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
@@ -539,6 +548,15 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	applied := protectedResources.lastApplied()
 	if applied.Version != "cat_1" || len(applied.Resources) != 1 {
 		t.Fatalf("protected resources catalog = %+v", applied)
+	}
+	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
+		t.Fatalf("collect device data returned error: %v", err)
+	}
+	if protectedResources.clearCount() != 0 {
+		t.Fatalf("protected resources clear count = %d, want 0", protectedResources.clearCount())
+	}
+	if dashboard := service.dashboard(peerCtx); strings.Contains(strings.ToLower(dashboard.UserSession.Message), "posture") {
+		t.Fatalf("dashboard message without posture policy = %+v", dashboard.UserSession)
 	}
 }
 
@@ -612,10 +630,17 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
 	}
 	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	waitForProtectedResourceApplyCount(t, protectedResources, 1)
 	if len(protectedResources.appliedCatalogs()) != 1 {
 		t.Fatalf("initial protected resource applies = %+v", protectedResources.appliedCatalogs())
 	}
 
+	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
+		t.Fatalf("collect initial device data returned error: %v", err)
+	}
+	if protectedResources.clearCount() != 0 {
+		t.Fatalf("protected resources clear count after initial posture = %d, want 0", protectedResources.clearCount())
+	}
 	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
 		t.Fatalf("collect critical device data returned error: %v", err)
 	}
@@ -825,6 +850,23 @@ func waitForUserSessionState(t *testing.T, service *Service, ctx context.Context
 	}
 }
 
+func waitForProtectedResourceApplyCount(t *testing.T, protectedResources *fakeProtectedResources, expected int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("protected resource applies = %+v, want %d", protectedResources.appliedCatalogs(), expected)
+		case <-ticker.C:
+			if len(protectedResources.appliedCatalogs()) >= expected {
+				return
+			}
+		}
+	}
+}
+
 func TestServiceRunsWithInjectedListener(t *testing.T) {
 	listener := newPipeListener()
 	service := newTestService(serviceTestOptions{
@@ -854,6 +896,60 @@ func TestServiceRunsWithInjectedListener(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("service did not stop")
+	}
+}
+
+func TestServiceStartsIPCBeforeEnrollmentRefreshCompletes(t *testing.T) {
+	listener := newPipeListener()
+	refreshStarted := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+	identity := &blockingDeviceIdentity{
+		fakeDeviceIdentity: fakeDeviceIdentity{
+			localCheck: &enrollment.LocalEnrollmentCheck{Enrolled: true},
+		},
+		started: refreshStarted,
+		release: releaseRefresh,
+	}
+	service := newTestService(serviceTestOptions{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DeviceIdentity:  identity,
+		EnrollmentStore: &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{EnrollmentState: ipc.EnrollmentStateEnrolled, DeviceID: "device-1"}},
+		ListenerFactory: func() (net.Listener, error) {
+			return listener, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- service.Run(ctx) }()
+	defer func() {
+		close(releaseRefresh)
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("service did not stop")
+		}
+	}()
+
+	select {
+	case <-refreshStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("enrollment refresh did not start")
+	}
+	waitForState(t, service, StateRunning)
+
+	client := ipc.NewClient(func(context.Context) (net.Conn, error) { return listener.Dial(), nil })
+	callCtx, callCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer callCancel()
+	var response ipc.PingResponse
+	if err := client.Call(callCtx, ipc.OperationPing, ipc.PingRequest{Message: "hello"}, &response); err != nil {
+		t.Fatalf("Call returned error while enrollment refresh was blocked: %v", err)
+	}
+	if response.Echo != "hello" {
+		t.Fatalf("response = %+v", response)
 	}
 }
 
@@ -1228,6 +1324,25 @@ func (identity fakeDeviceIdentity) CheckLocalEnrollment(context.Context, enrollm
 
 func (identity fakeDeviceIdentity) ClientCertificate(context.Context, enrollment.EnrollmentRecord) (tls.Certificate, func(), error) {
 	return tls.Certificate{}, func() {}, nil
+}
+
+type blockingDeviceIdentity struct {
+	fakeDeviceIdentity
+	once    sync.Once
+	started chan struct{}
+	release chan struct{}
+}
+
+func (identity *blockingDeviceIdentity) CheckLocalEnrollment(ctx context.Context, record enrollment.EnrollmentRecord) (enrollment.LocalEnrollmentCheck, error) {
+	identity.once.Do(func() {
+		close(identity.started)
+	})
+	select {
+	case <-identity.release:
+		return identity.fakeDeviceIdentity.CheckLocalEnrollment(ctx, record)
+	case <-ctx.Done():
+		return enrollment.LocalEnrollmentCheck{}, ctx.Err()
+	}
 }
 
 type memoryEnrollmentStore struct {

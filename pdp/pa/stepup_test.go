@@ -57,6 +57,28 @@ func TestStepUpManagerRejectsExpiredPendingTOTPAndFailedAttempt(t *testing.T) {
 	}
 }
 
+func TestStepUpManagerInvalidatesCompletedAuthContext(t *testing.T) {
+	manager := NewStepUpManager(testredis.NewClient(t))
+	challenge := newStepUpManagerTestChallenge(t, manager)
+	completedAt := time.Now().UTC()
+	if _, err := manager.Complete(challenge.ID, "totp", completedAt); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	authContext := manager.AuthContext("agent-session-1", "user-1", "device-1", "resource-1", completedAt.Add(time.Second))
+	if authContext.ACR == "" {
+		t.Fatal("AuthContext returned no ACR before invalidation")
+	}
+
+	if got := manager.InvalidateCompletedAuthContext("user-1", "device-1", "resource-1", "organization-1"); got != 1 {
+		t.Fatalf("InvalidateCompletedAuthContext = %d, want 1", got)
+	}
+	authContext = manager.AuthContext("agent-session-1", "user-1", "device-1", "resource-1", completedAt.Add(2*time.Second))
+	if authContext.ACR != "" {
+		t.Fatalf("AuthContext ACR after invalidation = %q, want empty", authContext.ACR)
+	}
+}
+
 func newStepUpManagerTestChallenge(t *testing.T, manager *StepUpManager) *StepUpChallenge {
 	t.Helper()
 	challenge, err := manager.CreateChallenge(StepUpChallengeRequest{

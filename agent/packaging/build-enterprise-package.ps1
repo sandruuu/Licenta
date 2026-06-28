@@ -152,8 +152,11 @@ $staleOutputs = @(
     "TrustAgent.exe",
     "config.json",
     "pdp-ca.pem",
+    "prepare-install.ps1",
     "install-service.ps1",
+    "launch-tray.ps1",
     "install-wfp-driver.ps1",
+    "uninstall-cleanup.ps1",
     "Test-AgentConfig.ps1"
 )
 foreach ($staleOutput in $staleOutputs) {
@@ -193,7 +196,9 @@ if (Test-Path -LiteralPath $agentIconPath) {
 }
 
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination (Join-Path $OutputDir "install-service.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $scriptDir "prepare-install.ps1") -Destination (Join-Path $OutputDir "prepare-install.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-wfp-driver.ps1") -Destination (Join-Path $OutputDir "install-wfp-driver.ps1") -Force
+Copy-Item -LiteralPath (Join-Path $scriptDir "uninstall-cleanup.ps1") -Destination (Join-Path $OutputDir "uninstall-cleanup.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $scriptDir "Test-AgentConfig.ps1") -Destination (Join-Path $OutputDir "Test-AgentConfig.ps1") -Force
 Copy-WfpDriverPackage -AgentRoot $agentRoot -DestinationDir $OutputDir
 

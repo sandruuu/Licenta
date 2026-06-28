@@ -19,6 +19,8 @@ import (
 //go:embed all:frontend/dist
 var guiAssets embed.FS
 
+const maxDashboardIPCTimeout = 2 * time.Second
+
 type GUIApp struct {
 	ctx      context.Context
 	client   *ipc.Client
@@ -85,7 +87,7 @@ func (app *GUIApp) shutdown(context.Context) {
 
 func (app *GUIApp) GetDashboard() ipc.AgentDashboard {
 	var dashboard ipc.AgentDashboard
-	callCtx, cancel := context.WithTimeout(app.context(), app.timeout)
+	callCtx, cancel := context.WithTimeout(app.context(), app.dashboardTimeout())
 	defer cancel()
 	if err := app.client.Call(callCtx, ipc.OperationGetDashboard, ipc.DashboardRequest{}, &dashboard); err != nil {
 		app.logger.Warn("Failed to fetch Agent dashboard over IPC", "error", err)
@@ -93,6 +95,13 @@ func (app *GUIApp) GetDashboard() ipc.AgentDashboard {
 	}
 	app.rememberDashboard(dashboard)
 	return dashboard
+}
+
+func (app *GUIApp) dashboardTimeout() time.Duration {
+	if app.timeout <= 0 || app.timeout > maxDashboardIPCTimeout {
+		return maxDashboardIPCTimeout
+	}
+	return app.timeout
 }
 
 func (app *GUIApp) StartEnrollmentInteractive() (ipc.StartEnrollmentInteractiveResponse, error) {

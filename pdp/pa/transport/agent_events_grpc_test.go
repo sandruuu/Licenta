@@ -79,3 +79,42 @@ func TestAgentEventStreamPublishesCatalogInvalidationForOrganizationChanges(t *t
 		t.Fatal("catalog invalidation for a different organization was delivered")
 	}
 }
+
+func TestAgentEventStreamPublishesStepUpCompletionForMatchingSession(t *testing.T) {
+	service := &agentEventsGRPCService{}
+	claims := &auth.CustomClaims{
+		UserID:         "user-1",
+		DeviceID:       "device-1",
+		OrganizationID: "organization-1",
+		SessionID:      "agent-session-1",
+	}
+
+	payload, ok := service.agentEventForClaims(events.Event{
+		Type: events.TopicStepUpCompleted,
+		Payload: map[string]string{
+			"session_id":      "agent-session-1",
+			"user_id":         "user-1",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
+			"resource_id":     "res-1",
+		},
+	}, claims)
+	if !ok {
+		t.Fatal("matching step-up completion was not delivered")
+	}
+	if payload["type"] != agentEventStepUpCompleted || payload["resource_id"] != "res-1" {
+		t.Fatalf("payload = %+v", payload)
+	}
+
+	if _, ok := service.agentEventForClaims(events.Event{
+		Type: events.TopicStepUpCompleted,
+		Payload: map[string]string{
+			"session_id":      "agent-session-2",
+			"user_id":         "user-1",
+			"device_id":       "device-1",
+			"organization_id": "organization-1",
+		},
+	}, claims); ok {
+		t.Fatal("step-up completion for a different session was delivered")
+	}
+}

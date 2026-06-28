@@ -132,19 +132,11 @@ func (sm *SessionManager) findReusableSession(req models.AccessRequest, now time
 	if sm == nil || sm.store == nil {
 		return nil
 	}
-	var best *models.Session
-	for _, session := range sm.store.ListSessions() {
-		if session == nil || session.Revoked || !session.ExpiresAt.After(now) {
-			continue
-		}
-		if !sameResourceSessionSubject(session, req) {
-			continue
-		}
-		if best == nil || session.ExpiresAt.After(best.ExpiresAt) {
-			best = session
-		}
+	session, found := sm.store.FindReusableResourceSession(req, now)
+	if !found || session == nil || !sameResourceSessionSubject(session, req) {
+		return nil
 	}
-	return best
+	return session
 }
 
 func (sm *SessionManager) applyDecisionSessionState(session *models.Session, decision *models.AccessDecision, now time.Time, forceExpiry bool) {

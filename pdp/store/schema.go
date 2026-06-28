@@ -81,6 +81,7 @@ func (s *Store) createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_resource ON policy_assignments(resource_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_group ON policy_assignments(group_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_order ON policy_assignments(organization_id, level, order_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_policy_assignments_access ON policy_assignments(organization_id, enabled, level, resource_id, group_id, group_name, order_index)`,
 
 		`CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
@@ -112,6 +113,7 @@ func (s *Store) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_resource_subject ON sessions(user_id, device_id, resource, gateway_id, organization_id, protocol, revoked, expires_at)`,
 
 		`CREATE TABLE IF NOT EXISTS resources (
 			id TEXT PRIMARY KEY,
@@ -163,6 +165,7 @@ func (s *Store) createTables() error {
 		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS user_id TEXT DEFAULT ''`,
 		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS username TEXT DEFAULT ''`,
 		`ALTER TABLE device_data ADD COLUMN IF NOT EXISTS agent_session_id TEXT DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_device_data_subject ON device_data(device_id, user_id)`,
 
 		`CREATE TABLE IF NOT EXISTS revoked_tokens (
 			jti TEXT PRIMARY KEY,

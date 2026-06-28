@@ -149,6 +149,13 @@ func (service *Service) handleAgentEvent(ctx context.Context, session usersessio
 			service.logger.Warn("failed to refresh protected resource catalog after PDP event", "session_id", session.AgentSessionID, "reason", event.Reason, "error", err)
 		}
 		return true
+	case agentevents.TypeStepUpCompleted:
+		service.userSessions.MarkAuthenticatedStepUpCompleted(
+			firstNonEmptyServiceString(event.SessionID, session.AgentSessionID),
+			event.ResourceID,
+			"",
+		)
+		return true
 	default:
 		return true
 	}

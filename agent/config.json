@@ -1,6 +1,6 @@
 {
   "tray_timeout": "10s",
-  "dashboard_refresh_interval": "5s",
+  "dashboard_refresh_interval": "1s",
   "pdp_grpc_endpoint": "mtls.trust-cloud.dev:443",
   "pdp_tls_server_name": "trust-cloud.dev",
   "pdp_ca_file": "pdp-ca.pem",

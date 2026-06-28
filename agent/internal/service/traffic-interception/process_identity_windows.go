@@ -11,8 +11,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/sys/windows"
+)
+
+const processFileHashCacheTTL = 10 * time.Minute
+
+type cachedProcessFileHash struct {
+	hash      string
+	size      int64
+	modTime   time.Time
+	expiresAt time.Time
+}
+
+var (
+	processFileHashMu    sync.Mutex
+	processFileHashCache = map[string]cachedProcessFileHash{}
 )
 
 func resolveProcessIdentity(ctx context.Context, pid uint32) (*ProcessIdentity, error) {
@@ -29,7 +45,7 @@ func resolveProcessIdentity(ctx context.Context, pid uint32) (*ProcessIdentity, 
 	}
 	identity.Path = path
 	identity.Name = filepath.Base(path)
-	if hash, err := fileSHA256(path); err == nil {
+	if hash, err := fileSHA256Cached(path); err == nil {
 		identity.SHA256 = hash
 	}
 	identity.Signer = fileSigner(path)
@@ -56,6 +72,44 @@ func processImagePath(pid uint32) (string, error) {
 		}
 		size *= 2
 	}
+}
+
+func fileSHA256Cached(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", os.ErrInvalid
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	key := strings.ToLower(path)
+	now := time.Now()
+
+	processFileHashMu.Lock()
+	if cached, ok := processFileHashCache[key]; ok &&
+		cached.size == info.Size() &&
+		cached.modTime.Equal(info.ModTime()) &&
+		cached.expiresAt.After(now) {
+		processFileHashMu.Unlock()
+		return cached.hash, nil
+	}
+	processFileHashMu.Unlock()
+
+	hash, err := fileSHA256(path)
+	if err != nil {
+		return "", err
+	}
+
+	processFileHashMu.Lock()
+	processFileHashCache[key] = cachedProcessFileHash{
+		hash:      hash,
+		size:      info.Size(),
+		modTime:   info.ModTime(),
+		expiresAt: now.Add(processFileHashCacheTTL),
+	}
+	processFileHashMu.Unlock()
+	return hash, nil
 }
 
 func fileSHA256(path string) (string, error) {

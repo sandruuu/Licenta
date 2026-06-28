@@ -9,6 +9,7 @@ import (
 
 	"pdp/models"
 	"pdp/pa"
+	"pdp/pa/events"
 )
 
 const maxStepUpRequestBody = 1 << 20
@@ -183,6 +184,7 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, stepUpAuditDetails(completed, "Step-up completed via Authenticator app"), true)
 	}
+	s.publishStepUpCompletedEvent(completed)
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=totp expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	if !s.userHasTOTPConfigured(user) {
 		if codes, err := s.pa.Auth.Users.GenerateRecoveryCodes(challenge.UserID); err == nil && len(codes) > 0 {
@@ -314,6 +316,24 @@ func (s *Server) logResourceStepUpEvent(eventType string, challenge *pa.StepUpCh
 		return
 	}
 	s.pa.Audit.LogEvent(eventType, challenge.UserID, challenge.Username, sourceIP, challenge.ResourceID, decision, stepUpAuditDetails(challenge, details), success)
+}
+
+func (s *Server) publishStepUpCompletedEvent(challenge *pa.StepUpChallenge) {
+	if s == nil || challenge == nil {
+		return
+	}
+	s.publishCAEPEvent(events.TopicStepUpCompleted, map[string]string{
+		"session_id":       challenge.AgentSessionID,
+		"agent_session_id": challenge.AgentSessionID,
+		"challenge_id":     challenge.ID,
+		"request_id":       challenge.RequestID,
+		"user_id":          challenge.UserID,
+		"device_id":        challenge.DeviceID,
+		"organization_id":  challenge.OrganizationID,
+		"resource_id":      challenge.ResourceID,
+		"action":           models.DecisionAllow,
+		"method":           challenge.CompletedMethod,
+	})
 }
 
 func stepUpAuditDetails(challenge *pa.StepUpChallenge, message string) string {

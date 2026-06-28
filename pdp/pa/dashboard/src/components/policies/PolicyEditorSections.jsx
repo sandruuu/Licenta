@@ -23,6 +23,7 @@ import {
   splitList,
   toggleListValue,
 } from './policyModel';
+import { displayGatewayName, displayOrganizationName } from '../../utils/displayNames';
 
 const assignmentCardClass = 'block w-full rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-3 py-3 text-left shadow-[0_6px_14px_rgba(42,42,42,0.10)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-accent hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_8px_16px_rgba(42,42,42,0.12)]';
 const sectionTitleClass = 'text-[20px] font-bold leading-tight text-text-primary';
@@ -58,7 +59,10 @@ function assignmentLocationLabel(assignment, maps) {
   const resource = maps.resources?.get(assignment.resource_id);
   const gateway = maps.gateways?.get(resource?.gateway_id || assignment.gateway_id);
   const organization = maps.organizations?.get(assignment.organization_id);
-  return [gateway?.name || resource?.gateway_id, organization?.name || assignment.organization_id].filter(Boolean).join(' / ');
+  return [
+    gateway ? displayGatewayName(gateway) : '',
+    organization ? displayOrganizationName(organization) : '',
+  ].filter(Boolean).join(' / ');
 }
 
 function AssignmentList({ assignments, maps, saving, onUnassignRequest }) {

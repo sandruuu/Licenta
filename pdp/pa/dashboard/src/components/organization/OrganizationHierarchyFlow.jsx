@@ -15,6 +15,7 @@ import {
   Router,
   Server,
 } from 'lucide-react';
+import { displayGatewayName, displayOrganizationName, displayResourceName } from '../../utils/displayNames';
 import { currentLocationPath, navigateWithReturn } from '../../utils/navigation';
 
 const NODE_WIDTH = 280;
@@ -169,7 +170,7 @@ function resourceProtocolLabel(resource) {
 
 function resourceMeta(resource) {
   if (resource.host) return resource.host;
-  return resource.description || resource.id;
+  return resource.description || '';
 }
 
 function withNodeFlags(node, isRoot = false) {
@@ -197,7 +198,7 @@ function buildTree({ organization, gateways, resources }) {
     return {
       id: `gateway:${gateway.id}`,
       kicker: 'Gateway',
-      label: gateway.name,
+      label: displayGatewayName(gateway),
       subtitle: gateway.fqdn || 'Edge connector',
       meta: `${gatewayResources.length} resource${gatewayResources.length === 1 ? '' : 's'}`,
       metric: '',
@@ -208,7 +209,7 @@ function buildTree({ organization, gateways, resources }) {
       children: gatewayResources.map((resource) => ({
         id: `resource:${resource.id}`,
         kicker: resourceProtocolLabel(resource),
-        label: resource.name,
+        label: displayResourceName(resource),
         subtitle: resourceSubtitle(resource),
         meta: resourceMeta(resource),
         metric: '',
@@ -223,7 +224,7 @@ function buildTree({ organization, gateways, resources }) {
   return withNodeFlags({
     id: `organization:${organization.id}`,
     kicker: 'Organization',
-    label: organization.name,
+    label: displayOrganizationName(organization),
     subtitle: organization.domain || 'Domain not set',
     meta: `${gateways.length} gateway${gateways.length === 1 ? '' : 's'}`,
     metric: `${resources.length} resource${resources.length === 1 ? '' : 's'}`,

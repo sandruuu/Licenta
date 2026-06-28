@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+  namespace: trustcloud-idp
+  labels:
+    app.kubernetes.io/name: keycloak
+    app.kubernetes.io/part-of: trustcloud
+data:
+  KEYCLOAK_HOSTNAME: "https://idp.trust-cloud.dev"
+  KEYCLOAK_DATABASE_NAME: "keycloak"
+  KEYCLOAK_DATABASE_USER: "keycloak"
+  POSTGRES_DATA_DIR: "/var/lib/postgresql/data/pgdata"
+

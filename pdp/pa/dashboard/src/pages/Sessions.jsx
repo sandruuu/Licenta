@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Ban, Radio } from 'lucide-react';
-import { getSessions, revokeSession } from '../api';
+import { getGateways, getResources, getSessions, revokeSession } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable, { TableIconButton } from '../components/ui/DataTable';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import StatusText from '../components/ui/StatusText';
+import { displayGatewayName, displayResourceName, displayResourceReference } from '../utils/displayNames';
 import { formatDateTime } from '../utils/format';
 
 function normalize(value) {
@@ -24,6 +25,8 @@ function getSessionStatus(session) {
 
 export default function Sessions() {
   const [sessions, setSessions] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [gateways, setGateways] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -35,8 +38,14 @@ export default function Sessions() {
     setLoading(true);
     setError('');
     try {
-      const data = await getSessions();
-      setSessions(Array.isArray(data) ? data : []);
+      const [sessionData, resourceData, gatewayData] = await Promise.all([
+        getSessions(),
+        getResources().catch(() => []),
+        getGateways().catch(() => []),
+      ]);
+      setSessions(Array.isArray(sessionData) ? sessionData : []);
+      setResources(Array.isArray(resourceData) ? resourceData : []);
+      setGateways(Array.isArray(gatewayData) ? gatewayData : []);
     } catch (error) {
       console.error(error);
       setSessions([]);
@@ -49,10 +58,16 @@ export default function Sessions() {
   useEffect(() => {
     let active = true;
     setError('');
-    getSessions()
-      .then((data) => {
+    Promise.all([
+      getSessions(),
+      getResources().catch(() => []),
+      getGateways().catch(() => []),
+    ])
+      .then(([sessionData, resourceData, gatewayData]) => {
         if (active) {
-          setSessions(Array.isArray(data) ? data : []);
+          setSessions(Array.isArray(sessionData) ? sessionData : []);
+          setResources(Array.isArray(resourceData) ? resourceData : []);
+          setGateways(Array.isArray(gatewayData) ? gatewayData : []);
         }
       })
       .catch((error) => {
@@ -71,6 +86,24 @@ export default function Sessions() {
       active = false;
     };
   }, []);
+
+  const resourcesByID = useMemo(() => new Map(resources.map((resource) => [resource.id, resource])), [resources]);
+  const gatewaysByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
+
+  const sessionResourceLabel = (session) => {
+    const resource = resourcesByID.get(session.resource);
+    return resource ? displayResourceName(resource) : displayResourceReference(session.resource, resourcesByID, gatewaysByID, 'Resource');
+  };
+
+  const sessionGatewayLabel = (session) => {
+    const gateway = gatewaysByID.get(session.gateway_id);
+    if (gateway) return displayGatewayName(gateway);
+    const resource = resourcesByID.get(session.resource);
+    if (resource?.gateway_id && gatewaysByID.has(resource.gateway_id)) {
+      return displayGatewayName(gatewaysByID.get(resource.gateway_id));
+    }
+    return 'No gateway';
+  };
 
   const handleRevoke = (session) => {
     setRevokeTarget(session);
@@ -103,18 +136,17 @@ export default function Sessions() {
       if (protocolFilter !== 'all' && protocol !== protocolFilter) return false;
       if (!needle) return true;
       return [
-        session.id,
         session.user_id,
         session.username,
         session.device_id,
         session.source_ip,
-        session.resource,
-        session.gateway_id,
+        sessionResourceLabel(session),
+        sessionGatewayLabel(session),
         session.protocol,
         session.policy_id,
       ].some((value) => normalize(value).includes(needle));
     });
-  }, [sessions, query, protocolFilter]);
+  }, [sessions, query, protocolFilter, resourcesByID, gatewaysByID]);
 
   const hasFilters = query.trim() || protocolFilter !== 'all';
   const emptyTitle = error
@@ -150,9 +182,9 @@ export default function Sessions() {
       cellClassName: '!justify-start !text-left',
       render: (_, row) => (
         <div className="min-w-0">
-          <p className="truncate text-mono font-bold text-text-primary">{row.resource || '-'}</p>
+          <p className="truncate font-bold text-text-primary">{sessionResourceLabel(row)}</p>
           <p className="mt-1 truncate text-xs font-semibold text-text-muted">
-            {[row.protocol && String(row.protocol).toUpperCase(), row.gateway_id].filter(Boolean).join(' / ') || 'No gateway'}
+            {[row.protocol && String(row.protocol).toUpperCase(), sessionGatewayLabel(row)].filter(Boolean).join(' / ')}
           </p>
         </div>
       ),
@@ -221,7 +253,7 @@ export default function Sessions() {
         onClose={() => !revokeSaving && setRevokeTarget(null)}
         onConfirm={confirmRevoke}
         title="Revoke Session"
-        message={`Revoke access for ${revokeTarget?.username || revokeTarget?.user_id || 'this user'} to ${revokeTarget?.resource || 'this resource'}?`}
+        message={`Revoke access for ${revokeTarget?.username || revokeTarget?.user_id || 'this user'} to ${revokeTarget ? sessionResourceLabel(revokeTarget) : 'this resource'}?`}
         confirmLabel="Revoke"
         confirmVariant="danger"
         loadingLabel="Revoking..."

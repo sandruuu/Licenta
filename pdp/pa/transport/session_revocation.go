@@ -27,6 +27,9 @@ func (s *Server) wireSessionDeleteSink() {
 			fields["resource_id"] = session.Resource
 			fields["organization_id"] = session.OrganizationID
 			fields["gateway_id"] = session.GatewayID
+			if s.pa.StepUps != nil {
+				s.pa.StepUps.InvalidateCompletedAuthContext(session.UserID, session.DeviceID, session.Resource, session.OrganizationID)
+			}
 		}
 		s.publishCAEPEvent(events.TopicSessionDeleted, fields)
 		s.revokeProvisionedGatewaySession(session, reason)

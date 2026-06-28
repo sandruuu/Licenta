@@ -23,6 +23,7 @@ import {
   InlineBackButton,
 } from '../components/ui/Detail';
 import OrganizationHierarchyFlow from '../components/organization/OrganizationHierarchyFlow';
+import { displayGatewayName, displayOrganizationName, displayResourceName } from '../utils/displayNames';
 import { formatDateTime } from '../utils/format';
 import { navigateBack, navigateWithReturn } from '../utils/navigation';
 
@@ -240,7 +241,8 @@ export default function GatewayDetail() {
     );
   }
 
-  const resourceListFilter = `organization_id=${encodeURIComponent(organization?.id || gateway.organization_id || '')}&gateway_id=${encodeURIComponent(gateway.id)}&q=${encodeURIComponent(gateway.name || gateway.id)}`;
+  const gatewayLabel = displayGatewayName(gateway);
+  const resourceListFilter = `organization_id=${encodeURIComponent(organization?.id || gateway.organization_id || '')}&gateway_id=${encodeURIComponent(gateway.id)}&q=${encodeURIComponent(gatewayLabel)}`;
   const gatewayRevoked = isRevokedGateway(gateway);
   const gatewayEnrolled = isEnrolledGateway(gateway);
 
@@ -262,7 +264,7 @@ export default function GatewayDetail() {
               </button>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{gateway.name || gateway.id}</h1>
+                  <h1 className="text-2xl font-bold leading-tight text-text-primary">{gatewayLabel}</h1>
                   <StatusText variant={gatewayStatusVariant(gateway.status)}>{gateway.status || 'active'}</StatusText>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-text-muted">
@@ -296,8 +298,8 @@ export default function GatewayDetail() {
         <section className={`${detailPanelClass} p-5`}>
           <h2 className={relatedSectionTitleClass}>Gateway configuration</h2>
           <div className="mt-5 grid gap-x-8 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
-            <DetailField label="Name" value={gateway.name || gateway.id} />
-            <DetailField label="Organization" value={organization?.name || gateway.organization_id} />
+            <DetailField label="Name" value={gatewayLabel} />
+            <DetailField label="Organization" value={displayOrganizationName(organization)} />
             <DetailField label="FQDN" value={gateway.fqdn} mono />
             <DetailField label="Status">
               <div className="mt-2">
@@ -366,7 +368,7 @@ export default function GatewayDetail() {
                           {resourceProtocolLabel(resource)}
                         </span>
                         <span className="mt-1 block truncate text-base font-semibold text-text-primary">
-                          {resource.name || resource.id}
+                          {displayResourceName(resource)}
                         </span>
                         <span className="mt-1 block truncate text-xs text-text-secondary">
                           {resourceTargetLabel(resource)}
@@ -413,7 +415,7 @@ export default function GatewayDetail() {
         onClose={() => setRevokeOpen(false)}
         onConfirm={revokeSelectedGateway}
         title="Revoke gateway"
-        message={`Revoke "${gateway.name || gateway.id}" and terminate its active sessions?`}
+        message={`Revoke "${gatewayLabel}" and terminate its active sessions?`}
         confirmLabel="Revoke gateway"
         loadingLabel="Revoking..."
         loading={revoking}

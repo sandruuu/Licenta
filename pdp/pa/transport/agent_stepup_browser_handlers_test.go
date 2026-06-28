@@ -642,14 +642,83 @@ func TestBrowserStepUpReauthFailureUsesGlobalLockout(t *testing.T) {
 	}
 }
 
-func TestStepUpCSPDisallowsInlineScripts(t *testing.T) {
+func TestStepUpIdentityProviderResolutionAcceptsConfigIDAndIssuer(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	idp := &models.IdentityProviderConfig{
+		ID:             "idp-test",
+		OrganizationID: transportTestOrganizationID,
+		Name:           "Test IdP",
+		Type:           "oidc",
+		Enabled:        true,
+		Issuer:         "https://idp.example.test/realms/test",
+		ClientID:       "trustcloud",
+		ClientSecret:   "secret",
+		Scopes:         "openid profile email",
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	dataStore.SaveIdentityProviderConfig(idp)
+
+	for _, user := range []*models.User{
+		{
+			ID:             "user-source-id",
+			Username:       "source-id@example.test",
+			OrganizationID: transportTestOrganizationID,
+			AuthSource:     idp.ID,
+		},
+		{
+			ID:             "user-source-issuer",
+			Username:       "source-issuer@example.test",
+			OrganizationID: transportTestOrganizationID,
+			AuthSource:     idp.Issuer,
+		},
+	} {
+		got, ok := server.identityProviderForStepUpUser(user)
+		if !ok || got == nil || got.ID != idp.ID {
+			t.Fatalf("identityProviderForStepUpUser(%s) = %+v, %v; want %s", user.ID, got, ok, idp.ID)
+		}
+	}
+}
+
+func TestStepUpCSPAllowsInlineStylesOnly(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/verify/stepup-1", nil)
 	policy := contentSecurityPolicy(req)
 	if !strings.Contains(policy, "script-src 'self';") {
 		t.Fatalf("step-up CSP did not restrict script-src to self: %s", policy)
 	}
-	if strings.Contains(policy, "'unsafe-inline'") {
-		t.Fatalf("step-up CSP allows inline content: %s", policy)
+	if strings.Contains(policy, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("step-up CSP allows inline scripts: %s", policy)
+	}
+	if !strings.Contains(policy, "style-src 'self' 'unsafe-inline';") {
+		t.Fatalf("step-up CSP did not allow server-rendered inline styles: %s", policy)
+	}
+}
+
+func TestEnrollmentCSPAllowsInlineStylesOnly(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/enroll/session-1", nil)
+	policy := contentSecurityPolicy(req)
+	if !strings.Contains(policy, "script-src 'self';") {
+		t.Fatalf("enrollment CSP did not restrict script-src to self: %s", policy)
+	}
+	if strings.Contains(policy, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("enrollment CSP allows inline scripts: %s", policy)
+	}
+	if !strings.Contains(policy, "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;") {
+		t.Fatalf("enrollment CSP did not allow server-rendered inline styles: %s", policy)
+	}
+}
+
+func TestFederatedCallbackCSPAllowsInlineStylesOnly(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/auth/federated/callback?state=state-1", nil)
+	policy := contentSecurityPolicy(req)
+	if !strings.Contains(policy, "script-src 'self';") {
+		t.Fatalf("federated callback CSP did not restrict script-src to self: %s", policy)
+	}
+	if strings.Contains(policy, "script-src 'self' 'unsafe-inline'") {
+		t.Fatalf("federated callback CSP allows inline scripts: %s", policy)
+	}
+	if !strings.Contains(policy, "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;") {
+		t.Fatalf("federated callback CSP did not allow server-rendered inline styles: %s", policy)
 	}
 }
 

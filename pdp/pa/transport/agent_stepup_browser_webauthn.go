@@ -103,6 +103,7 @@ func (s *Server) handleStepUpWebAuthnFinish(w http.ResponseWriter, r *http.Reque
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, stepUpAuditDetails(completed, "Step-up completed via Passkey"), true)
 	}
+	s.publishStepUpCompletedEvent(completed)
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=webauthn expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "completed"})
 }
@@ -224,6 +225,7 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 	if s.pa.Audit != nil {
 		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, stepUpAuditDetails(completed, "Step-up completed via Passkey enrollment"), true)
 	}
+	s.publishStepUpCompletedEvent(completed)
 	log.Printf("[STEP-UP] WebAuthn enrolled and completed challenge=%s user=%s resource=%s expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	response := map[string]any{"status": "completed"}
 	if len(recoveryCodes) > 0 {

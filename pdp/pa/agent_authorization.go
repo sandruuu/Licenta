@@ -29,21 +29,22 @@ type AgentAuthorizationRequest struct {
 }
 
 type AgentAuthorizationResponse struct {
-	Decision          string
-	Reason            string
-	RiskSignals       []string
-	MatchedRule       string
-	Policies          []string
-	SessionID         string
-	SessionToken      string
-	GatewayID         string
-	GatewayEndpoint   string
-	GatewayServerName string
-	ResourceID        string
-	Protocol          string
-	Port              int
-	ExpiresAt         time.Time
-	StepUp            *models.StepUpRequirement
+	Decision           string
+	Reason             string
+	RiskSignals        []string
+	MatchedRule        string
+	Policies           []string
+	SessionID          string
+	SessionToken       string
+	GatewayID          string
+	GatewayEndpoint    string
+	GatewayServerName  string
+	ResourceID         string
+	Protocol           string
+	Port               int
+	ExpiresAt          time.Time
+	StepUp             *models.StepUpRequirement
+	AgentSessionClaims *auth.CustomClaims
 }
 
 type GatewayProvisionedSession = pagateway.ProvisionedSession
@@ -91,7 +92,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 		Process:        req.Process,
 	}
 	if pa != nil && pa.Store != nil {
-		if deviceData, ok := pa.Store.GetDeviceData(deviceID); ok {
+		if deviceData, ok := pa.Store.GetDeviceDataForSubject(deviceID, claims.UserID); ok {
 			accessReq.DeviceHealth = DeviceHealthFromData(deviceData)
 		}
 	}
@@ -175,6 +176,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	response.Protocol = resolved.protocol
 	response.Port = resolved.externalPort
 	response.ExpiresAt = session.ExpiresAt
+	response.AgentSessionClaims = claims
 	return response, nil
 }
 

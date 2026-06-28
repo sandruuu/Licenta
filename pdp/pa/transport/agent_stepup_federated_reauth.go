@@ -112,7 +112,10 @@ func (s *Server) handleStepUpFederatedCallback(w http.ResponseWriter, r *http.Re
 		http.Error(w, "Failed to extract identity from external IdP", http.StatusBadGateway)
 		return true
 	}
-	user, ok := s.pa.Store.GetUserByExternalSubjectForOrganization(claims.Subject, idpCfg.Issuer, session.OrganizationID)
+	user, ok := s.pa.Store.GetUserByExternalSubjectForOrganization(claims.Subject, idpCfg.ID, session.OrganizationID)
+	if !ok {
+		user, ok = s.pa.Store.GetUserByExternalSubjectForOrganization(claims.Subject, idpCfg.Issuer, session.OrganizationID)
+	}
 	if !ok || user == nil || user.ID != session.UserID || user.Disabled {
 		http.Error(w, "Federated identity does not match this step-up request", http.StatusForbidden)
 		return true
@@ -138,7 +141,9 @@ func (s *Server) identityProviderForStepUpUser(user *models.User) (*models.Ident
 		if cfg == nil || !cfg.Enabled {
 			continue
 		}
-		if strings.EqualFold(strings.TrimRight(cfg.Issuer, "/"), strings.TrimRight(user.AuthSource, "/")) {
+		authSource := strings.TrimSpace(user.AuthSource)
+		if strings.EqualFold(strings.TrimSpace(cfg.ID), authSource) ||
+			strings.EqualFold(strings.TrimRight(cfg.Issuer, "/"), strings.TrimRight(authSource, "/")) {
 			return cfg, true
 		}
 	}

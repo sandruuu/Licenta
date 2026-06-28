@@ -242,6 +242,47 @@ function Test-UdpPortAvailable {
     }
 }
 
+function Test-WfpDeviceAvailable {
+    param([Parameter(Mandatory = $true)][string]$DevicePath)
+
+    Add-Type -TypeDefinition @"
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+public static class TrustAgentWfpProbe {
+    private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+
+    [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    private static extern IntPtr CreateFileW(
+        string lpFileName,
+        UInt32 dwDesiredAccess,
+        UInt32 dwShareMode,
+        IntPtr lpSecurityAttributes,
+        UInt32 dwCreationDisposition,
+        UInt32 dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", SetLastError=true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    public static void Open(string devicePath) {
+        IntPtr handle = CreateFileW(devicePath, 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+        if (handle == INVALID_HANDLE_VALUE) {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not open " + devicePath);
+        }
+        CloseHandle(handle);
+    }
+}
+"@
+
+    try {
+        [TrustAgentWfpProbe]::Open($DevicePath)
+    } catch {
+        throw "TrustAgent traffic interception is enabled, but the WFP device '$DevicePath' is not available: $($_.Exception.Message)"
+    }
+}
+
 function Test-AgentInstallConfig {
     param(
         [Parameter(Mandatory = $true)][string]$RuntimePath,
@@ -277,7 +318,7 @@ function Test-AgentInstallConfig {
     if ($trafficEnabled) {
         $proxyListen = Split-AgentHostPort -Value (Get-RequiredString -Config $config -Name "traffic_proxy_listen_address") -Name "traffic_proxy_listen_address"
         $proxyIP = Parse-AgentIPAddress -Value $proxyListen.Host -Name "traffic_proxy_listen_address"
-        Get-RequiredString -Config $config -Name "wfp_driver_device_path" | Out-Null
+        $wfpDevicePath = Get-RequiredString -Config $config -Name "wfp_driver_device_path"
         $wfpFailClosed = Get-OptionalBool -Config $config -Name "wfp_fail_closed" -Default $true
         if (-not $wfpFailClosed) {
             throw "TrustAgent wfp_fail_closed must be true when traffic_interception_enabled is true."
@@ -291,6 +332,7 @@ function Test-AgentInstallConfig {
             if ($driverService.Status -ne "Running") {
                 throw "TrustAgent traffic interception is enabled, but the trustagent_wfp driver service is not running."
             }
+            Test-WfpDeviceAvailable -DevicePath $wfpDevicePath
         }
     }
 

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FileText } from 'lucide-react';
-import { getAuditLog } from '../api';
+import { getAuditLog, getGateways, getResources } from '../api';
 import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
+import { displayResourceReference } from '../utils/displayNames';
 import { formatDateTime } from '../utils/format';
 
 function normalize(value) {
@@ -174,6 +175,8 @@ function AuditText({ variant = 'neutral', children }) {
 
 export default function Audit() {
   const [entries, setEntries] = useState([]);
+  const [resources, setResources] = useState([]);
+  const [gateways, setGateways] = useState([]);
   const [loading, setLoading] = useState(true);
   const [limit, setLimit] = useState(50);
   const [query, setQuery] = useState('');
@@ -187,9 +190,17 @@ export default function Audit() {
 
   useEffect(() => {
     let cancelled = false;
-    getAuditLog(limit)
-      .then((data) => {
-        if (!cancelled) setEntries(Array.isArray(data) ? data : []);
+    Promise.all([
+      getAuditLog(limit),
+      getResources().catch(() => []),
+      getGateways().catch(() => []),
+    ])
+      .then(([auditData, resourceData, gatewayData]) => {
+        if (!cancelled) {
+          setEntries(Array.isArray(auditData) ? auditData : []);
+          setResources(Array.isArray(resourceData) ? resourceData : []);
+          setGateways(Array.isArray(gatewayData) ? gatewayData : []);
+        }
       })
       .catch(console.error)
       .finally(() => {
@@ -199,6 +210,10 @@ export default function Audit() {
       cancelled = true;
     };
   }, [limit]);
+
+  const resourcesByID = useMemo(() => new Map(resources.map((resource) => [resource.id, resource])), [resources]);
+  const gatewaysByID = useMemo(() => new Map(gateways.map((gateway) => [gateway.id, gateway])), [gateways]);
+  const auditResourceLabel = (entry) => displayResourceReference(entry?.resource, resourcesByID, gatewaysByID);
 
   const eventTextVariant = (type) => {
     const canonicalType = canonicalAuditEventType(type);
@@ -238,14 +253,14 @@ export default function Audit() {
         entry.user_id,
         entry.username,
         entry.source_ip,
-        entry.resource,
+        auditResourceLabel(entry),
         entry.decision,
         outcomeLabel(entryOutcome(entry)),
         auditDetailsText(entry.details),
         entry.organization_id,
       ].some((value) => normalize(value).includes(needle));
     }).sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
-  }, [visibleEntries, query, activeEventFilter, outcomeFilter]);
+  }, [visibleEntries, query, activeEventFilter, outcomeFilter, resourcesByID, gatewaysByID]);
 
   const hasFilters = query.trim() || activeEventFilter !== 'all' || outcomeFilter !== 'all';
 
@@ -254,7 +269,7 @@ export default function Audit() {
     { key: 'event_type', label: 'Event', render: (v) => <AuditText variant={eventTextVariant(v)}>{auditEventLabel(v)}</AuditText> },
     { key: 'username', label: 'User', render: (v) => <span>{v || '-'}</span> },
     { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '-'}</span> },
-    { key: 'resource', label: 'Resource', render: (v) => <span className="text-xs">{v || '-'}</span> },
+    { key: 'resource', label: 'Resource', render: (_, row) => <span className="text-xs">{auditResourceLabel(row)}</span> },
     { key: 'decision', label: 'Decision', render: (_, row) => {
       const outcome = entryOutcome(row);
       return <AuditText variant={outcomeTextVariant(outcome)}>{outcomeLabel(outcome)}</AuditText>;

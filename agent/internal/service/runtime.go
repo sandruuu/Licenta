@@ -16,7 +16,6 @@ func (service *Service) Run(ctx context.Context) error {
 	defer service.closePDPClient()
 	service.transition(StateStarting)
 	service.setStartedAt(time.Now().UTC())
-	service.enrollment.Refresh(ctx)
 
 	listener, err := service.listenerFactory()
 	if err != nil {
@@ -27,6 +26,7 @@ func (service *Service) Run(ctx context.Context) error {
 	go func() {
 		serverDone <- ipc.Serve(ctx, listener, service)
 	}()
+	go service.refreshEnrollment(ctx)
 	go service.runProtectedResources(ctx)
 	go service.runDeviceDataSync(ctx)
 	go service.runAgentEvents(ctx)
@@ -47,6 +47,13 @@ func (service *Service) Run(ctx context.Context) error {
 	}
 	service.transition(StateStopped)
 	return nil
+}
+
+func (service *Service) refreshEnrollment(ctx context.Context) {
+	if service == nil || service.enrollment == nil {
+		return
+	}
+	service.enrollment.Refresh(ctx)
 }
 
 func (service *Service) closePDPClient() {

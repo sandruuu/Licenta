@@ -193,6 +193,38 @@ func (manager *StepUpManager) AuthContext(agentSessionID, userID, deviceID, reso
 	}
 }
 
+func (manager *StepUpManager) InvalidateCompletedAuthContext(userID, deviceID, resourceID, organizationID string) int {
+	if manager == nil || manager.state == nil {
+		return 0
+	}
+	userID = strings.TrimSpace(userID)
+	deviceID = strings.TrimSpace(deviceID)
+	resourceID = strings.TrimSpace(resourceID)
+	organizationID = strings.TrimSpace(organizationID)
+	if userID == "" || deviceID == "" || resourceID == "" {
+		return 0
+	}
+	manager.expire(time.Now().UTC())
+	invalidated := 0
+	for _, challenge := range manager.list() {
+		if challenge == nil || challenge.Status != StepUpStatusCompleted {
+			continue
+		}
+		if !sameTrimmed(challenge.UserID, userID) ||
+			!sameTrimmed(challenge.DeviceID, deviceID) ||
+			!sameTrimmed(challenge.ResourceID, resourceID) {
+			continue
+		}
+		if organizationID != "" && !sameTrimmed(challenge.OrganizationID, organizationID) {
+			continue
+		}
+		if err := manager.state.DeleteEphemeralState(stepUpStateKind, challenge.ID); err == nil {
+			invalidated++
+		}
+	}
+	return invalidated
+}
+
 func (manager *StepUpManager) Get(id string) (*StepUpChallenge, bool) {
 	if manager == nil || manager.state == nil {
 		return nil, false

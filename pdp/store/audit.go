@@ -27,6 +27,11 @@ func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
 	if entry == nil || isSuppressedAuditEvent(entry.EventType) {
 		return
 	}
+	s.resolveAuditUserContext(entry)
+	if entry.UserID == "" && entry.Username == "" {
+		log.Printf("[STORE] Skipping audit entry without user context: event_type=%s resource=%s", entry.EventType, entry.Resource)
+		return
+	}
 
 	s.auditMu.Lock()
 	defer s.auditMu.Unlock()
@@ -53,6 +58,47 @@ func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
 
 	s.db.Exec(`DELETE FROM audit_log WHERE id NOT IN (
 		SELECT id FROM audit_log ORDER BY timestamp DESC LIMIT 10000)`)
+}
+
+func (s *Store) resolveAuditUserContext(entry *models.AuditEntry) {
+	if entry == nil {
+		return
+	}
+	entry.UserID = strings.TrimSpace(entry.UserID)
+	entry.Username = strings.TrimSpace(entry.Username)
+	if s == nil {
+		return
+	}
+	if entry.UserID != "" {
+		if user, ok := s.GetUser(entry.UserID); ok && user != nil {
+			entry.UserID = user.ID
+			if strings.TrimSpace(entry.Username) == "" {
+				entry.Username = user.Username
+			}
+			if strings.TrimSpace(entry.OrganizationID) == "" {
+				entry.OrganizationID = user.OrganizationID
+			}
+		}
+		return
+	}
+	if entry.Username == "" {
+		return
+	}
+	if user, ok := s.GetUserByEmail(entry.Username); ok && user != nil {
+		entry.UserID = user.ID
+		entry.Username = user.Username
+		if strings.TrimSpace(entry.OrganizationID) == "" {
+			entry.OrganizationID = user.OrganizationID
+		}
+		return
+	}
+	if user, ok := s.GetUserByUsername(entry.Username); ok && user != nil {
+		entry.UserID = user.ID
+		entry.Username = user.Username
+		if strings.TrimSpace(entry.OrganizationID) == "" {
+			entry.OrganizationID = user.OrganizationID
+		}
+	}
 }
 
 func computeAuditHash(prevHash string, e *models.AuditEntry) string {

@@ -52,6 +52,15 @@ function AppLayout({
   const openedStepUpURLRef = useRef('');
 
   useEffect(() => {
+    if (authenticated) {
+      return;
+    }
+    setToasts([]);
+    dismissedToastIdsRef.current.clear();
+    openedStepUpURLRef.current = '';
+  }, [authenticated]);
+
+  useEffect(() => {
     if (!stepUpURL) {
       openedStepUpURLRef.current = '';
       return;
@@ -215,7 +224,12 @@ function isDisplayableSessionMessage(message) {
 
 function sessionToastVariant(message) {
   const text = String(message || '').trim().toLowerCase();
-  if (text.startsWith('access granted to ') || text.includes('restored') || text.includes('available')) {
+  if (
+    text.startsWith('access granted to ') ||
+    text.startsWith('security verification completed for ') ||
+    text.includes('restored') ||
+    text.includes('available')
+  ) {
     return 'success';
   }
   if (
@@ -236,6 +250,9 @@ function sessionToastTitle(message, variant) {
   const text = String(message || '').trim();
   if (/^Access granted to /i.test(text)) {
     return 'Access granted';
+  }
+  if (/^Security verification completed for /i.test(text)) {
+    return 'Security verification completed';
   }
   if (variant === 'danger') {
     return 'Security notification';
@@ -559,6 +576,16 @@ function ToastMessage({ message = '' }) {
         {successMatch[1]}
         <ToastResourceName>{successMatch[2]}</ToastResourceName>
         {successMatch[3]}
+      </>
+    );
+  }
+  const verificationCompletedMatch = text.match(/^(Security verification completed for )(.+?)(\.)$/i);
+  if (verificationCompletedMatch) {
+    return (
+      <>
+        {verificationCompletedMatch[1]}
+        <ToastResourceName>{verificationCompletedMatch[2]}</ToastResourceName>
+        {verificationCompletedMatch[3]}
       </>
     );
   }

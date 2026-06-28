@@ -20,13 +20,14 @@ const (
 	StatusDenied              = "DENIED"
 	StatusClaimed             = "CLAIMED"
 
-	DefaultTimeout             = 10 * time.Minute
-	DefaultPollInterval        = 3 * time.Second
-	DefaultExpiryRevokeLead    = 30 * time.Second
-	DefaultExpiryRevokeTimeout = 10 * time.Second
-	DefaultSessionRenewBefore  = 2 * time.Minute
-	DefaultSessionRenewRetry   = 15 * time.Second
-	DefaultSessionRenewTimeout = 10 * time.Second
+	DefaultTimeout               = 10 * time.Minute
+	DefaultPollInterval          = time.Second
+	DefaultExpiryRevokeLead      = 30 * time.Second
+	DefaultExpiryRevokeTimeout   = 10 * time.Second
+	DefaultSessionRenewBefore    = 2 * time.Minute
+	DefaultSessionRenewRetry     = 15 * time.Second
+	DefaultSessionRenewTimeout   = 10 * time.Second
+	DefaultCatalogRefreshTimeout = 20 * time.Second
 )
 
 type Config struct {

@@ -17,6 +17,12 @@ $catPath = Join-Path $driverDirPath "trustagent_wfp.cat"
 $certPath = Join-Path $driverDirPath "trustagent_wfp.cer"
 $devconPath = Join-Path $driverDirPath "devcon.exe"
 $rebootMarkerPath = Join-Path $driverDirPath "reboot-required.txt"
+$logPath = Join-Path $driverDirPath "install-wfp-driver.log"
+
+function Write-Step {
+    param([Parameter(Mandatory = $true)][string]$Message)
+    Write-Host "[TrustAgent WFP] $Message"
+}
 
 function Assert-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -40,6 +46,15 @@ function Test-WindowsTestSigning {
         throw "bcdedit failed: $($bcdOutput -join "`n")"
     }
     return (($bcdOutput -join "`n") -match '(?im)^\s*testsigning\s+Yes\s*$')
+}
+
+function Test-SecureBootEnabled {
+    try {
+        return [bool](Confirm-SecureBootUEFI -ErrorAction Stop)
+    } catch {
+        Write-Warning "Could not determine Secure Boot state: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Enable-WindowsTestSigning {
@@ -198,15 +213,30 @@ function Stop-TrustAgentServices {
     foreach ($name in @("TrustAgent", $serviceName)) {
         $service = Get-Service -Name $name -ErrorAction SilentlyContinue
         if ($null -ne $service -and $service.Status -ne "Stopped") {
+            Write-Step "Stopping service $name"
             Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
             $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(20))
         }
     }
 }
 
+function Remove-StaleWfpDevices {
+    $staleDevices = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
+        $_.Service -eq $serviceName -or
+        $_.FriendlyName -eq $deviceDescription -or
+        $_.InstanceId -like "ROOT\TRUSTAGENTWFP\*" -or
+        ($_.InstanceId -like "ROOT\SYSTEM\*" -and $_.Service -eq $serviceName)
+    })
+    foreach ($device in $staleDevices) {
+        Write-Step "Removing stale WFP device $($device.InstanceId)"
+        & pnputil.exe /remove-device "$($device.InstanceId)" | Out-Host
+    }
+}
+
 function Start-WfpService {
     $driverService = Get-Service -Name $serviceName -ErrorAction Stop
     if ($driverService.Status -ne "Running") {
+        Write-Step "Starting service $serviceName"
         Start-Service -Name $serviceName
         (Get-Service -Name $serviceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(20))
     }
@@ -214,6 +244,7 @@ function Start-WfpService {
 
 function Install-WfpDriver {
     if (Test-Path -LiteralPath $devconPath) {
+        Write-Step "Installing driver with devcon"
         $driverDevices = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object {
             $_.Service -eq $serviceName -or
             $_.FriendlyName -eq $deviceDescription -or
@@ -223,40 +254,77 @@ function Install-WfpDriver {
         $operation = if ($driverDevices.Count -eq 0) { "install" } else { "update" }
         $output = & $devconPath $operation $infPath $deviceHardwareId 2>&1
         $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0 -and $exitCode -ne 1) {
+        $joinedOutput = $output -join "`n"
+        $joinedOutput | Write-Host
+        if ($exitCode -eq 0) {
+            return $false
+        }
+        if ($exitCode -eq 1 -and $joinedOutput -match "(?i)(reboot|restart|success|installed)") {
+            return $true
+        }
+        if ($exitCode -ne 0) {
             throw "devcon $operation failed with exit code $exitCode. Output: $($output -join "`n")"
         }
-        return ($exitCode -eq 1)
     }
 
+    Write-Step "Installing driver with SetupAPI"
     [TrustAgentWfpInstaller]::EnsureRootDevice($deviceHardwareId, $deviceDescription)
     return [TrustAgentWfpInstaller]::UpdateDriver($deviceHardwareId, $infPath)
 }
 
-Assert-Admin
-Assert-DriverPackage
+$transcriptStarted = $false
+$scriptExitCode = 0
+try {
+    Start-Transcript -Path $logPath -Force | Out-Null
+    $transcriptStarted = $true
 
-if (Test-Path -LiteralPath $rebootMarkerPath) {
-    Remove-Item -LiteralPath $rebootMarkerPath -Force
+    Assert-Admin
+    Assert-DriverPackage
+
+    if (Test-Path -LiteralPath $rebootMarkerPath) {
+        Remove-Item -LiteralPath $rebootMarkerPath -Force
+    }
+
+    $requiresTestSigning = Test-DriverPackageUsesTestCertificate
+    $rebootPending = $false
+    if ($requiresTestSigning -and -not (Test-WindowsTestSigning)) {
+        if (Test-SecureBootEnabled) {
+            throw "TrustAgent WFP uses a test-signed driver. Disable Secure Boot before enabling Windows test-signing on this test machine."
+        }
+        Enable-WindowsTestSigning
+        Write-Warning "TrustAgent enabled Windows test-signing. Reboot Windows, then run TrustAgent.exe again."
+        $rebootPending = $true
+    }
+
+    if (-not $rebootPending) {
+        Write-Step "Trusting driver certificate"
+        Add-TrustAgentDriverCertificate
+        Add-SetupApiHelper
+        Stop-TrustAgentServices
+        Remove-StaleWfpDevices
+
+        $rebootRequired = Install-WfpDriver
+        if ($rebootRequired) {
+            "Windows requested a reboot after TrustAgent WFP driver installation." |
+                Set-Content -LiteralPath $rebootMarkerPath -Encoding UTF8
+            Write-Warning "Windows requested a reboot after TrustAgent WFP driver installation."
+            $rebootPending = $true
+        }
+    }
+
+    if (-not $rebootPending) {
+        Start-WfpService
+        Write-Step "Validating $devicePath"
+        [TrustAgentWfpInstaller]::ProbeDevice($devicePath)
+        Write-Step "Driver installation completed"
+    }
+} catch {
+    Write-Error $_
+    $scriptExitCode = 1
+} finally {
+    if ($transcriptStarted) {
+        Stop-Transcript | Out-Null
+    }
 }
 
-$requiresTestSigning = Test-DriverPackageUsesTestCertificate
-if ($requiresTestSigning -and -not (Test-WindowsTestSigning)) {
-    Enable-WindowsTestSigning
-    Write-Warning "TrustAgent enabled Windows test-signing. Reboot Windows, then run TrustAgent.exe again."
-    exit 0
-}
-
-Add-TrustAgentDriverCertificate
-Add-SetupApiHelper
-Stop-TrustAgentServices
-
-$rebootRequired = Install-WfpDriver
-Start-WfpService
-[TrustAgentWfpInstaller]::ProbeDevice($devicePath)
-
-if ($rebootRequired) {
-    "Windows requested a reboot after TrustAgent WFP driver installation." |
-        Set-Content -LiteralPath $rebootMarkerPath -Encoding UTF8
-    Write-Warning "Windows requested a reboot after TrustAgent WFP driver installation."
-}
+exit $scriptExitCode

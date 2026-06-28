@@ -21,6 +21,7 @@ import StatusText from '../components/ui/StatusText';
 import ResourceTypeText from '../components/ui/ResourceTypeText';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
 import { usePublicConfig } from '../config/publicConfig';
+import { displayGatewayName, displayOrganizationName, displayResourceName } from '../utils/displayNames';
 import { navigateWithReturn } from '../utils/navigation';
 
 const typeMeta = [
@@ -383,8 +384,14 @@ export default function Resources() {
       ),
     },
     { key: 'type', label: 'Type', render: (value) => <ResourceTypeText type={value} /> },
-    { key: 'organization_id', label: 'Organization', render: (value) => organizationByID.get(value)?.name || value || '-' },
-    { key: 'gateway_id', label: 'Gateway', render: (value) => gatewayByID.get(value)?.name || '-' },
+    { key: 'organization_id', label: 'Organization', render: (value) => {
+      const organization = organizationByID.get(value);
+      return organization ? displayOrganizationName(organization) : '-';
+    } },
+    { key: 'gateway_id', label: 'Gateway', render: (value) => {
+      const gateway = gatewayByID.get(value);
+      return gateway ? displayGatewayName(gateway) : '-';
+    } },
     { key: 'host', label: 'Internal Host', render: (value) => <span className="text-mono text-xs">{value || '-'}</span> },
     { key: 'internal_port', label: 'Internal Port', render: (_, row) => <span className="text-mono text-xs">{resourceInternalPort(row) || '-'}</span> },
     {
@@ -426,7 +433,6 @@ export default function Resources() {
         resource.description,
         resource.host,
         resource.external_url,
-        resource.id,
         organization?.name,
         organization?.domain,
         gateway?.name,
@@ -612,7 +618,7 @@ export default function Resources() {
         title="Delete resource"
         message={
           deleteResourceTarget
-            ? `Delete "${deleteResourceTarget.name}"? This resource will no longer be available for protected access.`
+            ? `Delete "${displayResourceName(deleteResourceTarget)}"? This resource will no longer be available for protected access.`
             : ''
         }
         confirmLabel="Delete resource"
@@ -626,7 +632,7 @@ export default function Resources() {
         title="Revoke resource"
         message={
           revokeResourceTarget
-            ? `Revoke "${revokeResourceTarget.name}"? New sessions for this resource will be disabled until it is reactivated.`
+            ? `Revoke "${displayResourceName(revokeResourceTarget)}"? New sessions for this resource will be disabled until it is reactivated.`
             : ''
         }
         confirmLabel="Revoke resource"
@@ -641,7 +647,7 @@ export default function Resources() {
         title="Reactivate resource"
         message={
           reactivateResourceTarget
-            ? `Reactivate "${reactivateResourceTarget.name}"? The resource can become available again according to its policies.`
+            ? `Reactivate "${displayResourceName(reactivateResourceTarget)}"? The resource can become available again according to its policies.`
             : ''
         }
         confirmLabel="Reactivate resource"

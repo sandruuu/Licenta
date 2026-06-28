@@ -9,6 +9,7 @@
 .env.local
 .env.*.local
 deploy/kubernetes/**/secret.yaml
+deploy/kubernetes/**/*secret*.yaml
 deploy/kubernetes/**/tls-secret.yaml
 deploy/kubernetes/**/vault-ca-secret.yaml
 deploy/digitalocean/**/*.tfvars

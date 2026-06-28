@@ -23,6 +23,7 @@ import FormField, { FormInput, FormSelect } from '../components/ui/FormField';
 import Pagination from '../components/ui/Pagination';
 import StatusText from '../components/ui/StatusText';
 import { usePaginatedTable } from '../components/ui/usePaginatedTable';
+import { displayGatewayName, displayOrganizationName } from '../utils/displayNames';
 import { formatDateTime } from '../utils/format';
 import { navigateWithReturn } from '../utils/navigation';
 
@@ -211,7 +212,10 @@ export default function Gateways() {
     {
       key: 'organization_id',
       label: 'Organization',
-      render: (value) => organizationByID.get(value)?.name || value || '-',
+      render: (value) => {
+        const organization = organizationByID.get(value);
+        return organization ? displayOrganizationName(organization) : '-';
+      },
     },
     { key: 'fqdn', label: 'FQDN', render: (value) => <span className="text-mono">{value || '-'}</span> },
     { key: 'status', label: 'Status', render: (value) => <StatusText variant={statusVariant(value)}>{value || 'unknown'}</StatusText> },
@@ -262,8 +266,6 @@ export default function Gateways() {
       return [
         gateway.name,
         gateway.fqdn,
-        gateway.id,
-        gateway.organization_id,
         organization?.name,
         organization?.domain,
       ].some((value) => String(value || '').toLowerCase().includes(needle));
@@ -401,7 +403,7 @@ export default function Gateways() {
         title="Delete gateway"
         message={
           deleteGatewayTarget
-            ? `Delete "${deleteGatewayTarget.name || deleteGatewayTarget.fqdn || deleteGatewayTarget.id}"? This gateway will no longer be available for protected resources.`
+            ? `Delete "${displayGatewayName(deleteGatewayTarget)}"? This gateway will no longer be available for protected resources.`
             : ''
         }
         confirmLabel="Delete gateway"
@@ -415,7 +417,7 @@ export default function Gateways() {
         title="Revoke gateway"
         message={
           revokeGatewayTarget
-            ? `Revoke "${revokeGatewayTarget.name || revokeGatewayTarget.fqdn || revokeGatewayTarget.id}" and terminate its active sessions? The gateway will need to be enrolled again before it can protect resources.`
+            ? `Revoke "${displayGatewayName(revokeGatewayTarget)}" and terminate its active sessions? The gateway will need to be enrolled again before it can protect resources.`
             : ''
         }
         confirmLabel="Revoke gateway"

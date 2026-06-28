@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"pdp/models"
@@ -101,6 +102,43 @@ func (s *Store) ListUserSessions(userID string) []*models.Session {
 	}
 	defer rows.Close()
 	return s.scanSessions(rows)
+}
+
+func (s *Store) FindReusableResourceSession(req models.AccessRequest, now time.Time) (*models.Session, bool) {
+	if s == nil || s.db == nil {
+		return nil, false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	row := s.db.QueryRow(`SELECT id, user_id, username, device_id, source_ip, resource,
+		gateway_id, protocol, risk_signals_json, organization_id, policy_id, created_at, expires_at, last_activity,
+		revalidate_after, step_up_acr, step_up_method, step_up_strength, step_up_aaguid, step_up_attachment, step_up_verified_at, step_up_expires_at,
+		session_max_age_seconds, revalidate_every_seconds,
+		revoke_on_posture_change, revoked
+		FROM sessions
+		WHERE user_id = ?
+		  AND device_id = ?
+		  AND resource = ?
+		  AND gateway_id = ?
+		  AND organization_id = ?
+		  AND lower(protocol) = lower(?)
+		  AND revoked = 0
+		  AND expires_at > ?
+		ORDER BY expires_at DESC
+		LIMIT 1`,
+		strings.TrimSpace(req.UserID),
+		strings.TrimSpace(req.DeviceID),
+		strings.TrimSpace(req.Resource),
+		strings.TrimSpace(req.GatewayID),
+		strings.TrimSpace(req.OrganizationID),
+		strings.TrimSpace(req.Protocol),
+		fmtTime(now))
+	session, err := scanSession(row)
+	if err != nil {
+		return nil, false
+	}
+	return session, true
 }
 
 func (s *Store) scanSessions(rows *sql.Rows) []*models.Session {

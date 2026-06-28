@@ -91,9 +91,19 @@ func (service *Service) handleHealthChanged(evt events.Event) int {
 		if allowed {
 			return false
 		}
+		if !healthChangedRevocationApplies(session, denyReason) {
+			return false
+		}
 		service.auditContinuousRevocation(session, "device_posture_changed", denyReason)
 		return true
 	})
+}
+
+func healthChangedRevocationApplies(session *models.Session, denyReason string) bool {
+	if session != nil && session.RevokeOnPostureChange {
+		return true
+	}
+	return strings.Contains(strings.ToLower(denyReason), "device health")
 }
 
 func (service *Service) handlePolicyUpdated(evt events.Event) int {
@@ -208,7 +218,7 @@ func (service *Service) sessionStillAllowed(session *models.Session) (bool, stri
 		Protocol:       protocol,
 		AppID:          resource.ID,
 	}
-	if deviceData, ok := service.pa.Store.GetDeviceData(session.DeviceID); ok {
+	if deviceData, ok := service.pa.Store.GetDeviceDataForSubject(session.DeviceID, session.UserID); ok {
 		req.DeviceHealth = paadmin.DeviceHealthFromData(deviceData)
 	}
 

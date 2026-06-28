@@ -27,6 +27,20 @@ func TestNewGUIAppPreservesTimeout(t *testing.T) {
 	}
 }
 
+func TestDashboardTimeoutCapsLongTimeout(t *testing.T) {
+	app := NewGUIApp(Options{Timeout: 10 * time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if got := app.dashboardTimeout(); got != maxDashboardIPCTimeout {
+		t.Fatalf("dashboard timeout = %s, want %s", got, maxDashboardIPCTimeout)
+	}
+}
+
+func TestDashboardTimeoutPreservesShortTimeout(t *testing.T) {
+	app := NewGUIApp(Options{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if got := app.dashboardTimeout(); got != time.Second {
+		t.Fatalf("dashboard timeout = %s, want 1s", got)
+	}
+}
+
 func TestUnavailableDashboardPreservesLastKnownDashboard(t *testing.T) {
 	app := NewGUIApp(Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	app.rememberDashboard(ipc.AgentDashboard{

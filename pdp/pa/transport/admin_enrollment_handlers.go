@@ -42,6 +42,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	adminUserID := currentAdminUserID(r)
 	adminUser := r.Header.Get("X-Username")
 	enrollment, found := s.pa.Store.GetDeviceEnrollment(enrollmentID)
 	if !found {
@@ -67,7 +68,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		s.pa.Audit.LogEvent("enrollment_approved", "", adminUser,
+		s.pa.Audit.LogEvent("enrollment_approved", adminUserID, adminUser,
 			stepUpRemoteIP(r), enrollment.DeviceID, models.DecisionAllow, "Device enrollment approved", true)
 
 		log.Printf("[ENROLL] Approved: id=%s device=%s by=%s", enrollmentID, enrollment.DeviceID, adminUser)
@@ -87,7 +88,7 @@ func (s *Server) handleAdminEnrollmentAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 
-		s.pa.Audit.LogEvent("enrollment_revoked", "", adminUser,
+		s.pa.Audit.LogEvent("enrollment_revoked", adminUserID, adminUser,
 			stepUpRemoteIP(r), enrollment.DeviceID, models.DecisionDeny, "Device enrollment revoked", true)
 
 		log.Printf("[ENROLL] Revoked: id=%s device=%s by=%s", enrollmentID, enrollment.DeviceID, adminUser)

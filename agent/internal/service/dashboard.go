@@ -9,10 +9,9 @@ import (
 )
 
 const (
-	dashboardDeviceDataMaxAge = 2 * time.Minute
-	connectionConnected       = "connected"
-	connectionUnenrolled      = "unenrolled"
-	connectionPending         = "enrolling"
+	connectionConnected  = "connected"
+	connectionUnenrolled = "unenrolled"
+	connectionPending    = "enrolling"
 )
 
 func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
@@ -72,16 +71,8 @@ func dashboardEnrollment(status ipc.AgentStatus) ipc.EnrollmentInfo {
 	return ipc.EnrollmentInfo{State: status.EnrollmentState, DeviceID: status.EnrollmentDeviceID, LastError: status.EnrollmentLastError}
 }
 
-func (service *Service) dashboardDeviceData(ctx context.Context, status ipc.AgentStatus) ipc.DeviceDataReport {
+func (service *Service) dashboardDeviceData(_ context.Context, status ipc.AgentStatus) ipc.DeviceDataReport {
 	deviceData := service.cachedDeviceDataReport()
-	stale := status.DeviceDataCollectedAt.IsZero() || service.clock().UTC().Sub(status.DeviceDataCollectedAt) > dashboardDeviceDataMaxAge
-	if service.deviceDataCollector != nil && (len(deviceData.Checks) == 0 || stale) {
-		if report, _, err := service.deviceDataReport(ctx); err == nil {
-			return report
-		} else if len(deviceData.Checks) == 0 {
-			return unavailableDeviceDataReport(status, err)
-		}
-	}
 	if len(deviceData.Checks) == 0 {
 		return unavailableDeviceDataReport(status, nil)
 	}

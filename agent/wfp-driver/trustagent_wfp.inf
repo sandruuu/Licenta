@@ -31,6 +31,12 @@ trustagent_wfp.sys
 [TrustAgentWfp_Install.NT.Services]
 AddService=trustagent_wfp,0x00000002,TrustAgentWfp_Service
 
+[TrustAgentWfp_Install.NT.Wdf]
+KmdfService=trustagent_wfp, TrustAgentWfp_Wdf
+
+[TrustAgentWfp_Wdf]
+KmdfLibraryVersion=1.15
+
 [TrustAgentWfp_Service]
 DisplayName=%TrustAgentWfp.ServiceDesc%
 ServiceType=1

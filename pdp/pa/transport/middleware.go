@@ -84,10 +84,14 @@ func securityHeadersMiddleware() func(http.Handler) http.Handler {
 
 func contentSecurityPolicy(r *http.Request) string {
 	if r != nil && isPublicStepUpPath(r.URL.Path) {
-		return "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		return "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 	}
-	policy := "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
-	if r == nil || !isPublicEnrollOrSignInPath(r.URL.Path) {
+	styleSrc := "style-src 'self' https://fonts.googleapis.com"
+	if r != nil && isPublicBrowserIdentityPath(r.URL.Path) {
+		styleSrc = "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+	}
+	policy := "default-src 'self'; script-src 'self'; " + styleSrc + "; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+	if r == nil || !isPublicBrowserIdentityPath(r.URL.Path) {
 		policy += "; form-action 'self'"
 	}
 	return policy

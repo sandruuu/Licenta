@@ -82,6 +82,12 @@ func TestDeviceDataGRPCReportDeviceDataStoresRawData(t *testing.T) {
 	if report.UserID != "user-1" || report.Username != "alice@example.test" || report.AgentSessionID != "sess-test" {
 		t.Fatalf("user context = user_id=%q username=%q session=%q", report.UserID, report.Username, report.AgentSessionID)
 	}
+	if _, ok := dataStore.GetDeviceDataForSubject("device-1", "user-1"); !ok {
+		t.Fatalf("device data report should be associated with user-1")
+	}
+	if _, ok := dataStore.GetDeviceDataForSubject("device-1", "user-2"); ok {
+		t.Fatalf("device data report should not be visible for another user")
+	}
 }
 
 func TestDeviceDataGRPCReportDeviceDataRejectsDeviceMismatch(t *testing.T) {

@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	publicEnrollPathPrefix = "/enroll/"
-	publicSignInPathPrefix = "/sign-in/"
-	publicStepUpPathPrefix = "/verify/"
-	publicStepUpAssetPath  = "/verify/assets/stepup.js"
+	publicEnrollPathPrefix      = "/enroll/"
+	publicSignInPathPrefix      = "/sign-in/"
+	publicStepUpPathPrefix      = "/verify/"
+	publicStepUpAssetPath       = "/verify/assets/stepup.js"
+	publicFederatedCallbackPath = "/auth/federated/callback"
 )
 
 func publicSignInURL(origin, sessionID string) string {
@@ -24,8 +25,8 @@ func publicPathID(path, prefix string) string {
 	return ""
 }
 
-func isPublicEnrollOrSignInPath(path string) bool {
-	return pathHasAnyPrefix(path, publicEnrollPathPrefix, publicSignInPathPrefix)
+func isPublicBrowserIdentityPath(path string) bool {
+	return pathHasAnyPrefix(path, publicEnrollPathPrefix, publicSignInPathPrefix, publicFederatedCallbackPath)
 }
 
 func isPublicStepUpPath(path string) bool {

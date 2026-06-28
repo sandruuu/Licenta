@@ -3,6 +3,8 @@ package transport
 import (
 	"strings"
 	"time"
+
+	"pdp/pa/auth"
 )
 
 func (s *Server) touchAgentSessionActivity(token, deviceID, certificateThumbprint string) {
@@ -11,6 +13,21 @@ func (s *Server) touchAgentSessionActivity(token, deviceID, certificateThumbprin
 	}
 	claims, err := s.pa.ValidateDeviceUserTokenBoundForScope(token, deviceID, certificateThumbprint, "flow:authorize")
 	if err != nil {
+		return
+	}
+	s.touchAgentSessionActivityForClaims(claims, certificateThumbprint)
+}
+
+func (s *Server) touchAgentSessionActivityWithClaims(claims *auth.CustomClaims, fallbackToken, deviceID, certificateThumbprint string) {
+	if claims == nil {
+		s.touchAgentSessionActivity(fallbackToken, deviceID, certificateThumbprint)
+		return
+	}
+	s.touchAgentSessionActivityForClaims(claims, certificateThumbprint)
+}
+
+func (s *Server) touchAgentSessionActivityForClaims(claims *auth.CustomClaims, certificateThumbprint string) {
+	if s == nil || s.agentSessions == nil || claims == nil {
 		return
 	}
 	sessionID := strings.TrimSpace(claims.SessionID)
