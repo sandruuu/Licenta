@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -136,6 +138,7 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		ProcessKey:     processKey,
 	}
 	authRequest := flowauthorization.AuthorizeRequest{
+		RequestID:         newResourceAccessRequestID(),
 		AgentSessionToken: session.AgentSessionToken,
 		ResourceID:        request.ResourceID,
 		Protocol:          protocol,
@@ -174,13 +177,16 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		GatewayServerName: authorization.GatewayServerName,
 		Process:           gatewayProcess,
 	}
+	streamStartedAt := time.Now()
 	stream, err := tunnel.OpenResourceStream(ctx, streamRequest)
+	streamElapsed := time.Since(streamStartedAt)
 	if err != nil && fromCache && isRetryableGatewaySessionError(err) {
 		connector.forgetResourceSession(cacheKey)
 		authRequest, err = connector.authorizeRequestWithCurrentAgentToken(authRequest, cacheKey.AgentSessionID)
 		if err != nil {
 			return nil, fmt.Errorf("refresh agent session token for resource %s: %w", request.ResourceID, err)
 		}
+		authRequest.RequestID = newResourceAccessRequestID()
 		authorization, _, err = connector.authorizeResourceSession(ctx, cacheKey, authorizer, authRequest, true)
 		if err != nil {
 			return nil, fmt.Errorf("reauthorize resource %s: %w", request.ResourceID, err)
@@ -200,11 +206,15 @@ func (connector *resourceStreamConnector) OpenResourceStream(ctx context.Context
 		streamRequest.GatewayID = authorization.GatewayID
 		streamRequest.GatewayEndpoint = strings.TrimSpace(authorization.GatewayEndpoint)
 		streamRequest.GatewayServerName = authorization.GatewayServerName
+		streamStartedAt = time.Now()
 		stream, err = tunnel.OpenResourceStream(ctx, streamRequest)
+		streamElapsed = time.Since(streamStartedAt)
 	}
 	if err != nil {
+		connector.logGatewayStreamResult("gateway resource stream failed", authRequest.RequestID, streamRequest, streamElapsed, err)
 		return nil, err
 	}
+	connector.logGatewayStreamResult("gateway resource stream opened", authRequest.RequestID, streamRequest, streamElapsed, nil)
 	return connector.withResourceSessionRenewal(stream, cacheKey, authorizer, authRequest, authorization), nil
 }
 
@@ -214,13 +224,19 @@ func (connector *resourceStreamConnector) authorizeResourceSession(ctx context.C
 	}
 	if !force {
 		if cached, ok := connector.cachedResourceSession(key); ok {
+			connector.logAuthorizationCacheHit(key, cached)
 			return cached, true, nil
 		}
 	}
+	request.RequestID = firstNonEmpty(request.RequestID, newResourceAccessRequestID())
+	startedAt := time.Now()
+	connector.logAuthorizationRequestSent(key, request, force)
 	authorization, err := authorizer.AuthorizeResource(ctx, request)
 	if err != nil {
+		connector.logAuthorizationRequestFailed(key, request, time.Since(startedAt), err)
 		return flowauthorization.AuthorizeResponse{}, false, err
 	}
+	connector.logAuthorizationDecisionReceived(key, request, authorization, time.Since(startedAt))
 	if strings.EqualFold(strings.TrimSpace(authorization.Decision), flowauthorization.DecisionAllow) {
 		connector.rememberResourceSession(key, authorization)
 	}
@@ -421,6 +437,7 @@ func (connector *resourceStreamConnector) renewResourceSessionUntilReleased(ctx 
 			connector.warnResourceSession("resource session renew could not load current agent token", key, current.SessionID, requestErr)
 			return
 		}
+		renewRequest.RequestID = newResourceAccessRequestID()
 		renewed, _, err := connector.authorizeResourceSession(renewCtx, key, authorizer, renewRequest, true)
 		cancel()
 		if err != nil {
@@ -464,6 +481,83 @@ func (connector *resourceStreamConnector) warnResourceSession(message string, ke
 		return
 	}
 	connector.logger.Warn(message, "resource_id", key.ResourceID, "session_id", sessionID, "error", err)
+}
+
+func (connector *resourceStreamConnector) logAuthorizationRequestSent(key resourceSessionCacheKey, request flowauthorization.AuthorizeRequest, force bool) {
+	if connector == nil || connector.logger == nil {
+		return
+	}
+	connector.logger.Info("resource authorization request sent",
+		"request_id", request.RequestID,
+		"agent_session_id", key.AgentSessionID,
+		"resource_id", key.ResourceID,
+		"protocol", key.Protocol,
+		"port", key.Port,
+		"force", force,
+	)
+}
+
+func (connector *resourceStreamConnector) logAuthorizationDecisionReceived(key resourceSessionCacheKey, request flowauthorization.AuthorizeRequest, authorization flowauthorization.AuthorizeResponse, elapsed time.Duration) {
+	if connector == nil || connector.logger == nil {
+		return
+	}
+	connector.logger.Info("resource authorization decision received",
+		"request_id", request.RequestID,
+		"agent_session_id", key.AgentSessionID,
+		"resource_id", key.ResourceID,
+		"decision", authorization.Decision,
+		"session_id", authorization.SessionID,
+		"gateway_id", authorization.GatewayID,
+		"step_up_challenge_id", authorization.StepUpChallengeID,
+		"duration_ms", elapsed.Milliseconds(),
+	)
+}
+
+func (connector *resourceStreamConnector) logAuthorizationRequestFailed(key resourceSessionCacheKey, request flowauthorization.AuthorizeRequest, elapsed time.Duration, err error) {
+	if connector == nil || connector.logger == nil {
+		return
+	}
+	connector.logger.Warn("resource authorization request failed",
+		"request_id", request.RequestID,
+		"agent_session_id", key.AgentSessionID,
+		"resource_id", key.ResourceID,
+		"duration_ms", elapsed.Milliseconds(),
+		"error", err,
+	)
+}
+
+func (connector *resourceStreamConnector) logAuthorizationCacheHit(key resourceSessionCacheKey, authorization flowauthorization.AuthorizeResponse) {
+	if connector == nil || connector.logger == nil {
+		return
+	}
+	connector.logger.Debug("resource authorization cache hit",
+		"agent_session_id", key.AgentSessionID,
+		"resource_id", key.ResourceID,
+		"session_id", authorization.SessionID,
+		"gateway_id", authorization.GatewayID,
+	)
+}
+
+func (connector *resourceStreamConnector) logGatewayStreamResult(message, requestID string, request gatewaytunnel.ResourceStreamRequest, elapsed time.Duration, err error) {
+	if connector == nil || connector.logger == nil {
+		return
+	}
+	args := []any{
+		"request_id", requestID,
+		"resource_id", request.ResourceID,
+		"session_id", request.SessionID,
+		"gateway_id", request.GatewayID,
+		"gateway_endpoint", request.GatewayEndpoint,
+	}
+	if elapsed > 0 {
+		args = append(args, "duration_ms", elapsed.Milliseconds())
+	}
+	if err != nil {
+		args = append(args, "error", err)
+		connector.logger.Warn(message, args...)
+		return
+	}
+	connector.logger.Info(message, args...)
 }
 
 func validateAllowedResourceAuthorization(resourceID string, authorization flowauthorization.AuthorizeResponse) error {
@@ -669,6 +763,14 @@ func resourceSessionProcessKey(identity *trafficinterception.ProcessIdentity) st
 		return fmt.Sprintf("pid:%d", identity.PID)
 	}
 	return ""
+}
+
+func newResourceAccessRequestID() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err == nil {
+		return "flow_" + hex.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("flow_%d", time.Now().UnixNano())
 }
 
 func firstNonEmpty(value string, values ...string) string {

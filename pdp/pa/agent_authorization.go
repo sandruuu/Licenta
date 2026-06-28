@@ -16,6 +16,7 @@ import (
 )
 
 type AgentAuthorizationRequest struct {
+	RequestID            string
 	DeviceID             string
 	DeviceCertThumbprint string
 	UserToken            string
@@ -75,6 +76,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	}
 
 	accessReq := models.AccessRequest{
+		RequestID:      strings.TrimSpace(req.RequestID),
 		UserID:         claims.UserID,
 		Username:       claims.Username,
 		DeviceID:       deviceID,
@@ -186,6 +188,7 @@ func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDeci
 		decision.StepUp = requirement
 	}
 	challenge, err := pa.StepUps.CreateChallenge(StepUpChallengeRequest{
+		RequestID:      strings.TrimSpace(req.RequestID),
 		AgentSessionID: strings.TrimSpace(claims.SessionID),
 		UserID:         strings.TrimSpace(claims.UserID),
 		Username:       strings.TrimSpace(claims.Username),
@@ -200,7 +203,11 @@ func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDeci
 		return err
 	}
 	if pa.Audit != nil {
-		details := "Additional verification required for resource access"
+		details := auditDetailsWithFields("Additional verification required for resource access", map[string]string{
+			"request_id":       req.RequestID,
+			"agent_session_id": claims.SessionID,
+			"challenge_id":     challenge.ID,
+		})
 		pa.Audit.LogEvent("agent_step_up_required", claims.UserID, claims.Username, strings.TrimSpace(req.SourceIP),
 			resource.ID, models.DecisionStepUpRequired, details, true)
 	}
@@ -460,7 +467,26 @@ func (pa *PolicyAdministrator) auditAgentAuthorization(req models.AccessRequest,
 	if pa == nil || pa.Audit == nil || decision == nil {
 		return
 	}
-	pa.Audit.LogEvent("agent_access_request", req.UserID, req.Username, req.SourceIP, req.Resource, decision.Decision, decision.Reason, success)
+	details := auditDetailsWithFields(decision.Reason, map[string]string{
+		"request_id": req.RequestID,
+		"session_id": decision.SessionID,
+		"gateway_id": req.GatewayID,
+	})
+	pa.Audit.LogEvent("agent_access_request", req.UserID, req.Username, req.SourceIP, req.Resource, decision.Decision, details, success)
+}
+
+func auditDetailsWithFields(message string, fields map[string]string) string {
+	parts := make([]string, 0, 1+len(fields))
+	if trimmed := strings.TrimSpace(message); trimmed != "" {
+		parts = append(parts, trimmed)
+	}
+	for _, key := range []string{"request_id", "session_id", "agent_session_id", "challenge_id", "gateway_id"} {
+		value := strings.TrimSpace(fields[key])
+		if value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func (pa *PolicyAdministrator) recordAccessLocation(req models.AccessRequest) {

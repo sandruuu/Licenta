@@ -11,6 +11,7 @@ type ProcessIdentity struct {
 
 // AccessRequest is sent by the gateway when a user tries to access a resource.
 type AccessRequest struct {
+	RequestID      string              `json:"request_id,omitempty"`
 	UserID         string              `json:"user_id"`
 	Username       string              `json:"username"`
 	DeviceID       string              `json:"device_id"`

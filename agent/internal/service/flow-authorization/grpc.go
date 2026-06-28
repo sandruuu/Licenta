@@ -50,6 +50,9 @@ func authorizePayload(request AuthorizeRequest) (*structpb.Struct, error) {
 		"protocol":     request.Protocol,
 		"port":         request.Port,
 	}
+	if strings.TrimSpace(request.RequestID) != "" {
+		fields["request_id"] = strings.TrimSpace(request.RequestID)
+	}
 	if request.Process != nil {
 		process := map[string]any{
 			"pid":    request.Process.PID,

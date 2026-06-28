@@ -181,7 +181,7 @@ func (s *Server) handleStepUpTOTP(w http.ResponseWriter, r *http.Request, challe
 		return
 	}
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, "Step-up completed via Authenticator app", true)
+		s.pa.Audit.LogEvent("agent_step_up_completed", completed.UserID, completed.Username, stepUpRemoteIP(r), completed.ResourceID, models.DecisionAllow, stepUpAuditDetails(completed, "Step-up completed via Authenticator app"), true)
 	}
 	log.Printf("[STEP-UP] Completed challenge=%s user=%s resource=%s method=totp expires=%s", completed.ID, completed.UserID, completed.ResourceID, completed.ExpiresAt.Format(time.RFC3339))
 	if !s.userHasTOTPConfigured(user) {
@@ -313,7 +313,33 @@ func (s *Server) logResourceStepUpEvent(eventType string, challenge *pa.StepUpCh
 	if s == nil || s.pa == nil || s.pa.Audit == nil || challenge == nil {
 		return
 	}
-	s.pa.Audit.LogEvent(eventType, challenge.UserID, challenge.Username, sourceIP, challenge.ResourceID, decision, details, success)
+	s.pa.Audit.LogEvent(eventType, challenge.UserID, challenge.Username, sourceIP, challenge.ResourceID, decision, stepUpAuditDetails(challenge, details), success)
+}
+
+func stepUpAuditDetails(challenge *pa.StepUpChallenge, message string) string {
+	message = strings.TrimSpace(message)
+	if challenge == nil {
+		return message
+	}
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"request_id", challenge.RequestID},
+		{"agent_session_id", challenge.AgentSessionID},
+		{"challenge_id", challenge.ID},
+	}
+	for _, field := range fields {
+		value := strings.TrimSpace(field.value)
+		if value == "" {
+			continue
+		}
+		if message != "" {
+			message += " "
+		}
+		message += field.name + "=" + value
+	}
+	return message
 }
 
 func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge, errorMessage, selectedMethod string) {

@@ -19,6 +19,7 @@ type Client interface {
 }
 
 type AuthorizeRequest struct {
+	RequestID         string
 	AgentSessionToken string
 	ResourceID        string
 	Protocol          string

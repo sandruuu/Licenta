@@ -257,6 +257,12 @@ func (service *Service) auditContinuousRevocation(session *models.Session, reaso
 	if message == "" {
 		message = reason
 	}
+	if strings.TrimSpace(session.ID) != "" {
+		message = strings.TrimSpace(message) + " session_id=" + strings.TrimSpace(session.ID)
+	}
+	if strings.TrimSpace(session.GatewayID) != "" {
+		message = strings.TrimSpace(message) + " gateway_id=" + strings.TrimSpace(session.GatewayID)
+	}
 	service.pa.Audit.LogEvent("continuous_access_revoked", session.UserID, session.Username, session.SourceIP, session.Resource, "deny", message, true)
 	log.Printf("[ENFORCEMENT] Revoking active session %s reason=%s detail=%s", session.ID, reason, message)
 }

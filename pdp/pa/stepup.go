@@ -35,6 +35,7 @@ type RuntimeStateStore interface {
 }
 
 type StepUpChallengeRequest struct {
+	RequestID      string
 	AgentSessionID string
 	UserID         string
 	Username       string
@@ -48,6 +49,7 @@ type StepUpChallengeRequest struct {
 
 type StepUpChallenge struct {
 	ID                 string
+	RequestID          string
 	AgentSessionID     string
 	UserID             string
 	Username           string
@@ -124,6 +126,7 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 	maxAgeSeconds := models.StepUpMaxAgeSeconds(requirement.MaxAgeSeconds)
 	challenge := &StepUpChallenge{
 		ID:                 id,
+		RequestID:          strings.TrimSpace(req.RequestID),
 		AgentSessionID:     strings.TrimSpace(req.AgentSessionID),
 		UserID:             strings.TrimSpace(req.UserID),
 		Username:           strings.TrimSpace(req.Username),

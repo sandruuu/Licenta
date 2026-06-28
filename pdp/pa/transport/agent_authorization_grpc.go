@@ -57,6 +57,7 @@ func agentAuthorizeRequestFromStruct(value *structpb.Struct) (agentAuthorizeRequ
 		return agentAuthorizeRequest{}, nil
 	}
 	request := agentAuthorizeRequest{
+		RequestID:  strings.TrimSpace(structFieldString(value, "request_id")),
 		ResourceID: strings.TrimSpace(structFieldString(value, "resource_id")),
 		Protocol:   strings.TrimSpace(structFieldString(value, "protocol")),
 	}

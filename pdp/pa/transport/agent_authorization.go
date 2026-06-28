@@ -11,6 +11,7 @@ import (
 )
 
 type agentAuthorizeRequest struct {
+	RequestID  string                  `json:"request_id,omitempty"`
 	ResourceID string                  `json:"resource_id"`
 	Protocol   string                  `json:"protocol,omitempty"`
 	Port       int                     `json:"port,omitempty"`
@@ -52,6 +53,7 @@ func (s *Server) authorizeAgentResource(ctx context.Context, enrollment *models.
 		return agentAuthorizeResponse{}, http.StatusServiceUnavailable, newAccessErrorForTransport(err.Error())
 	}
 	result, err := s.pa.AuthorizeAgentResource(ctx, pa.AgentAuthorizationRequest{
+		RequestID:            req.RequestID,
 		DeviceID:             deviceID,
 		DeviceCertThumbprint: strings.TrimSpace(certificateThumbprint),
 		UserToken:            token,
