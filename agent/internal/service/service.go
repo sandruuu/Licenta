@@ -93,6 +93,7 @@ type ProtectedResourcesManager interface {
 
 type Service struct {
 	mu                  sync.RWMutex
+	deviceDataCollectMu sync.Mutex
 	logger              *slog.Logger
 	state               State
 	startedAt           time.Time
@@ -134,6 +135,7 @@ type localAccessState struct {
 
 const (
 	deviceDataStatusUnknown      = "unknown"
+	deviceDataStatusCollecting   = "collecting"
 	deviceDataStatusCollected    = "collected"
 	deviceDataStatusCollectError = "collect_error"
 	statusDisabled               = "disabled"

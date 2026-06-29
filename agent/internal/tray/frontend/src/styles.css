@@ -83,22 +83,20 @@ button {
   }
 }
 
-.toast-attention {
-  animation: toastPulse 0.95s ease-in-out 2;
+.notification-badge-pulse {
+  animation: notificationBadgePulse 1s ease-in-out infinite;
 }
 
-@keyframes toastPulse {
+@keyframes notificationBadgePulse {
   0%,
   100% {
-    transform: translateY(0) scale(1);
-    box-shadow: 0 14px 34px color-mix(in srgb, var(--graphite) 16%, transparent);
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 38%, transparent);
   }
 
-  45% {
-    transform: translateY(-2px) scale(1.015);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--toast-color) 18%, transparent),
-      0 18px 38px color-mix(in srgb, var(--graphite) 20%, transparent);
+  50% {
+    transform: scale(1.16);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 0%, transparent);
   }
 }
 

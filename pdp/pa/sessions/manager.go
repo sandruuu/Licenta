@@ -237,6 +237,7 @@ func sameResourceSessionSubject(session *models.Session, req models.AccessReques
 	}
 	return strings.TrimSpace(session.UserID) == strings.TrimSpace(req.UserID) &&
 		strings.TrimSpace(session.DeviceID) == strings.TrimSpace(req.DeviceID) &&
+		strings.TrimSpace(session.SourceIP) == strings.TrimSpace(req.SourceIP) &&
 		strings.TrimSpace(session.Resource) == strings.TrimSpace(req.Resource) &&
 		strings.TrimSpace(session.GatewayID) == strings.TrimSpace(req.GatewayID) &&
 		strings.EqualFold(strings.TrimSpace(session.Protocol), strings.TrimSpace(req.Protocol)) &&
@@ -317,6 +318,31 @@ func (sm *SessionManager) RevokeSessionsMatching(reason string, match func(*mode
 			session.ID, reason, session.UserID, session.DeviceID, session.Resource, session.GatewayID)
 	}
 	return revoked
+}
+
+// RevokeSessionsForChangedSourceIP terminates active resource sessions for the
+// same subject and resource when a new authorization request arrives from a
+// different source IP.
+func (sm *SessionManager) RevokeSessionsForChangedSourceIP(req models.AccessRequest) int {
+	sourceIP := strings.TrimSpace(req.SourceIP)
+	if sm == nil || sm.store == nil || sourceIP == "" {
+		return 0
+	}
+	return sm.RevokeSessionsMatching("source_ip_changed", func(session *models.Session) bool {
+		if session == nil {
+			return false
+		}
+		sessionSourceIP := strings.TrimSpace(session.SourceIP)
+		if sessionSourceIP == "" || sessionSourceIP == sourceIP {
+			return false
+		}
+		return strings.TrimSpace(session.UserID) == strings.TrimSpace(req.UserID) &&
+			strings.TrimSpace(session.DeviceID) == strings.TrimSpace(req.DeviceID) &&
+			strings.TrimSpace(session.Resource) == strings.TrimSpace(req.Resource) &&
+			strings.TrimSpace(session.GatewayID) == strings.TrimSpace(req.GatewayID) &&
+			strings.EqualFold(strings.TrimSpace(session.Protocol), strings.TrimSpace(req.Protocol)) &&
+			strings.TrimSpace(session.OrganizationID) == strings.TrimSpace(req.OrganizationID)
+	})
 }
 
 // RevokeSessionsForDeviceUser terminates all active resource sessions owned by

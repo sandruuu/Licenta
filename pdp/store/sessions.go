@@ -122,6 +122,7 @@ func (s *Store) FindReusableResourceSession(req models.AccessRequest, now time.T
 		  AND resource = ?
 		  AND gateway_id = ?
 		  AND organization_id = ?
+		  AND source_ip = ?
 		  AND lower(protocol) = lower(?)
 		  AND revoked = 0
 		  AND expires_at > ?
@@ -132,6 +133,7 @@ func (s *Store) FindReusableResourceSession(req models.AccessRequest, now time.T
 		strings.TrimSpace(req.Resource),
 		strings.TrimSpace(req.GatewayID),
 		strings.TrimSpace(req.OrganizationID),
+		strings.TrimSpace(req.SourceIP),
 		strings.TrimSpace(req.Protocol),
 		fmtTime(now))
 	session, err := scanSession(row)

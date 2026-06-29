@@ -473,10 +473,11 @@ func catalogSnapshotStruct(snapshot catalog.Snapshot) (*structpb.Struct, error) 
 		resourceValues = append(resourceValues, map[string]interface{}{
 			"fqdn":         resource.FQDN,
 			"resource_id":  resource.ResourceID,
-			"display_name": resource.ResourceID,
+			"display_name": firstNonEmptyAgentSession(resource.DisplayName, resource.ResourceID),
+			"type":         resource.Type,
 			"protocol":     resource.Protocol,
 			"port":         float64(resource.Port),
-			"access_mode":  resource.Protocol,
+			"access_mode":  firstNonEmptyAgentSession(resource.Type, resource.Protocol),
 		})
 	}
 	deviceDataChecks := make([]interface{}, 0, len(snapshot.DeviceDataPolicy.RequiredChecks))

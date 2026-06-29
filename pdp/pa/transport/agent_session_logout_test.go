@@ -134,9 +134,33 @@ func TestAgentSessionRevokeSessionRevokesResourceSessions(t *testing.T) {
 	if !ok || !resourceSession.Revoked {
 		t.Fatalf("resource session revoked = %v found=%v", ok && resourceSession.Revoked, ok)
 	}
+	foundDisconnectAudit := false
+	for _, entry := range dataStore.GetAuditLog(10) {
+		if entry.EventType == "agent_resource_session_ended" &&
+			entry.UserID == "user-1" &&
+			entry.Resource == "res-ssh" &&
+			entry.Decision == "ended" &&
+			entry.Success {
+			foundDisconnectAudit = true
+			break
+		}
+	}
+	if !foundDisconnectAudit {
+		t.Fatalf("audit log missing agent_resource_session_ended event: %+v", dataStore.GetAuditLog(10))
+	}
 	otherSession, ok := dataStore.GetSession("other-device-session")
 	if !ok || otherSession.Revoked {
 		t.Fatalf("other device session should remain active, session=%#v found=%v", otherSession, ok)
+	}
+}
+
+func TestResourceSessionAuditEventForSourceIPChange(t *testing.T) {
+	eventType, decision, details := resourceSessionAuditEvent("source_ip_changed")
+	if eventType != "agent_resource_session_revoked" || decision != "revoked" {
+		t.Fatalf("audit event = %q/%q, want revoked resource session", eventType, decision)
+	}
+	if details != "Resource session revoked because source IP changed" {
+		t.Fatalf("details = %q, want source IP change message", details)
 	}
 }
 

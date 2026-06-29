@@ -69,6 +69,9 @@ func TestStepUpManagerInvalidatesCompletedAuthContext(t *testing.T) {
 	if authContext.ACR == "" {
 		t.Fatal("AuthContext returned no ACR before invalidation")
 	}
+	if authContext.StepUpSourceIP != "203.0.113.10" || !containsTrimmed(authContext.StepUpRiskSignals, "new_location") {
+		t.Fatalf("AuthContext source/risk = %q/%v, want completed challenge context", authContext.StepUpSourceIP, authContext.StepUpRiskSignals)
+	}
 
 	if got := manager.InvalidateCompletedAuthContext("user-1", "device-1", "resource-1", "organization-1"); got != 1 {
 		t.Fatalf("InvalidateCompletedAuthContext = %d, want 1", got)
@@ -88,6 +91,8 @@ func newStepUpManagerTestChallenge(t *testing.T, manager *StepUpManager) *StepUp
 		OrganizationID: "organization-1",
 		DeviceID:       "device-1",
 		ResourceID:     "resource-1",
+		SourceIP:       "203.0.113.10",
+		RiskSignals:    []string{"new_location"},
 		PublicOrigin:   "https://pdp.example.test",
 		Requirement: &models.StepUpRequirement{
 			Methods: []string{"totp"},

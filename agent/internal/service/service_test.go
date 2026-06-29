@@ -330,6 +330,80 @@ func TestServiceReportsDeviceDataAfterUserAuthentication(t *testing.T) {
 	}
 }
 
+func TestServiceCollectsDeviceDataLocallyBeforeEnrollment(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+	}}
+	service := New(Config{
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: time.Hour,
+	}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+
+	collector.waitForCount(t, 1)
+	report := service.cachedDeviceDataReport()
+	if len(report.Checks) != 1 || report.Checks[0].Status != ipc.DeviceDataStatusGood {
+		t.Fatalf("cached device data report = %+v", report)
+	}
+	deviceDataSyncClient.expectReportCount(t, 0, 80*time.Millisecond)
+}
+
+func TestServiceUploadsCachedDeviceDataAfterAuthentication(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
+	sessionClient := authenticatedFakeUserSessionClient(now)
+	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
+		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+		testDeviceDataReport(now.Add(time.Minute), ipc.DeviceDataStatusCritical),
+	}}
+	service := New(Config{
+		DeviceDataSyncInterval:           30 * time.Minute,
+		DeviceDataSyncChangeScanInterval: time.Hour,
+	}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go service.runDeviceDataSync(ctx)
+	collector.waitForCount(t, 1)
+
+	authenticateServiceUser(t, service)
+
+	reports := deviceDataSyncClient.waitForReports(t, 1)
+	if reports[0].DeviceID != "dev_123" || reports[0].Checks[0].Status != ipc.DeviceDataStatusGood {
+		t.Fatalf("uploaded cached device data report = %+v", reports[0])
+	}
+	if count := collector.count(); count != 1 {
+		t.Fatalf("collector calls after cached upload = %d, want 1", count)
+	}
+}
+
 func TestServiceReportsDeviceDataWhenChecksChange(t *testing.T) {
 	now := time.Unix(1000, 0).UTC()
 	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
@@ -503,6 +577,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		},
 	}
 	protectedResources := &fakeProtectedResources{}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
 	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
 		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
 	}}
@@ -514,6 +589,9 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		ProtectedResources:  protectedResources,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
 	})
 	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
 		UserSID:               "S-1-5-21-1000",
@@ -540,10 +618,16 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 		t.Fatalf("start = %+v", start)
 	}
 	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
-	waitForProtectedResourceApplyCount(t, protectedResources, 1)
 	dashboard := service.dashboard(peerCtx)
 	if dashboard.UserSession.Email != "user@example.com" || len(dashboard.Catalog.Resources) != 1 {
 		t.Fatalf("dashboard user session = %+v catalog=%+v", dashboard.UserSession, dashboard.Catalog)
+	}
+	reports := deviceDataSyncClient.waitForReports(t, 1)
+	if reports[0].DeviceID != "dev_123" || reports[0].Checks[0].Status != ipc.DeviceDataStatusCritical {
+		t.Fatalf("device data report before resource access = %+v", reports[0])
+	}
+	if count := collector.count(); count != 1 {
+		t.Fatalf("collector calls after dashboard load = %d, want 1", count)
 	}
 	applied := protectedResources.lastApplied()
 	if applied.Version != "cat_1" || len(applied.Resources) != 1 {
@@ -557,6 +641,82 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	}
 	if dashboard := service.dashboard(peerCtx); strings.Contains(strings.ToLower(dashboard.UserSession.Message), "posture") {
 		t.Fatalf("dashboard message without posture policy = %+v", dashboard.UserSession)
+	}
+}
+
+func TestServiceWaitsForDeviceDataReportBeforeApplyingCatalog(t *testing.T) {
+	now := time.Unix(1000, 0).UTC()
+	store := &memoryEnrollmentStore{saved: enrollment.EnrollmentRecord{
+		EnrollmentState:      ipc.EnrollmentStateEnrolled,
+		DeviceID:             "dev_123",
+		DeviceKeyName:        "TrustAgentDeviceKey",
+		DeviceCertThumbprint: "cert-thumb",
+		CertificateExpiry:    now.Add(time.Hour),
+	}}
+	sessionClient := authenticatedFakeUserSessionClient(now)
+	sessionClient.catalog = usersession.CatalogResponse{
+		Version: "cat_1",
+		Resources: []ipc.CatalogResource{{
+			ResourceID: "res_crm",
+			FQDN:       "crm.internal.example",
+			Protocol:   "https",
+			Port:       443,
+		}},
+		TTLSeconds:  300,
+		PolicyEpoch: "1",
+	}
+	reportStarted := make(chan struct{})
+	reportRelease := make(chan struct{})
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{
+		reportStarted: reportStarted,
+		reportRelease: reportRelease,
+	}
+	protectedResources := &fakeProtectedResources{}
+	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:               func() time.Time { return now },
+		EnrollmentStore:     store,
+		UserSessionClient:   sessionClient,
+		ProtectedResources:  protectedResources,
+		DeviceIdentity:      fakeDeviceIdentity{},
+		DeviceDataCollector: fakeDeviceDataCollector{report: testDeviceDataReport(now, ipc.DeviceDataStatusGood)},
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
+	})
+	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
+		UserSID:               "S-1-5-21-1000",
+		WindowsLogonSessionID: "00000000:000003e7",
+		WindowsSessionID:      "1",
+		Verified:              true,
+	})
+	request, err := ipc.NewRequest("req-1", ipc.OperationStartUserLoginInteractive, ipc.StartUserLoginInteractiveRequest{})
+	if err != nil {
+		t.Fatalf("NewRequest returned error: %v", err)
+	}
+	if response, err := service.HandleIPC(peerCtx, request); err != nil || !response.OK {
+		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
+	}
+
+	select {
+	case <-reportStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("device data report did not start")
+	}
+	if state := service.dashboard(peerCtx).UserSession.State; state == ipc.UserSessionStateAuthenticated {
+		t.Fatalf("user session became authenticated before device data report completed")
+	}
+	if applied := protectedResources.appliedCatalogs(); len(applied) != 0 {
+		t.Fatalf("protected resources were applied before device data report completed: %+v", applied)
+	}
+
+	close(reportRelease)
+	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
+	if reports := deviceDataSyncClient.waitForReports(t, 1); reports[0].DeviceID != "dev_123" {
+		t.Fatalf("device data reports = %+v", reports)
+	}
+	if applied := protectedResources.appliedCatalogs(); len(applied) != 1 || applied[0].Version != "cat_1" {
+		t.Fatalf("protected resources were not applied after device data report: %+v", applied)
 	}
 }
 
@@ -602,8 +762,10 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 		},
 	}
 	protectedResources := &fakeProtectedResources{}
+	deviceDataSyncClient := &fakeDeviceDataSyncClient{}
 	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
 		testDeviceDataReport(now, ipc.DeviceDataStatusGood),
+		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusGood),
 		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusCritical),
 		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusGood),
 	}}
@@ -615,6 +777,9 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 		ProtectedResources:  protectedResources,
 		DeviceIdentity:      fakeDeviceIdentity{},
 		DeviceDataCollector: collector,
+		DeviceDataSyncClientFactory: func(context.Context, enrollment.EnrollmentRecord) (DeviceDataSyncClient, error) {
+			return deviceDataSyncClient, nil
+		},
 	})
 	peerCtx := ipc.ContextWithPeerIdentity(context.Background(), ipc.PeerIdentity{
 		UserSID:               "S-1-5-21-1000",
@@ -630,7 +795,6 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 		t.Fatalf("HandleIPC response=%+v err=%v", response, err)
 	}
 	waitForUserSessionState(t, service, peerCtx, ipc.UserSessionStateAuthenticated)
-	waitForProtectedResourceApplyCount(t, protectedResources, 1)
 	if len(protectedResources.appliedCatalogs()) != 1 {
 		t.Fatalf("initial protected resource applies = %+v", protectedResources.appliedCatalogs())
 	}
@@ -641,6 +805,7 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 	if protectedResources.clearCount() != 0 {
 		t.Fatalf("protected resources clear count after initial posture = %d, want 0", protectedResources.clearCount())
 	}
+
 	if _, err := service.collectDeviceData(context.Background(), "dev_123"); err != nil {
 		t.Fatalf("collect critical device data returned error: %v", err)
 	}
@@ -850,23 +1015,6 @@ func waitForUserSessionState(t *testing.T, service *Service, ctx context.Context
 	}
 }
 
-func waitForProtectedResourceApplyCount(t *testing.T, protectedResources *fakeProtectedResources, expected int) {
-	t.Helper()
-	deadline := time.After(2 * time.Second)
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-deadline:
-			t.Fatalf("protected resource applies = %+v, want %d", protectedResources.appliedCatalogs(), expected)
-		case <-ticker.C:
-			if len(protectedResources.appliedCatalogs()) >= expected {
-				return
-			}
-		}
-	}
-}
-
 func TestServiceRunsWithInjectedListener(t *testing.T) {
 	listener := newPipeListener()
 	service := newTestService(serviceTestOptions{
@@ -973,11 +1121,13 @@ type sequenceDeviceDataCollector struct {
 	mu      sync.Mutex
 	reports []ipc.DeviceDataReport
 	index   int
+	calls   int
 }
 
 func (collector *sequenceDeviceDataCollector) Collect(_ context.Context, deviceID string) (ipc.DeviceDataReport, error) {
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
+	collector.calls++
 	index := collector.index
 	if index >= len(collector.reports) {
 		index = len(collector.reports) - 1
@@ -990,6 +1140,29 @@ func (collector *sequenceDeviceDataCollector) Collect(_ context.Context, deviceI
 		report.DeviceID = deviceID
 	}
 	return report, nil
+}
+
+func (collector *sequenceDeviceDataCollector) count() int {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	return collector.calls
+}
+
+func (collector *sequenceDeviceDataCollector) waitForCount(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("collector calls = %d, want %d", collector.count(), count)
+		case <-ticker.C:
+			if collector.count() >= count {
+				return
+			}
+		}
+	}
 }
 
 func testDeviceDataReport(collectedAt time.Time, firewallStatus string) ipc.DeviceDataReport {
@@ -1215,13 +1388,28 @@ func (manager *fakeProtectedResources) clearCount() int {
 }
 
 type fakeDeviceDataSyncClient struct {
-	mu       sync.Mutex
-	reports  []ipc.DeviceDataReport
-	sessions []devicedatasync.SessionContext
-	closed   bool
+	mu                sync.Mutex
+	reportStartedOnce sync.Once
+	reportStarted     chan struct{}
+	reportRelease     chan struct{}
+	err               error
+	reports           []ipc.DeviceDataReport
+	sessions          []devicedatasync.SessionContext
+	closed            bool
 }
 
 func (client *fakeDeviceDataSyncClient) ReportDeviceData(_ context.Context, report ipc.DeviceDataReport, session devicedatasync.SessionContext) error {
+	if client.reportStarted != nil {
+		client.reportStartedOnce.Do(func() {
+			close(client.reportStarted)
+		})
+	}
+	if client.reportRelease != nil {
+		<-client.reportRelease
+	}
+	if client.err != nil {
+		return client.err
+	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.reports = append(client.reports, cloneDeviceDataReport(report))

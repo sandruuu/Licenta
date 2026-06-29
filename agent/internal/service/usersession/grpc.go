@@ -300,8 +300,9 @@ func catalogResources(value any) []ipc.CatalogResource {
 		}
 		resource := ipc.CatalogResource{
 			ResourceID:  stringField(entry, "resource_id"),
-			DisplayName: stringField(entry, "display_name", "resource_id"),
+			DisplayName: stringField(entry, "display_name"),
 			FQDN:        stringField(entry, "fqdn"),
+			Type:        stringField(entry, "type"),
 			Protocol:    stringField(entry, "protocol"),
 			Port:        int(numberField(entry, "port")),
 			AccessMode:  stringField(entry, "access_mode", "protocol"),

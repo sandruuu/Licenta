@@ -17,8 +17,9 @@ type AuditLogger struct {
 }
 
 var (
-	auditDetailsViaURLPattern = regexp.MustCompile(`(?i)\bvia\s+https?://\S+`)
-	auditDetailsURLPattern    = regexp.MustCompile(`(?i)\bhttps?://\S+`)
+	auditDetailsViaURLPattern  = regexp.MustCompile(`(?i)\bvia\s+https?://\S+`)
+	auditDetailsURLPattern     = regexp.MustCompile(`(?i)\bhttps?://\S+`)
+	auditTechnicalFieldPattern = regexp.MustCompile(`(?i)\b(request_id|session_id|agent_session_id|challenge_id|gateway_id|resource_id|device_id|user_id|organization_id)=[^\s]+`)
 )
 
 // NewAuditLogger creates a new AuditLogger
@@ -48,6 +49,13 @@ func (al *AuditLogger) LogEvent(eventType, userID, username, sourceIP, resource,
 	log.Printf("[AUDIT] %s: user=%s success=%v details=%s", eventType, username, success, details)
 }
 
+func (al *AuditLogger) HasRecentEvent(eventType, userID, username, sourceIP, resource, decision string, since time.Time) bool {
+	if al == nil || al.store == nil {
+		return false
+	}
+	return al.store.HasRecentAuditEvent(eventType, userID, username, sourceIP, resource, decision, since)
+}
+
 func sanitizeAuditDetails(details string) string {
 	details = strings.TrimSpace(details)
 	switch {
@@ -68,6 +76,7 @@ func sanitizeAuditDetails(details string) string {
 	}
 	details = auditDetailsViaURLPattern.ReplaceAllString(details, "via organization sign-in")
 	details = auditDetailsURLPattern.ReplaceAllString(details, "organization sign-in")
+	details = auditTechnicalFieldPattern.ReplaceAllString(details, "")
 	details = strings.ReplaceAll(details, "PDP ", "")
 	details = strings.ReplaceAll(details, " PDP", "")
 	details = strings.ReplaceAll(details, "PDP", "")

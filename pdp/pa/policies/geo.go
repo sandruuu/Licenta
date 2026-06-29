@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,11 +18,16 @@ import (
 )
 
 const (
+	defaultGeoProviderURL    = "https://ipapi.co/{ip}/json/"
+	defaultGeoFallbackURL    = "https://ipwho.is/{ip}"
 	userBaselineWindow       = 30 * 24 * time.Hour
 	userBaselineMaxLocations = 50
 	userBaselineMinLocations = 5
 	userBaselineMinDays      = 3
 	geoCacheStateKind        = "geo_cache"
+	geoLookupMaxAttempts     = 3
+	geoLookupBaseRetryDelay  = 250 * time.Millisecond
+	geoLookupMaxRetryDelay   = 2 * time.Second
 )
 
 // GeoLocation holds the result of an IP geolocation lookup.
@@ -48,6 +54,7 @@ type GeoLocator struct {
 	runtime                  RuntimeStateStore
 	httpClient               *http.Client
 	providerURL              string
+	providerURLs             []string
 	cacheTTL                 time.Duration
 	cacheMaxEntries          int
 	sameAreaDistanceKM       float64
@@ -64,7 +71,7 @@ type RuntimeStateStore interface {
 // NewGeoLocator creates a GeoLocator backed by the given store.
 func NewGeoLocator(s *store.Store, runtimeState RuntimeStateStore, cfgs ...config.GeoConfig) *GeoLocator {
 	cfg := config.GeoConfig{
-		ProviderURL:              "https://ipapi.co/{ip}/json/",
+		ProviderURL:              defaultGeoProviderURL,
 		HTTPTimeout:              3 * time.Second,
 		CacheTTL:                 time.Hour,
 		CacheMaxEntries:          10000,
@@ -95,6 +102,11 @@ func NewGeoLocator(s *store.Store, runtimeState RuntimeStateStore, cfgs ...confi
 			cfg.ImpossibleTravelSpeedKMH = cfgs[0].ImpossibleTravelSpeedKMH
 		}
 	}
+	providerURLs := []string{cfg.ProviderURL}
+	if sameProviderURL(cfg.ProviderURL, defaultGeoProviderURL) {
+		providerURLs = append(providerURLs, defaultGeoFallbackURL)
+	}
+
 	return &GeoLocator{
 		store:   s,
 		runtime: runtimeState,
@@ -102,6 +114,7 @@ func NewGeoLocator(s *store.Store, runtimeState RuntimeStateStore, cfgs ...confi
 			Timeout: cfg.HTTPTimeout,
 		},
 		providerURL:              cfg.ProviderURL,
+		providerURLs:             providerURLs,
 		cacheTTL:                 cfg.CacheTTL,
 		cacheMaxEntries:          cfg.CacheMaxEntries,
 		sameAreaDistanceKM:       cfg.SameAreaDistanceKM,
@@ -126,48 +139,145 @@ func (g *GeoLocator) Locate(ip string) (GeoLocation, error) {
 		return loc, nil
 	}
 
-	resp, err := g.httpClient.Get(g.lookupURL(ip))
+	providers := g.providerURLs
+	if len(providers) == 0 {
+		providers = []string{g.providerURL}
+	}
+	for _, provider := range providers {
+		provider = strings.TrimSpace(provider)
+		if provider == "" {
+			continue
+		}
+		lookupURL := lookupURLForProvider(provider, ip)
+		for attempt := 1; attempt <= geoLookupMaxAttempts; attempt++ {
+			loc, retry, retryAfter, hasRetryAfter, ok := g.lookupProvider(ip, lookupURL, provider, attempt)
+			if ok {
+				g.cacheLocation(ip, loc)
+				return loc, nil
+			}
+			if !retry || attempt == geoLookupMaxAttempts {
+				if retry {
+					log.Printf("[GEO] provider lookup unavailable for %s provider=%s after %d attempts", ip, geoProviderLabel(provider), attempt)
+				}
+				break
+			}
+			time.Sleep(geoRetryDelay(attempt, retryAfter, hasRetryAfter))
+		}
+	}
+
+	return GeoLocation{}, nil
+}
+
+func (g *GeoLocator) lookupProvider(ip, lookupURL, provider string, attempt int) (GeoLocation, bool, time.Duration, bool, bool) {
+	resp, err := g.httpClient.Get(lookupURL)
 	if err != nil {
-		log.Printf("[GEO] provider request failed for %s: %v", ip, err)
-		return GeoLocation{}, nil
+		log.Printf("[GEO] provider request failed for %s provider=%s attempt=%d/%d: %v", ip, geoProviderLabel(provider), attempt, geoLookupMaxAttempts, err)
+		return GeoLocation{}, true, 0, false, false
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == 429 {
-		log.Printf("[GEO] provider rate limited for %s", ip)
-		return GeoLocation{}, nil
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		retryAfter, hasRetryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		log.Printf("[GEO] provider temporary failure for %s provider=%s status=%d attempt=%d/%d", ip, geoProviderLabel(provider), resp.StatusCode, attempt, geoLookupMaxAttempts)
+		return GeoLocation{}, true, retryAfter, hasRetryAfter, false
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		log.Printf("[GEO] provider lookup failed for %s provider=%s status=%d", ip, geoProviderLabel(provider), resp.StatusCode)
+		return GeoLocation{}, false, 0, false, false
 	}
 
 	var result struct {
-		Error       bool    `json:"error"`
-		Reason      string  `json:"reason"`
-		Latitude    float64 `json:"latitude"`
-		Longitude   float64 `json:"longitude"`
-		City        string  `json:"city"`
-		CountryName string  `json:"country_name"`
-		CountryCode string  `json:"country_code"`
+		Error       bool     `json:"error"`
+		Success     *bool    `json:"success"`
+		Reason      string   `json:"reason"`
+		Message     string   `json:"message"`
+		Latitude    float64  `json:"latitude"`
+		Longitude   float64  `json:"longitude"`
+		Lat         *float64 `json:"lat"`
+		Lon         *float64 `json:"lon"`
+		City        string   `json:"city"`
+		Country     string   `json:"country"`
+		CountryName string   `json:"country_name"`
+		CountryCode string   `json:"country_code"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[GEO] provider decode failed for %s: %v", ip, err)
-		return GeoLocation{}, nil
+		log.Printf("[GEO] provider decode failed for %s provider=%s attempt=%d/%d: %v", ip, geoProviderLabel(provider), attempt, geoLookupMaxAttempts, err)
+		return GeoLocation{}, true, 0, false, false
 	}
 
 	if result.Error {
-		log.Printf("[GEO] provider lookup failed for %s: %s", ip, result.Reason)
-		return GeoLocation{}, nil
+		log.Printf("[GEO] provider lookup failed for %s provider=%s: %s", ip, geoProviderLabel(provider), firstNonEmpty(result.Reason, result.Message))
+		return GeoLocation{}, false, 0, false, false
+	}
+	if result.Success != nil && !*result.Success {
+		log.Printf("[GEO] provider lookup failed for %s provider=%s: %s", ip, geoProviderLabel(provider), firstNonEmpty(result.Message, result.Reason))
+		return GeoLocation{}, false, 0, false, false
 	}
 
-	loc := GeoLocation{
-		Latitude:    result.Latitude,
-		Longitude:   result.Longitude,
+	lat := result.Latitude
+	lon := result.Longitude
+	if result.Lat != nil {
+		lat = *result.Lat
+	}
+	if result.Lon != nil {
+		lon = *result.Lon
+	}
+	if lat == 0 && lon == 0 {
+		log.Printf("[GEO] provider returned empty coordinates for %s provider=%s", ip, geoProviderLabel(provider))
+		return GeoLocation{}, false, 0, false, false
+	}
+
+	country := firstNonEmpty(result.CountryName, result.Country)
+	countryCode := result.CountryCode
+	if countryCode == "" && len(strings.TrimSpace(result.Country)) == 2 {
+		countryCode = strings.TrimSpace(result.Country)
+	}
+
+	return GeoLocation{
+		Latitude:    lat,
+		Longitude:   lon,
 		City:        result.City,
-		Country:     result.CountryName,
-		CountryCode: result.CountryCode,
+		Country:     country,
+		CountryCode: countryCode,
+	}, false, 0, false, true
+}
+
+func parseRetryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
 	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		if seconds < 0 {
+			seconds = 0
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	if ts, err := http.ParseTime(value); err == nil {
+		delay := time.Until(ts)
+		if delay < 0 {
+			delay = 0
+		}
+		return delay, true
+	}
+	return 0, false
+}
 
-	g.cacheLocation(ip, loc)
-
-	return loc, nil
+func geoRetryDelay(attempt int, retryAfter time.Duration, hasRetryAfter bool) time.Duration {
+	if hasRetryAfter {
+		if retryAfter > geoLookupMaxRetryDelay {
+			return geoLookupMaxRetryDelay
+		}
+		return retryAfter
+	}
+	delay := geoLookupBaseRetryDelay
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+		if delay >= geoLookupMaxRetryDelay {
+			return geoLookupMaxRetryDelay
+		}
+	}
+	return delay
 }
 
 func (g *GeoLocator) cachedLocation(ip string) (GeoLocation, bool) {
@@ -215,15 +325,40 @@ func (g *GeoLocator) cacheLocation(ip string, loc GeoLocation) {
 }
 
 func (g *GeoLocator) lookupURL(ip string) string {
-	provider := strings.TrimSpace(g.providerURL)
+	return lookupURLForProvider(g.providerURL, ip)
+}
+
+func lookupURLForProvider(provider, ip string) string {
+	provider = strings.TrimSpace(provider)
 	if provider == "" {
-		provider = "https://ipapi.co/{ip}/json/"
+		provider = defaultGeoProviderURL
 	}
 	escapedIP := url.PathEscape(ip)
 	if strings.Contains(provider, "{ip}") {
 		return strings.ReplaceAll(provider, "{ip}", escapedIP)
 	}
 	return fmt.Sprintf("%s/%s/json/", strings.TrimRight(provider, "/"), escapedIP)
+}
+
+func sameProviderURL(left, right string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(left), "/"), strings.TrimRight(strings.TrimSpace(right), "/"))
+}
+
+func geoProviderLabel(provider string) string {
+	parsed, err := url.Parse(strings.TrimSpace(provider))
+	if err != nil || parsed.Host == "" {
+		return strings.TrimSpace(provider)
+	}
+	return parsed.Host
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // GeoVelocityResult holds the result of an impossible-travel check.

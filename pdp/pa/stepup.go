@@ -43,6 +43,8 @@ type StepUpChallengeRequest struct {
 	DeviceID       string
 	ResourceID     string
 	PolicyID       string
+	SourceIP       string
+	RiskSignals    []string
 	PublicOrigin   string
 	Requirement    *models.StepUpRequirement
 }
@@ -57,6 +59,8 @@ type StepUpChallenge struct {
 	DeviceID           string
 	ResourceID         string
 	PolicyID           string
+	SourceIP           string
+	RiskSignals        []string
 	Status             string
 	Methods            []string
 	MinStrength        string
@@ -78,6 +82,7 @@ type StepUpChallenge struct {
 	LastFailedAt        time.Time
 
 	PendingTOTPSecret string
+	Reused            bool `json:"-"`
 }
 
 type StepUpCompletion struct {
@@ -114,8 +119,10 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 
 	now := time.Now().UTC()
 	manager.expire(now)
-	if existing := manager.findActive(req.AgentSessionID, req.UserID, req.DeviceID, req.ResourceID, req.PolicyID, now); existing != nil {
-		return cloneStepUpChallenge(existing), nil
+	if existing := manager.findActive(req.AgentSessionID, req.UserID, req.DeviceID, req.ResourceID, req.PolicyID, req.SourceIP, now); existing != nil {
+		challenge := cloneStepUpChallenge(existing)
+		challenge.Reused = true
+		return challenge, nil
 	}
 
 	id, err := util.GenerateID("stepup")
@@ -134,6 +141,8 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 		DeviceID:           strings.TrimSpace(req.DeviceID),
 		ResourceID:         strings.TrimSpace(req.ResourceID),
 		PolicyID:           firstNonEmptyString(req.PolicyID, requirement.PolicyID),
+		SourceIP:           strings.TrimSpace(req.SourceIP),
+		RiskSignals:        normalizedRiskSignals(req.RiskSignals),
 		Status:             StepUpStatusPending,
 		Methods:            methods,
 		MinStrength:        models.StepUpMinStrength(requirement.MinStrength),
@@ -182,14 +191,16 @@ func (manager *StepUpManager) AuthContext(agentSessionID, userID, deviceID, reso
 		return models.AuthContext{}
 	}
 	return models.AuthContext{
-		ACR:              selected.RequiredACR,
-		AMR:              []string{selected.CompletedMethod},
-		StepUpVerifiedAt: selected.CompletedAt,
-		StepUpExpiresAt:  selected.ExpiresAt,
-		StepUpMethod:     selected.CompletedMethod,
-		StepUpStrength:   selected.CompletedStrength,
-		StepUpAAGUID:     selected.CompletedAAGUID,
-		StepUpAttachment: selected.CompletedAttachment,
+		ACR:               selected.RequiredACR,
+		AMR:               []string{selected.CompletedMethod},
+		StepUpVerifiedAt:  selected.CompletedAt,
+		StepUpExpiresAt:   selected.ExpiresAt,
+		StepUpMethod:      selected.CompletedMethod,
+		StepUpStrength:    selected.CompletedStrength,
+		StepUpAAGUID:      selected.CompletedAAGUID,
+		StepUpAttachment:  selected.CompletedAttachment,
+		StepUpSourceIP:    selected.SourceIP,
+		StepUpRiskSignals: append([]string(nil), selected.RiskSignals...),
 	}
 }
 
@@ -386,7 +397,7 @@ func (manager *StepUpManager) Deny(challengeID, reason string) {
 	_ = manager.save(challenge)
 }
 
-func (manager *StepUpManager) findActive(agentSessionID, userID, deviceID, resourceID, policyID string, now time.Time) *StepUpChallenge {
+func (manager *StepUpManager) findActive(agentSessionID, userID, deviceID, resourceID, policyID, sourceIP string, now time.Time) *StepUpChallenge {
 	for _, challenge := range manager.list() {
 		if challenge == nil {
 			continue
@@ -398,6 +409,9 @@ func (manager *StepUpManager) findActive(agentSessionID, userID, deviceID, resou
 			continue
 		}
 		if strings.TrimSpace(policyID) != "" && !sameTrimmed(challenge.PolicyID, policyID) {
+			continue
+		}
+		if strings.TrimSpace(sourceIP) != "" && strings.TrimSpace(challenge.SourceIP) != "" && !sameTrimmed(challenge.SourceIP, sourceIP) {
 			continue
 		}
 		if !challenge.ExpiresAt.IsZero() && !now.Before(challenge.ExpiresAt) {
@@ -514,7 +528,30 @@ func cloneStepUpChallenge(challenge *StepUpChallenge) *StepUpChallenge {
 	copy := *challenge
 	copy.Methods = append([]string(nil), challenge.Methods...)
 	copy.AllowedAAGUIDs = append([]string(nil), challenge.AllowedAAGUIDs...)
+	copy.RiskSignals = append([]string(nil), challenge.RiskSignals...)
 	return &copy
+}
+
+func normalizedRiskSignals(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || containsTrimmed(out, value) {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func containsTrimmed(values []string, needle string) bool {
+	needle = strings.ToLower(strings.TrimSpace(needle))
+	for _, value := range values {
+		if strings.ToLower(strings.TrimSpace(value)) == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func sameTrimmed(left, right string) bool {

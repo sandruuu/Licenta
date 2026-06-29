@@ -132,6 +132,19 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 			}
 			return service.cachedDeviceDataReport()
 		},
+		OnSessionClaimed: func(ctx context.Context, session usersession.AuthenticatedSession) error {
+			if service == nil || service.deviceDataCollector == nil || service.deviceDataSync == nil {
+				return nil
+			}
+			record, err := service.enrollment.Record(ctx)
+			if err != nil {
+				return err
+			}
+			return service.deviceDataSync.ReportNow(ctx, record, devicedatasync.SessionContext{
+				AgentSessionID:    session.AgentSessionID,
+				AgentSessionToken: session.AgentSessionToken,
+			}, "user_authenticated")
+		},
 		OnCatalog: func(ctx context.Context, _ ipc.PeerIdentity, catalog ipc.CatalogInfo) error {
 			if service == nil || service.protectedResources == nil {
 				return nil
@@ -191,8 +204,14 @@ func newBaseService(config Config, dependencies Dependencies) *Service {
 		syncCollector = deviceDataSyncCollector(&service)
 	}
 	deviceDataSync = devicedatasync.NewRunner(deviceDataSyncConfig(config), devicedatasync.Dependencies{
-		Logger:        dependencies.Logger,
-		Collector:     syncCollector,
+		Logger:    dependencies.Logger,
+		Collector: syncCollector,
+		Snapshot: func() ipc.DeviceDataReport {
+			if service == nil {
+				return ipc.DeviceDataReport{}
+			}
+			return service.cachedDeviceDataReport()
+		},
 		Watcher:       dependencies.DeviceDataWatcher,
 		Enrollment:    enrollmentManager,
 		ClientFactory: deviceDataSyncClientFactory(dependencies.DeviceDataSyncClientFactory, pdpClient),
@@ -281,11 +300,32 @@ func flowAuthorizationClientFromPDP(ctx context.Context, pdpClient *pdpclient.Cl
 	if pdpClient == nil {
 		return nil, nil
 	}
-	connection, err := pdpClient.Connection(ctx, record)
-	if err != nil {
-		return nil, err
+	return dedicatedFlowAuthorizationClient{pdpClient: pdpClient, record: record}, nil
+}
+
+type dedicatedFlowAuthorizationClient struct {
+	pdpClient *pdpclient.Client
+	record    enrollment.EnrollmentRecord
+}
+
+func (client dedicatedFlowAuthorizationClient) AuthorizeResource(ctx context.Context, request flowauthorization.AuthorizeRequest) (flowauthorization.AuthorizeResponse, error) {
+	if client.pdpClient == nil {
+		return flowauthorization.AuthorizeResponse{}, fmt.Errorf("PDP client is not configured")
 	}
-	return flowauthorization.NewGRPCClientFromConnection(connection)
+	connection, cleanup, err := client.pdpClient.DedicatedConnection(ctx, client.record)
+	if err != nil {
+		return flowauthorization.AuthorizeResponse{}, err
+	}
+	defer cleanup()
+	grpcClient, err := flowauthorization.NewGRPCClientFromConnection(connection)
+	if err != nil {
+		return flowauthorization.AuthorizeResponse{}, err
+	}
+	return grpcClient.AuthorizeResource(ctx, request)
+}
+
+func (client dedicatedFlowAuthorizationClient) Close() error {
+	return nil
 }
 
 func protectedResourcesConfig(config Config) protectedresources.Config {

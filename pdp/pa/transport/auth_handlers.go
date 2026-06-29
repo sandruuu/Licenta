@@ -16,7 +16,10 @@ import (
 // checkAuthRateLimit enforces per-IP rate limiting on authentication endpoints.
 // Returns true if the request should be rejected (rate limit exceeded).
 func (s *Server) checkAuthRateLimit(w http.ResponseWriter, r *http.Request) bool {
-	ip, _, _ := strings.Cut(r.RemoteAddr, ":")
+	ip := clientIPFromRequest(r)
+	if ip == "" {
+		ip = "unknown"
+	}
 	appCfg := s.appConfig()
 	if s.pa == nil || s.pa.Runtime == nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "rate limiter unavailable"})
@@ -254,9 +257,6 @@ func (s *Server) handleAdminSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminSessionRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	if s.checkAuthRateLimit(w, r) {
 		return
 	}
 	sessionID, refreshTokenValue, ok := adminSessionCredentialsFromCookies(r)
@@ -553,6 +553,7 @@ func (s *Server) lookupAdminSessionUser(userID string) (*models.User, bool) {
 
 func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request, req models.LoginRequest) (*models.User, bool) {
 	identifier := req.Identifier()
+	sourceIP := clientIPFromRequest(r)
 	if identifier == "" {
 		writeJSON(w, http.StatusBadRequest, models.LoginResponse{
 			Status:  "denied",
@@ -564,7 +565,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	if strings.EqualFold(identifier, "admin") && req.Password == "admin" {
 		_ = s.pa.Runtime.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Default admin/admin credentials rejected", false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, sourceIP, "", "", "Default admin/admin credentials rejected", false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -581,7 +582,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	}
 	if locked {
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Account locked until "+until.Format(time.RFC3339), false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, sourceIP, "", "", "Account locked until "+until.Format(time.RFC3339), false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -593,7 +594,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		_ = s.pa.Runtime.RecordFailedLogin(identifier, s.appConfig().MaxLoginAttempts, s.appConfig().LockoutDuration)
 		if s.pa.Audit != nil {
-			s.pa.Audit.LogEvent("admin_login", "", identifier, r.RemoteAddr, "", "", "Invalid credentials", false)
+			s.pa.Audit.LogEvent("admin_login", "", identifier, sourceIP, "", "", "Invalid credentials", false)
 		}
 		writeJSON(w, http.StatusUnauthorized, models.LoginResponse{
 			Status:  "denied",
@@ -608,7 +609,7 @@ func (s *Server) authenticatePrimaryLogin(w http.ResponseWriter, r *http.Request
 	}
 	_ = s.pa.Runtime.ResetLoginAttempts(identifier)
 	if s.pa.Audit != nil {
-		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, r.RemoteAddr, "", "", "Primary authentication completed", true)
+		s.pa.Audit.LogEvent("admin_login", user.ID, user.Username, sourceIP, "", "", "Primary authentication completed", true)
 	}
 	return user, true
 }

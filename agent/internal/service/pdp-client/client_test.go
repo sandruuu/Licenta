@@ -47,6 +47,34 @@ func TestClientReusesConnectionForSameDeviceCertificate(t *testing.T) {
 	}
 }
 
+func TestClientDedicatedConnectionDoesNotReuseSharedConnection(t *testing.T) {
+	cleanupCalls := 0
+	client := New(Config{PDPGRPCEndpoint: "pdp.example.test:443"}, fakeDeviceIdentity{cleanupCalls: &cleanupCalls})
+	record := enrollment.EnrollmentRecord{DeviceID: "device-1", DeviceCertThumbprint: "thumb-1"}
+
+	shared, err := client.Connection(context.Background(), record)
+	if err != nil {
+		t.Fatalf("Connection returned error: %v", err)
+	}
+	dedicated, cleanup, err := client.DedicatedConnection(context.Background(), record)
+	if err != nil {
+		t.Fatalf("DedicatedConnection returned error: %v", err)
+	}
+	if dedicated == shared {
+		t.Fatalf("dedicated connection reused the shared connection")
+	}
+	cleanup()
+	if cleanupCalls != 1 {
+		t.Fatalf("cleanup calls after dedicated cleanup = %d, want 1", cleanupCalls)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if cleanupCalls != 2 {
+		t.Fatalf("cleanup calls after shared close = %d, want 2", cleanupCalls)
+	}
+}
+
 type fakeDeviceIdentity struct {
 	cleanupCalls *int
 }

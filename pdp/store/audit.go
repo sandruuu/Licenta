@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"pdp/models"
 )
@@ -57,7 +58,7 @@ func (s *Store) AddAuditEntry(entry *models.AuditEntry) {
 	}
 
 	s.db.Exec(`DELETE FROM audit_log WHERE id NOT IN (
-		SELECT id FROM audit_log ORDER BY timestamp DESC LIMIT 10000)`)
+		SELECT id FROM audit_log ORDER BY timestamp DESC, id DESC LIMIT 10000)`)
 }
 
 func (s *Store) resolveAuditUserContext(entry *models.AuditEntry) {
@@ -180,7 +181,7 @@ func (s *Store) GetAuditLog(limit int) []*models.AuditEntry {
 	}
 
 	rows, err := s.db.Query(`SELECT id, timestamp, event_type, user_id, username, source_ip,
-		resource, decision, details, success, organization_id FROM audit_log ORDER BY timestamp DESC LIMIT ?`, limit)
+		resource, decision, details, success, organization_id FROM audit_log ORDER BY timestamp DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil
 	}
@@ -202,4 +203,44 @@ func (s *Store) GetAuditLog(limit int) []*models.AuditEntry {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func (s *Store) HasRecentAuditEvent(eventType, userID, username, sourceIP, resource, decision string, since time.Time) bool {
+	if s == nil || s.db == nil || strings.TrimSpace(eventType) == "" || since.IsZero() {
+		return false
+	}
+	userID = strings.TrimSpace(userID)
+	username = strings.TrimSpace(username)
+	sourceIP = strings.TrimSpace(sourceIP)
+	resource = strings.TrimSpace(resource)
+	decision = strings.TrimSpace(decision)
+
+	clauses := []string{"event_type = ?", "timestamp >= ?"}
+	args := []any{strings.TrimSpace(eventType), fmtTime(since.UTC())}
+	if userID != "" {
+		clauses = append(clauses, "user_id = ?")
+		args = append(args, userID)
+	} else if username != "" {
+		clauses = append(clauses, "username = ?")
+		args = append(args, username)
+	}
+	if sourceIP != "" {
+		clauses = append(clauses, "source_ip = ?")
+		args = append(args, sourceIP)
+	}
+	if resource != "" {
+		clauses = append(clauses, "resource = ?")
+		args = append(args, resource)
+	}
+	if decision != "" {
+		clauses = append(clauses, "decision = ?")
+		args = append(args, decision)
+	}
+
+	query := `SELECT 1 FROM audit_log WHERE ` + strings.Join(clauses, " AND ") + ` ORDER BY timestamp DESC, id DESC LIMIT 1`
+	var exists int
+	if err := s.db.QueryRow(query, args...).Scan(&exists); err != nil {
+		return false
+	}
+	return exists == 1
 }

@@ -20,14 +20,13 @@ const (
 	StatusDenied              = "DENIED"
 	StatusClaimed             = "CLAIMED"
 
-	DefaultTimeout               = 10 * time.Minute
-	DefaultPollInterval          = time.Second
-	DefaultExpiryRevokeLead      = 30 * time.Second
-	DefaultExpiryRevokeTimeout   = 10 * time.Second
-	DefaultSessionRenewBefore    = 2 * time.Minute
-	DefaultSessionRenewRetry     = 15 * time.Second
-	DefaultSessionRenewTimeout   = 10 * time.Second
-	DefaultCatalogRefreshTimeout = 20 * time.Second
+	DefaultTimeout             = 10 * time.Minute
+	DefaultPollInterval        = time.Second
+	DefaultExpiryRevokeLead    = 30 * time.Second
+	DefaultExpiryRevokeTimeout = 10 * time.Second
+	DefaultSessionRenewBefore  = 2 * time.Minute
+	DefaultSessionRenewRetry   = 15 * time.Second
+	DefaultSessionRenewTimeout = 10 * time.Second
 )
 
 type Config struct {
@@ -44,6 +43,7 @@ type Dependencies struct {
 	ClientFactory      ClientFactory
 	Enrollment         EnrollmentProvider
 	DeviceDataSnapshot func() ipc.DeviceDataReport
+	OnSessionClaimed   func(context.Context, AuthenticatedSession) error
 	OnCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	OnLogout           func(context.Context, ipc.PeerIdentity) error
 	OnAuthenticated    func(context.Context, ipc.PeerIdentity)
@@ -194,6 +194,7 @@ type Manager struct {
 	clientThumbprint   string
 	enrollment         EnrollmentProvider
 	deviceDataSnapshot func() ipc.DeviceDataReport
+	onSessionClaimed   func(context.Context, AuthenticatedSession) error
 	onCatalog          func(context.Context, ipc.PeerIdentity, ipc.CatalogInfo) error
 	onLogout           func(context.Context, ipc.PeerIdentity) error
 	onAuthenticated    func(context.Context, ipc.PeerIdentity)

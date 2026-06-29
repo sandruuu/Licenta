@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Bell,
   CheckCircle2,
   Database,
   LaptopMinimalCheck,
@@ -14,9 +15,6 @@ import {
   WindowMinimise,
 } from '../../wailsjs/runtime/runtime';
 import {
-  FlashWindowAttention,
-} from '../../wailsjs/go/tray/GUIApp';
-import {
   isDeviceEnrolled,
 } from '../lib/dashboard';
 import logoMark from '../assets/trust-agent-mark.svg';
@@ -30,6 +28,7 @@ function AppLayout({
   enrollmentLoading,
   loginError,
   loginLoading,
+  logoutLoading,
   onHide,
   onLogout,
   onStartEnrollment,
@@ -46,19 +45,29 @@ function AppLayout({
     ? userSession.message
     : '';
   const sessionError = authenticated ? (loginError || userSession.last_error || dashboardError) : '';
-  const [toasts, setToasts] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false);
   const [activeView, setActiveView] = useState('security');
-  const dismissedToastIdsRef = useRef(new Set());
+  const notificationIdsRef = useRef(new Set());
+  const activeViewRef = useRef(activeView);
   const openedStepUpURLRef = useRef('');
 
   useEffect(() => {
     if (authenticated) {
       return;
     }
-    setToasts([]);
-    dismissedToastIdsRef.current.clear();
+    setNotifications([]);
+    setHasUnreadNotifications(false);
+    notificationIdsRef.current.clear();
     openedStepUpURLRef.current = '';
   }, [authenticated]);
+
+  useEffect(() => {
+    activeViewRef.current = activeView;
+    if (activeView === 'notifications') {
+      setHasUnreadNotifications(false);
+    }
+  }, [activeView, notifications.length]);
 
   useEffect(() => {
     if (!stepUpURL) {
@@ -78,12 +87,13 @@ function AppLayout({
     if (!stepUpURL || !stepUpMessage) {
       return;
     }
-    enqueueToast(setToasts, dismissedToastIdsRef, {
+    const notification = {
       id: `step-up:${stepUpURL}`,
       title: 'Security verification required',
       message: stepUpMessage,
       variant: 'warning',
-    });
+    };
+    enqueueNotification(setNotifications, setHasUnreadNotifications, notificationIdsRef, activeViewRef, notification);
   }, [stepUpMessage, stepUpURL]);
 
   useEffect(() => {
@@ -91,30 +101,27 @@ function AppLayout({
       return;
     }
     const variant = sessionToastVariant(sessionMessage);
-    enqueueToast(setToasts, dismissedToastIdsRef, {
+    const notification = {
       id: `session:${sessionMessage}`,
       title: sessionToastTitle(sessionMessage, variant),
       message: sessionMessage,
       variant,
-    });
+    };
+    enqueueNotification(setNotifications, setHasUnreadNotifications, notificationIdsRef, activeViewRef, notification);
   }, [sessionMessage]);
 
   useEffect(() => {
     if (!sessionError) {
       return;
     }
-    enqueueToast(setToasts, dismissedToastIdsRef, {
+    const notification = {
       id: `error:${sessionError}`,
       title: toastErrorTitle(sessionError),
       message: sessionError,
       variant: 'danger',
-    });
+    };
+    enqueueNotification(setNotifications, setHasUnreadNotifications, notificationIdsRef, activeViewRef, notification);
   }, [sessionError]);
-
-  const dismissToast = (toastID) => {
-    dismissedToastIdsRef.current.add(toastID);
-    setToasts((current) => current.filter((toast) => toast.id !== toastID));
-  };
 
   return (
     <div className="relative flex h-full w-full flex-col bg-[var(--surface)]">
@@ -127,7 +134,8 @@ function AppLayout({
           <>
             <Sidebar
               activeView={activeView}
-              loginLoading={loginLoading}
+              hasUnreadNotifications={hasUnreadNotifications}
+              logoutLoading={logoutLoading}
               onLogout={onLogout}
               onSelectView={setActiveView}
             />
@@ -135,6 +143,7 @@ function AppLayout({
               activeView={activeView}
               dashboard={dashboard}
               loading={dashboardLoading}
+              notifications={notifications}
             />
           </>
         ) : enrolled ? (
@@ -154,7 +163,6 @@ function AppLayout({
           />
         )}
       </div>
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
@@ -163,10 +171,13 @@ function EnrolledScreen({
   activeView = 'security',
   dashboard,
   loading = false,
+  notifications = [],
 }) {
   return (
     <main className="h-full min-w-0 overflow-hidden bg-[#f9faf9] text-[var(--text-primary)]">
-      {activeView === 'resources' ? (
+      {activeView === 'notifications' ? (
+        <NotificationsView notifications={notifications} />
+      ) : activeView === 'resources' ? (
         <ResourcesView dashboard={dashboard} />
       ) : (
         <SecurityView dashboard={dashboard} error="" loading={loading} />
@@ -175,31 +186,31 @@ function EnrolledScreen({
   );
 }
 
-function enqueueToast(setToasts, dismissedToastIdsRef, toast) {
-  const toastID = String(toast.id || '').trim();
-  if (!toastID || dismissedToastIdsRef.current.has(toastID)) {
-    return false;
-  }
-  setToasts((current) => {
-    const existing = current.find((item) => item.id === toastID);
-    if (existing) {
-      return current.map((item) => (
-        item.id === toastID
-          ? { ...item, title: toast.title, message: toast.message, variant: toast.variant }
-          : item
-      ));
-    }
-    return [...current, { id: toastID, title: toast.title, message: toast.message, variant: toast.variant }];
-  });
-  requestWindowAttention();
-  return true;
-}
-
-function requestWindowAttention() {
-  if (!window?.go?.tray?.GUIApp?.FlashWindowAttention) {
+function enqueueNotification(
+  setNotifications,
+  setHasUnreadNotifications,
+  notificationIdsRef,
+  activeViewRef,
+  notification,
+) {
+  const notificationID = String(notification.id || '').trim();
+  if (!notificationID || notificationIdsRef.current.has(notificationID)) {
     return;
   }
-  FlashWindowAttention().catch(() => {});
+  notificationIdsRef.current.add(notificationID);
+  setNotifications((current) => [
+    ...current,
+    {
+      id: notificationID,
+      title: notification.title,
+      message: notification.message,
+      variant: notification.variant,
+      createdAt: Date.now(),
+    },
+  ]);
+  if (activeViewRef.current !== 'notifications') {
+    setHasUnreadNotifications(true);
+  }
 }
 
 function formatStepUpToastMessage(message) {
@@ -268,54 +279,6 @@ function toastErrorTitle(message) {
   return 'TrustAgent';
 }
 
-function ToastStack({ toasts = [], onDismiss }) {
-  if (!toasts.length) {
-    return null;
-  }
-  return (
-    <div className="pointer-events-none absolute bottom-4 right-4 z-50 flex w-[min(380px,calc(100%-32px))] flex-col gap-2">
-      {toasts.map((toast) => (
-        <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
-      ))}
-    </div>
-  );
-}
-
-function ToastItem({ toast, onDismiss }) {
-  const tone = toastTone(toast.variant);
-  const Icon = tone.icon;
-  return (
-    <article
-      className="toast-attention pointer-events-auto min-w-0 rounded-md border border-[var(--toast-border)] bg-[var(--toast-bg)] px-4 py-3 text-[var(--toast-color)] shadow-[0_14px_34px_color-mix(in_srgb,var(--graphite)_16%,transparent)]"
-      style={{
-        '--toast-bg': tone.background,
-        '--toast-border': tone.border,
-        '--toast-color': tone.color,
-        '--toast-icon-bg': tone.iconBackground,
-      }}
-    >
-      <div className="flex min-w-0 items-start gap-3">
-        <Icon className="mt-[2px] h-5 w-5 shrink-0" strokeWidth={2.4} />
-        <div className="min-w-0 flex-1 pr-1">
-          <h3 className="text-sm font-extrabold leading-5 text-[#1f262b]">{toast.title}</h3>
-          <p className="mt-1 text-sm font-semibold leading-5 text-[var(--toast-color)]">
-            <ToastMessage message={toast.message} />
-          </p>
-        </div>
-        <button
-          type="button"
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-transparent text-[var(--toast-color)] transition-colors hover:bg-[var(--toast-icon-bg)]"
-          onClick={() => onDismiss?.(toast.id)}
-          aria-label="Dismiss notification"
-          title="Dismiss"
-        >
-          <X size={18} strokeWidth={2} />
-        </button>
-      </div>
-    </article>
-  );
-}
-
 function toastTone(variant = 'warning') {
   if (variant === 'success') {
     return {
@@ -344,6 +307,84 @@ function toastTone(variant = 'warning') {
   };
 }
 
+function NotificationsView({ notifications = [] }) {
+  return (
+    <section className="ml-[54px] flex h-full min-h-0 flex-col overflow-hidden bg-[#f9faf9] text-[#202427]">
+      <header className="mx-8 shrink-0 border-b border-[#e3e4e5] py-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid h-12 w-12 shrink-0 place-items-center text-[#334045]">
+            <Bell className="h-10 w-10" strokeWidth={2.1} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-medium leading-none text-[#111820]">Notifications</h1>
+            <p className="mt-1 truncate text-xs font-semibold text-[#6b737a]">
+              Current session activity.
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-auto px-8 pb-6 pt-4">
+        {notifications.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            {notifications.map((notification) => (
+              <NotificationCard key={notification.id} notification={notification} />
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-4 text-sm font-medium text-[var(--text-secondary)]">
+            No notifications for this session.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function NotificationCard({ notification }) {
+  const tone = toastTone(notification.variant);
+  const Icon = tone.icon;
+  return (
+    <article
+      className="min-w-0 rounded-md border border-[var(--toast-border)] bg-[var(--toast-bg)] px-4 py-3 text-[var(--toast-color)] shadow-[0_10px_24px_color-mix(in_srgb,var(--graphite)_10%,transparent)]"
+      style={{
+        '--toast-bg': tone.background,
+        '--toast-border': tone.border,
+        '--toast-color': tone.color,
+      }}
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <Icon className="mt-[2px] h-5 w-5 shrink-0" strokeWidth={2.4} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <h3 className="min-w-0 text-sm font-extrabold leading-5 text-[#1f262b]">
+              {notification.title}
+            </h3>
+            <time className="shrink-0 text-[11px] font-bold leading-5 text-[color-mix(in_srgb,var(--toast-color)_74%,white)]">
+              {formatNotificationTime(notification.createdAt)}
+            </time>
+          </div>
+          <p className="mt-1 text-sm font-semibold leading-5 text-[var(--toast-color)]">
+            <ToastMessage message={notification.message} />
+          </p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function formatNotificationTime(value) {
+  const timestamp = Number(value || 0);
+  if (!timestamp) {
+    return '';
+  }
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function ResourcesView({ dashboard }) {
   const catalog = dashboard?.catalog || {};
   const resources = Array.isArray(catalog.resources) ? catalog.resources : [];
@@ -370,16 +411,21 @@ function ResourcesView({ dashboard }) {
             resources.map((resource) => (
               <article
                 key={resource.resource_id || resource.fqdn}
-                className="min-h-[58px] rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-3 shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-[var(--accent)] hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]"
+                className="min-h-[74px] rounded-md border border-[rgba(44,97,100,0.55)] bg-[rgba(44,97,100,0.045)] px-4 py-3 shadow-[0_8px_16px_rgba(42,42,42,0.12)] transition-[border-color,background-color,box-shadow] duration-150 hover:border-[var(--accent)] hover:bg-[rgba(44,97,100,0.085)] hover:shadow-[0_10px_18px_rgba(42,42,42,0.14)]"
               >
-                <p className="truncate text-base font-semibold leading-5 text-[#1f262b]">
-                  {resource.display_name || resource.resource_id || resource.fqdn}
-                </p>
-                <p className="mt-1 truncate text-xs font-semibold text-[#687179]">
-                  {resource.fqdn || resource.resource_id}
-                </p>
-                <p className="mt-1 text-xs font-medium text-[#7a838a]">
-                  {formatResourceEndpoint(resource)}
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <p className="min-w-0 truncate text-base font-semibold leading-5 text-[#1f262b]">
+                    {formatResourceName(resource)}
+                  </p>
+                  <span className="shrink-0 rounded-[4px] border border-[rgba(44,97,100,0.26)] bg-white/70 px-2 py-[2px] text-[10px] font-extrabold uppercase tracking-normal text-[var(--accent)]">
+                    {formatResourceType(resource)}
+                  </span>
+                </div>
+                <p
+                  className="mt-2 select-all truncate rounded-[4px] bg-white/60 px-2 py-1 font-mono text-xs font-semibold leading-5 text-[#455157]"
+                  title={formatResourceAccessAddress(resource)}
+                >
+                  {formatResourceAccessAddress(resource)}
                 </p>
               </article>
             ))
@@ -394,10 +440,43 @@ function ResourcesView({ dashboard }) {
   );
 }
 
-function formatResourceEndpoint(resource) {
-  const protocol = String(resource?.protocol || '').trim().toUpperCase();
-  const port = resource?.port ? String(resource.port) : '';
-  return [protocol, port].filter(Boolean).join(' : ') || 'Resource access';
+function formatResourceName(resource) {
+  const displayName = String(resource?.display_name || '').trim();
+  const resourceID = String(resource?.resource_id || '').trim();
+  if (displayName && !stringsEqual(displayName, resourceID)) {
+    return displayName;
+  }
+  return String(resource?.fqdn || 'Resource').trim();
+}
+
+function formatResourceType(resource) {
+  const type = String(resource?.type || resource?.access_mode || resource?.protocol || '').trim();
+  if (!type) {
+    return 'TYPE';
+  }
+  if (type.toLowerCase() === 'https' || type.toLowerCase() === 'http') {
+    return 'WEB';
+  }
+  return type.toUpperCase();
+}
+
+function formatResourceAccessAddress(resource) {
+  const host = String(resource?.fqdn || '').trim();
+  const port = resource?.port ? String(resource.port).trim() : '';
+  if (!host) {
+    return 'Resource access unavailable';
+  }
+  const type = String(resource?.type || resource?.access_mode || resource?.protocol || '').trim().toLowerCase();
+  const protocol = String(resource?.protocol || '').trim().toLowerCase();
+  const address = port ? `${host}:${port}` : host;
+  if (type === 'web' || protocol === 'http' || protocol === 'https') {
+    return `http://${address}`;
+  }
+  return address;
+}
+
+function stringsEqual(left, right) {
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase();
 }
 
 function EnrolledSignInScreen({
@@ -622,7 +701,8 @@ function ToastResourceName({ children }) {
 
 function Sidebar({
   activeView = 'security',
-  loginLoading = false,
+  hasUnreadNotifications = false,
+  logoutLoading = false,
   onLogout,
   onSelectView,
 }) {
@@ -649,11 +729,18 @@ function Sidebar({
               label="Resources"
               onClick={() => onSelectView?.('resources')}
             />
+            <SidebarButton
+              active={activeView === 'notifications'}
+              icon={Bell}
+              label="Notifications"
+              showBadge={hasUnreadNotifications}
+              onClick={() => onSelectView?.('notifications')}
+            />
           </div>
           <div className="flex-1" />
           <SidebarButton
             danger
-            disabled={loginLoading}
+            disabled={logoutLoading}
             icon={LogOut}
             label="Logout"
             onClick={onLogout}
@@ -671,6 +758,7 @@ function SidebarButton({
   icon: Icon,
   label,
   onClick,
+  showBadge = false,
 }) {
   const colorClass = danger
     ? 'text-[var(--danger)] hover:text-[color-mix(in_srgb,var(--danger)_78%,black)]'
@@ -686,11 +774,14 @@ function SidebarButton({
       title={label}
       aria-label={label}
       aria-pressed={active}
-      className={`grid h-9 w-9 place-items-center bg-transparent transition-colors disabled:cursor-wait disabled:opacity-60 ${colorClass}`}
+      className={`relative grid h-9 w-9 place-items-center bg-transparent transition-colors disabled:cursor-wait disabled:opacity-60 ${colorClass}`}
       onClick={onClick}
       disabled={disabled}
     >
       <Icon className={iconClass} strokeWidth={strokeWidth} />
+      {showBadge ? (
+        <span className="notification-badge-pulse absolute right-[6px] top-[6px] h-2.5 w-2.5 rounded-full bg-[var(--danger)] ring-2 ring-white" />
+      ) : null}
     </button>
   );
 }

@@ -9,6 +9,9 @@ import (
 )
 
 func (service *Service) collectDeviceData(ctx context.Context, deviceID string) (ipc.DeviceDataReport, error) {
+	service.deviceDataCollectMu.Lock()
+	defer service.deviceDataCollectMu.Unlock()
+	service.markDeviceDataCollecting()
 	report, err := service.deviceDataCollector.Collect(ctx, deviceID)
 	deviceID = strings.TrimSpace(deviceID)
 	if err == nil && deviceID != "" && strings.TrimSpace(report.DeviceID) == "" {
@@ -20,6 +23,13 @@ func (service *Service) collectDeviceData(ctx context.Context, deviceID string) 
 	}
 	service.enforceLocalDevicePosture(ctx, report)
 	return report, nil
+}
+
+func (service *Service) markDeviceDataCollecting() {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.deviceData.Status = deviceDataStatusCollecting
+	service.deviceData.LastError = ""
 }
 
 func (service *Service) cacheDeviceDataReport(report ipc.DeviceDataReport, err error) {

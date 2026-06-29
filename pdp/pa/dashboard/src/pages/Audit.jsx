@@ -11,6 +11,38 @@ function normalize(value) {
   return String(value || '').toLowerCase();
 }
 
+function isInternalIPv4(value) {
+  const parts = String(value || '').trim().split('.');
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((octet, index) => !Number.isInteger(octet) || String(octet) !== parts[index] || octet < 0 || octet > 255)) {
+    return false;
+  }
+  const [first, second] = octets;
+  return (
+    first === 10 ||
+    first === 127 ||
+    first === 0 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isInternalIP(value) {
+  const ip = String(value || '').trim().toLowerCase();
+  if (!ip) return false;
+  if (isInternalIPv4(ip)) return true;
+  return ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:');
+}
+
+function auditSourceIPText(value) {
+  const ip = String(value || '').trim();
+  if (!ip || isInternalIP(ip)) return '-';
+  return ip;
+}
+
 const AUDIT_EVENT_META = {
   agent_user_authentication_request: {
     label: 'User authentication request',
@@ -47,6 +79,26 @@ const AUDIT_EVENT_META = {
   agent_access_request: {
     label: 'Resource access request',
     variant: 'resource',
+  },
+  agent_resource_access_granted: {
+    label: 'Resource access granted',
+    variant: 'success',
+  },
+  agent_resource_access_disconnected: {
+    label: 'Resource session ended',
+    variant: 'warning',
+  },
+  agent_resource_session_ended: {
+    label: 'Resource session ended',
+    variant: 'warning',
+  },
+  agent_resource_session_revoked: {
+    label: 'Resource session revoked',
+    variant: 'danger',
+  },
+  agent_resource_session_expired: {
+    label: 'Resource session expired',
+    variant: 'warning',
   },
   agent_step_up_required: {
     label: 'Resource step-up required',
@@ -104,7 +156,13 @@ function auditEventLabel(type) {
 
 function entryOutcome(entry) {
   const eventType = canonicalAuditEventType(entry?.event_type);
+  if (eventType === 'agent_resource_access_disconnected' || eventType === 'agent_resource_session_ended') return 'ended';
+  if (eventType === 'agent_resource_session_revoked') return 'revoked';
+  if (eventType === 'agent_resource_session_expired') return 'expired';
   if (entry.decision === 'deny') return 'denied';
+  if (entry.decision === 'revoked') return 'revoked';
+  if (entry.decision === 'expired') return 'expired';
+  if (entry.decision === 'ended') return 'ended';
   if (entry.decision === 'step_up' || entry.decision === 'step_up_required' || entry.decision === 'mfa_required') return 'step_up';
   if (entry.decision === 'allow') return 'allowed';
   if (eventType === 'device_data_report') return entry.success ? 'received' : 'denied';
@@ -118,9 +176,28 @@ function outcomeLabel(outcome) {
   if (outcome === 'allowed') return 'ALLOWED';
   if (outcome === 'denied') return 'DENIED';
   if (outcome === 'step_up') return 'STEP-UP';
+  if (outcome === 'ended') return 'ENDED';
+  if (outcome === 'revoked') return 'REVOKED';
+  if (outcome === 'expired') return 'EXPIRED';
   if (outcome === 'requested') return 'REQUESTED';
   if (outcome === 'received') return 'RECEIVED';
   return String(outcome || '-').replaceAll('_', ' ').toUpperCase();
+}
+
+const TECHNICAL_DETAIL_FIELD_PATTERN = /\b(request_id|session_id|agent_session_id|challenge_id|gateway_id|resource_id|device_id|user_id|organization_id)=[^\s]+/gi;
+
+function auditRiskReasonLabel(reason) {
+  const normalized = String(reason || '').trim().toLowerCase();
+  if (normalized === 'impossible_travel' || normalized === 'unrealistic_travel') return 'Additional verification required because impossible travel was detected';
+  if (normalized === 'new_location') return 'Additional verification required because a new location was detected';
+  if (normalized === 'user_baseline_anomaly' || normalized === 'baseline_anomaly' || normalized === 'user_baseline') {
+    return "Additional verification required because the access pattern differs from the user's baseline";
+  }
+  if (normalized === 'new_device') return 'Additional verification required because a new device was detected';
+  if (normalized === 'device_non_compliant' || normalized === 'non_compliant_device' || normalized === 'not_compliant_device') {
+    return 'Additional verification required because the device does not satisfy posture requirements';
+  }
+  return '';
 }
 
 function auditDetailsText(details) {
@@ -128,13 +205,30 @@ function auditDetailsText(details) {
   let cleaned = text;
   if (cleaned.startsWith('User authenticated for TrustAgent session via')) cleaned = 'User authenticated via organization sign-in';
   if (cleaned.startsWith('Resource step-up requested')) cleaned = 'Additional verification required for resource access';
+  if (cleaned.startsWith('Resource access disconnected after user sign-out')) cleaned = 'Resource session ended after user sign-out';
+  if (cleaned.startsWith('Resource access disconnected after policy update')) cleaned = 'Resource session revoked after policy update';
+  if (cleaned.startsWith('Resource access disconnected because the device was revoked')) cleaned = 'Resource session revoked because the device was revoked';
+  if (cleaned.startsWith('Resource access disconnected because the resource was disabled')) cleaned = 'Resource session revoked because the resource is no longer available';
+  if (cleaned.startsWith('Resource access disconnected because the gateway was revoked')) cleaned = 'Resource session revoked because the gateway is no longer available';
+  if (cleaned.startsWith('Resource access disconnected after device posture changed')) cleaned = 'Resource session revoked after device posture changed';
+  if (cleaned.startsWith('Resource session revoked because source IP changed')) cleaned = 'Resource session revoked because source IP changed';
+  if (cleaned === 'Resource access disconnected') cleaned = 'Resource session ended';
+  if (cleaned.startsWith('Step-up verification required by')) cleaned = 'Additional verification required for resource access';
+  if (cleaned.startsWith('Step-up verification already satisfies')) cleaned = 'Resource access allowed because additional verification is still valid for this context';
+  if (cleaned.startsWith('Allowed by')) cleaned = 'Resource access allowed by access policy';
+  if (cleaned.startsWith('No matching access rule')) cleaned = 'Resource access denied because no matching access policy was found';
+  if (cleaned.startsWith('Device health requirements failed')) cleaned = 'Resource access denied because device posture does not satisfy policy';
   if (cleaned.startsWith('Device enrollment requested:')) cleaned = 'Device enrollment requested';
   if (cleaned.startsWith('Device enrollment expired:')) cleaned = 'Device enrollment expired';
   if (cleaned.startsWith('Approved device')) cleaned = 'Device enrollment approved';
   if (cleaned.startsWith('Revoked device')) cleaned = 'Device enrollment revoked';
   if (cleaned === 'Raw device data reported') cleaned = 'Device data received';
+  const riskReason = cleaned.match(/\breason=([^\s]+)/i)?.[1];
+  const riskReasonText = auditRiskReasonLabel(riskReason);
+  if (riskReasonText) cleaned = riskReasonText;
 
   return cleaned
+    .replace(TECHNICAL_DETAIL_FIELD_PATTERN, '')
     .replace(/\bvia\s+https?:\/\/\S+/gi, 'via organization sign-in')
     .replace(/https?:\/\/\S+/gi, 'organization sign-in')
     .replaceAll('PDP ', '')
@@ -156,6 +250,9 @@ function outcomeTextVariant(outcome) {
   if (outcome === 'allowed') return 'success';
   if (outcome === 'denied') return 'danger';
   if (outcome === 'step_up') return 'warning';
+  if (outcome === 'ended') return 'warning';
+  if (outcome === 'revoked') return 'danger';
+  if (outcome === 'expired') return 'warning';
   if (outcome === 'requested' || outcome === 'received') return 'info';
   return 'neutral';
 }
@@ -252,14 +349,19 @@ export default function Audit() {
         auditEventLabel(entry.event_type),
         entry.user_id,
         entry.username,
-        entry.source_ip,
+        auditSourceIPText(entry.source_ip),
         auditResourceLabel(entry),
         entry.decision,
         outcomeLabel(entryOutcome(entry)),
         auditDetailsText(entry.details),
         entry.organization_id,
       ].some((value) => normalize(value).includes(needle));
-    }).sort((a, b) => new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime());
+    }).sort((a, b) => {
+      const bTime = new Date(b.timestamp || 0).getTime();
+      const aTime = new Date(a.timestamp || 0).getTime();
+      if (bTime !== aTime) return bTime - aTime;
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
   }, [visibleEntries, query, activeEventFilter, outcomeFilter, resourcesByID, gatewaysByID]);
 
   const hasFilters = query.trim() || activeEventFilter !== 'all' || outcomeFilter !== 'all';
@@ -268,7 +370,7 @@ export default function Audit() {
     { key: 'timestamp', label: 'Time', render: (v) => <span className="text-mono text-xs whitespace-nowrap">{formatDateTime(v)}</span> },
     { key: 'event_type', label: 'Event', render: (v) => <AuditText variant={eventTextVariant(v)}>{auditEventLabel(v)}</AuditText> },
     { key: 'username', label: 'User', render: (v) => <span>{v || '-'}</span> },
-    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{v || '-'}</span> },
+    { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{auditSourceIPText(v)}</span> },
     { key: 'resource', label: 'Resource', render: (_, row) => <span className="text-xs">{auditResourceLabel(row)}</span> },
     { key: 'decision', label: 'Decision', render: (_, row) => {
       const outcome = entryOutcome(row);
@@ -301,6 +403,9 @@ export default function Audit() {
           <option value="allowed">Allowed</option>
           <option value="denied">Denied</option>
           <option value="step_up">Step-up</option>
+          <option value="ended">Ended</option>
+          <option value="revoked">Revoked</option>
+          <option value="expired">Expired</option>
           <option value="requested">Requested</option>
           <option value="received">Received</option>
         </ListToolbarSelect>

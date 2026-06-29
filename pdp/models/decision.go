@@ -138,14 +138,16 @@ type StepUpRequirement struct {
 }
 
 type AuthContext struct {
-	ACR              string
-	AMR              []string
-	StepUpVerifiedAt time.Time
-	StepUpExpiresAt  time.Time
-	StepUpMethod     string
-	StepUpStrength   string
-	StepUpAAGUID     string
-	StepUpAttachment string
+	ACR               string
+	AMR               []string
+	StepUpVerifiedAt  time.Time
+	StepUpExpiresAt   time.Time
+	StepUpMethod      string
+	StepUpStrength    string
+	StepUpAAGUID      string
+	StepUpAttachment  string
+	StepUpSourceIP    string
+	StepUpRiskSignals []string
 }
 
 func StepUpACR(value string) string {

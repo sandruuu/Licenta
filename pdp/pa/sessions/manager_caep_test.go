@@ -296,6 +296,122 @@ func TestSessionManagerReusesAndRenewsResourceSession(t *testing.T) {
 	}
 }
 
+func TestSessionManagerDoesNotReuseResourceSessionWhenSourceIPChanges(t *testing.T) {
+	s := newSessionTestStore(t)
+	sm := NewSessionManager(s, 10*time.Minute, 5)
+	req := models.AccessRequest{
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		SourceIP:       "5.14.130.142",
+		Resource:       "res-rdp",
+		GatewayID:      "gw-1",
+		Protocol:       "rdp",
+		OrganizationID: "organization-1",
+	}
+
+	first, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{}, req, time.Minute)
+	if err != nil {
+		t.Fatalf("CreateOrRenewSession() first error = %v", err)
+	}
+	if reused {
+		t.Fatal("first CreateOrRenewSession() reused an existing session")
+	}
+
+	req.SourceIP = "185.238.28.51"
+	second, reused, err := sm.CreateOrRenewSession(&models.AccessDecision{}, req, time.Minute)
+	if err != nil {
+		t.Fatalf("CreateOrRenewSession() second error = %v", err)
+	}
+	if reused {
+		t.Fatal("second CreateOrRenewSession() reused a session from a different source IP")
+	}
+	if second.ID == first.ID {
+		t.Fatalf("session id = %s, want a new session after source IP change", second.ID)
+	}
+}
+
+func TestSessionManagerRevokesResourceSessionWhenSourceIPChanges(t *testing.T) {
+	s := newSessionTestStore(t)
+	now := time.Now()
+	matching := &models.Session{
+		ID:             "sess-old-ip",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		SourceIP:       "5.14.130.142",
+		Resource:       "res-rdp",
+		GatewayID:      "gw-1",
+		Protocol:       "rdp",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
+	}
+	otherResource := &models.Session{
+		ID:             "sess-other-resource",
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		SourceIP:       "5.14.130.142",
+		Resource:       "res-web",
+		GatewayID:      "gw-1",
+		Protocol:       "https",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
+	}
+	otherUser := &models.Session{
+		ID:             "sess-other-user",
+		UserID:         "user-2",
+		Username:       "alex",
+		DeviceID:       "device-1",
+		SourceIP:       "5.14.130.142",
+		Resource:       "res-rdp",
+		GatewayID:      "gw-1",
+		Protocol:       "rdp",
+		OrganizationID: "organization-1",
+		CreatedAt:      now.Add(-time.Minute),
+		ExpiresAt:      now.Add(time.Hour),
+	}
+	s.SaveSession(matching)
+	s.SaveSession(otherResource)
+	s.SaveSession(otherUser)
+
+	sm := NewSessionManager(s, 10*time.Minute, 5)
+	var gotSession *models.Session
+	var gotReason string
+	sm.SetDeleteEventSink(func(session *models.Session, reason string) {
+		gotSession = session
+		gotReason = reason
+	})
+	revoked := sm.RevokeSessionsForChangedSourceIP(models.AccessRequest{
+		UserID:         "user-1",
+		Username:       "laura",
+		DeviceID:       "device-1",
+		SourceIP:       "185.238.28.51",
+		Resource:       "res-rdp",
+		GatewayID:      "gw-1",
+		Protocol:       "rdp",
+		OrganizationID: "organization-1",
+	})
+	if revoked != 1 {
+		t.Fatalf("RevokeSessionsForChangedSourceIP() = %d, want 1", revoked)
+	}
+	if gotSession == nil || gotSession.ID != matching.ID || gotReason != "source_ip_changed" {
+		t.Fatalf("delete event session=%#v reason=%q, want %s/source_ip_changed", gotSession, gotReason, matching.ID)
+	}
+	saved, ok := s.GetSession(matching.ID)
+	if !ok || !saved.Revoked {
+		t.Fatalf("matching session revoked = %v, found=%v", ok && saved.Revoked, ok)
+	}
+	for _, id := range []string{otherResource.ID, otherUser.ID} {
+		session, ok := s.GetSession(id)
+		if !ok || session.Revoked {
+			t.Fatalf("session %s should remain active, session=%#v found=%v", id, session, ok)
+		}
+	}
+}
+
 func TestSessionManagerAppliesPolicySessionControls(t *testing.T) {
 	s := newSessionTestStore(t)
 	sm := NewSessionManager(s, time.Hour, 5)

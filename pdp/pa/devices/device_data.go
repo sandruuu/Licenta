@@ -60,12 +60,8 @@ func (service *Service) RecordDeviceDataWithSourceIP(report *models.DeviceDataRe
 	}
 	service.store.SaveDeviceData(report)
 	if service.audit != nil {
-		details := "Device data received"
-		if sessionID := strings.TrimSpace(report.AgentSessionID); sessionID != "" {
-			details = "Device data received for agent session " + sessionID
-		}
 		service.audit.LogEvent("device_data_report", strings.TrimSpace(report.UserID), strings.TrimSpace(report.Username),
-			strings.TrimSpace(sourceIP), report.DeviceID, "", details, true)
+			strings.TrimSpace(sourceIP), report.DeviceID, "", "Device data received", true)
 	}
 	log.Printf("[PA] Device data report received: device=%s checks=%d", report.DeviceID, len(report.Checks))
 }

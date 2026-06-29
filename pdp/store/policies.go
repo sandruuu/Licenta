@@ -408,8 +408,9 @@ func materializePolicyRuleAssignment(rule *models.PolicyRule, assignment *models
 		return rule
 	}
 	copyRule := *rule
-	copyRule.Assignments = nil
-	copyRule.AssignmentCount = 0
+	copyAssignment := *assignment
+	copyRule.Assignments = []*models.PolicyAssignment{&copyAssignment}
+	copyRule.AssignmentCount = 1
 	return &copyRule
 }
 

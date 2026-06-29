@@ -169,7 +169,7 @@ func TestResourceStreamConnectorRequiresAuthenticatedSession(t *testing.T) {
 	}
 }
 
-func TestResourceStreamConnectorReusesCachedResourceSession(t *testing.T) {
+func TestResourceStreamConnectorAuthorizesEachNewResourceStream(t *testing.T) {
 	sessionProvider := &fakeAuthenticatedSessionProvider{
 		session: usersession.AuthenticatedSession{
 			AgentSessionID:    "agent-session",
@@ -214,8 +214,8 @@ func TestResourceStreamConnectorReusesCachedResourceSession(t *testing.T) {
 		}
 		_ = stream.Close()
 	}
-	if authorizer.count != 1 {
-		t.Fatalf("AuthorizeResource count = %d, want 1", authorizer.count)
+	if authorizer.count != 2 {
+		t.Fatalf("AuthorizeResource count = %d, want 2", authorizer.count)
 	}
 }
 
@@ -289,7 +289,7 @@ func TestResourceStreamConnectorSharesRenewalForSameProvisionedSession(t *testin
 	}
 }
 
-func TestResourceStreamConnectorDoesNotReuseCachedSessionAcrossProcesses(t *testing.T) {
+func TestResourceStreamConnectorAuthorizesDistinctProcesses(t *testing.T) {
 	sessionProvider := &fakeAuthenticatedSessionProvider{
 		session: usersession.AuthenticatedSession{
 			AgentSessionID:    "agent-session",
@@ -348,7 +348,7 @@ func TestResourceStreamConnectorDoesNotReuseCachedSessionAcrossProcesses(t *test
 	}
 }
 
-func TestResourceStreamConnectorDropsCachedSessionAfterGatewayRejectsIt(t *testing.T) {
+func TestResourceStreamConnectorAuthorizesBeforeOpeningGatewayStreamAfterPreviousSession(t *testing.T) {
 	sessionProvider := &fakeAuthenticatedSessionProvider{
 		session: usersession.AuthenticatedSession{
 			AgentSessionID:    "agent-session",
@@ -404,7 +404,7 @@ func TestResourceStreamConnectorDropsCachedSessionAfterGatewayRejectsIt(t *testi
 		t.Fatal("second OpenResourceStream returned nil error")
 	}
 	if authorizer.count != 2 {
-		t.Fatalf("AuthorizeResource count = %d, want reauthorization after stale Gateway session", authorizer.count)
+		t.Fatalf("AuthorizeResource count = %d, want 2", authorizer.count)
 	}
 }
 

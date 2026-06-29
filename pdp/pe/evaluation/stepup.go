@@ -151,6 +151,28 @@ func stepUpSatisfied(auth models.AuthContext, requirement *models.StepUpRequirem
 	return now.Sub(auth.StepUpVerifiedAt) <= maxAge
 }
 
+func stepUpContextMatches(auth models.AuthContext, req models.AccessRequest, riskSignals []string) bool {
+	if !hasLocationRiskSignal(riskSignals) {
+		return true
+	}
+	sourceIP := strings.TrimSpace(req.SourceIP)
+	stepUpSourceIP := strings.TrimSpace(auth.StepUpSourceIP)
+	if sourceIP == "" || stepUpSourceIP == "" {
+		return false
+	}
+	return strings.EqualFold(sourceIP, stepUpSourceIP)
+}
+
+func hasLocationRiskSignal(signals []string) bool {
+	for _, signal := range signals {
+		switch normalizeHealthToken(signal) {
+		case "new_location", "impossible_travel", "unrealistic_travel", "user_baseline_anomaly", "baseline_anomaly", "user_baseline":
+			return true
+		}
+	}
+	return false
+}
+
 func effectiveStepUpStrength(auth models.AuthContext) string {
 	if strength := models.StepUpMinStrength(auth.StepUpStrength); strength != "" {
 		return strength

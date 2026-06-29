@@ -30,10 +30,12 @@ type Snapshot struct {
 }
 
 type ResourceEntry struct {
-	FQDN       string `json:"fqdn"`
-	ResourceID string `json:"resource_id"`
-	Protocol   string `json:"protocol"`
-	Port       int    `json:"port"`
+	FQDN        string `json:"fqdn"`
+	ResourceID  string `json:"resource_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Protocol    string `json:"protocol"`
+	Port        int    `json:"port"`
 }
 
 type DeviceDataPolicy struct {
@@ -240,13 +242,18 @@ func buildResources(resources []*models.Resource) []ResourceEntry {
 		}
 		protocol := ResourceProtocol(resource)
 		entries = append(entries, ResourceEntry{
-			FQDN:       fqdn,
-			ResourceID: strings.TrimSpace(resource.ID),
-			Protocol:   protocol,
-			Port:       ResourcePort(resource, protocol),
+			FQDN:        fqdn,
+			ResourceID:  strings.TrimSpace(resource.ID),
+			DisplayName: strings.TrimSpace(resource.Name),
+			Type:        strings.TrimSpace(resource.Type),
+			Protocol:    protocol,
+			Port:        ResourcePort(resource, protocol),
 		})
 	}
 	sort.Slice(entries, func(left, right int) bool {
+		if entries[left].DisplayName != "" && entries[right].DisplayName != "" && entries[left].DisplayName != entries[right].DisplayName {
+			return entries[left].DisplayName < entries[right].DisplayName
+		}
 		if entries[left].FQDN == entries[right].FQDN {
 			return entries[left].ResourceID < entries[right].ResourceID
 		}

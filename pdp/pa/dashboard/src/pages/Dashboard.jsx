@@ -87,6 +87,17 @@ function classifyAuditEntry(entry) {
   const type = normalizeText(entry?.event_type);
   const details = normalizeText(entry?.details);
 
+  if (
+    type.includes('disconnected') ||
+    type.includes('revoked') ||
+    type.includes('session_ended') ||
+    type.includes('session_expired') ||
+    decision.includes('ended') ||
+    decision.includes('revoked') ||
+    decision.includes('expired')
+  ) {
+    return 'Other';
+  }
   if (decision.includes('deny') || type.includes('denied') || details.includes('denied')) {
     return 'Blocked';
   }

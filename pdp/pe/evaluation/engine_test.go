@@ -500,6 +500,94 @@ func TestPolicyAllowsStepUpRuleWhenAuthContextIsFresh(t *testing.T) {
 	}
 }
 
+func TestRiskBasedStepUpAllowsFreshContextForSameSourceIP(t *testing.T) {
+	rule := &models.PolicyRule{
+		ID:      "rule-risk-mfa",
+		Name:    "MFA for risky location",
+		Enabled: true,
+		Conditions: models.RuleConditions{
+			RiskBasedAuth: models.RiskBasedAuthPolicyConditions{
+				RequireMFAOnRisk: true,
+			},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyBypassMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		Action: models.DecisionAllow,
+	}
+	now := businessHoursTime()
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			SourceIP:     "203.0.113.10",
+			Resource:     "res-web",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Auth: models.AuthContext{
+			ACR:              "urn:trustcloud:loa:2",
+			AMR:              []string{"totp"},
+			StepUpVerifiedAt: now.Add(-time.Minute),
+			StepUpMethod:     "totp",
+			StepUpSourceIP:   "203.0.113.10",
+		},
+		Rules:         []*models.PolicyRule{rule},
+		IsNewLocation: true,
+		Now:           now,
+	})
+
+	if decision.Decision != models.DecisionAllow || decision.StepUp == nil || !decision.StepUp.AlreadySatisfied {
+		t.Fatalf("Decision = %+v, want allow from same-source step-up context", decision)
+	}
+}
+
+func TestRiskBasedStepUpRequiresNewVerificationWhenSourceIPChanges(t *testing.T) {
+	rule := &models.PolicyRule{
+		ID:      "rule-risk-mfa",
+		Name:    "MFA for risky location",
+		Enabled: true,
+		Conditions: models.RuleConditions{
+			RiskBasedAuth: models.RiskBasedAuthPolicyConditions{
+				RequireMFAOnRisk: true,
+			},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyBypassMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		Action: models.DecisionAllow,
+	}
+	now := businessHoursTime()
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			SourceIP:     "198.51.100.25",
+			Resource:     "res-web",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Auth: models.AuthContext{
+			ACR:              "urn:trustcloud:loa:2",
+			AMR:              []string{"totp"},
+			StepUpVerifiedAt: now.Add(-time.Minute),
+			StepUpMethod:     "totp",
+			StepUpSourceIP:   "203.0.113.10",
+		},
+		Rules:         []*models.PolicyRule{rule},
+		IsNewLocation: true,
+		Now:           now,
+	})
+
+	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-risk-mfa" {
+		t.Fatalf("Decision = %+v, want new step-up after source IP change", decision)
+	}
+}
+
 func TestPolicyRequiresStepUpForNewLocationCondition(t *testing.T) {
 	rule := &models.PolicyRule{
 		ID:      "rule-new-location",
@@ -1008,6 +1096,111 @@ func TestDuoStyleNewUserAndAuthenticationPolicies(t *testing.T) {
 				t.Fatalf("Decision = %+v, want %s", decision, tt.want)
 			}
 		})
+	}
+}
+
+func TestResourcePolicyBypassOverridesGlobalMFA(t *testing.T) {
+	resourceRule := &models.PolicyRule{
+		ID:      "rule-resource-bypass",
+		Name:    "Resource bypass MFA",
+		Enabled: true,
+		Assignments: []*models.PolicyAssignment{
+			{Level: "resource", ResourceID: "res-admin"},
+		},
+		Conditions: models.RuleConditions{
+			User: models.UserPolicyConditions{
+				NewUserPolicy: models.NewUserPolicyRequireEnrollment,
+			},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy: models.AuthenticationPolicyBypassMFA,
+			},
+		},
+		Action: models.DecisionAllow,
+	}
+	globalRule := &models.PolicyRule{
+		ID:      "rule-global-mfa",
+		Name:    "Global MFA",
+		Enabled: true,
+		Assignments: []*models.PolicyAssignment{
+			{Level: "organization"},
+		},
+		Conditions: models.RuleConditions{
+			User: models.UserPolicyConditions{
+				NewUserPolicy: models.NewUserPolicyRequireEnrollment,
+			},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyEnforceMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		Action: models.DecisionStepUpRequired,
+	}
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			Resource:     "res-admin",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Rules:          []*models.PolicyRule{resourceRule, globalRule},
+		UserMFAEnabled: true,
+		Now:            businessHoursTime(),
+	})
+
+	if decision.Decision != models.DecisionAllow || decision.MatchedRule != "rule-resource-bypass" {
+		t.Fatalf("Decision = %+v, want allow from resource bypass policy", decision)
+	}
+}
+
+func TestGlobalMFAPolicyAppliesWhenResourceRuleDoesNotMatch(t *testing.T) {
+	resourceRule := &models.PolicyRule{
+		ID:      "rule-resource-bypass",
+		Name:    "Resource bypass MFA",
+		Enabled: true,
+		Assignments: []*models.PolicyAssignment{
+			{Level: "resource", ResourceID: "res-admin"},
+		},
+		Conditions: models.RuleConditions{
+			AllowedUsers: []string{"other-user"},
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy: models.AuthenticationPolicyBypassMFA,
+			},
+		},
+		Action: models.DecisionAllow,
+	}
+	globalRule := &models.PolicyRule{
+		ID:      "rule-global-mfa",
+		Name:    "Global MFA",
+		Enabled: true,
+		Assignments: []*models.PolicyAssignment{
+			{Level: "organization"},
+		},
+		Conditions: models.RuleConditions{
+			Authentication: models.AuthenticationPolicyConditions{
+				Policy:        models.AuthenticationPolicyEnforceMFA,
+				StepUpMethods: []string{"totp"},
+			},
+		},
+		Action: models.DecisionStepUpRequired,
+	}
+
+	decision := NewEngine().Evaluate(AccessContext{
+		Request: models.AccessRequest{
+			UserID:       "user-1",
+			Username:     "alice",
+			Resource:     "res-admin",
+			ResourcePort: 443,
+			Protocol:     "https",
+		},
+		Rules:          []*models.PolicyRule{resourceRule, globalRule},
+		UserMFAEnabled: true,
+		Now:            businessHoursTime(),
+	})
+
+	if decision.Decision != models.DecisionStepUpRequired || decision.MatchedRule != "rule-global-mfa" {
+		t.Fatalf("Decision = %+v, want step-up from global policy", decision)
 	}
 }
 

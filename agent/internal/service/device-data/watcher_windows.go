@@ -92,9 +92,10 @@ function Register-TrustAgentEvent($Id, $Namespace, $Query) {
   }
 }
 
-Register-TrustAgentEvent "trustagent-windows_updates_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 3 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'wuauserv' AND TargetInstance.State <> PreviousInstance.State"
-Register-TrustAgentEvent "trustagent-firewall_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 3 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'mpssvc' AND TargetInstance.State <> PreviousInstance.State"
-Register-TrustAgentEvent "trustagent-antivirus_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 3 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'WinDefend' AND TargetInstance.State <> PreviousInstance.State"
+Register-TrustAgentEvent "trustagent-windows_updates_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'wuauserv' AND TargetInstance.State <> PreviousInstance.State"
+Register-TrustAgentEvent "trustagent-firewall_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'mpssvc' AND TargetInstance.State <> PreviousInstance.State"
+Register-TrustAgentEvent "trustagent-antivirus_service" "root/cimv2" "SELECT * FROM __InstanceModificationEvent WITHIN 1 WHERE TargetInstance ISA 'Win32_Service' AND TargetInstance.Name = 'WinDefend' AND TargetInstance.State <> PreviousInstance.State"
+Register-TrustAgentEvent "trustagent-antivirus_product" "root/SecurityCenter2" "SELECT * FROM __InstanceModificationEvent WITHIN 1 WHERE TargetInstance ISA 'AntiVirusProduct' AND TargetInstance.productState <> PreviousInstance.productState"
 Register-TrustAgentEvent "trustagent-firewall_policy" "root/default" "SELECT * FROM RegistryTreeChangeEvent WHERE Hive='HKEY_LOCAL_MACHINE' AND RootPath='SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy'"
 Register-TrustAgentEvent "trustagent-bitlocker_policy" "root/default" "SELECT * FROM RegistryTreeChangeEvent WHERE Hive='HKEY_LOCAL_MACHINE' AND RootPath='SYSTEM\\CurrentControlSet\\Control\\BitLocker'"
 Register-TrustAgentEvent "trustagent-antivirus_policy" "root/default" "SELECT * FROM RegistryTreeChangeEvent WHERE Hive='HKEY_LOCAL_MACHINE' AND RootPath='SOFTWARE\\Microsoft\\Windows Defender'"

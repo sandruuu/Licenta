@@ -96,6 +96,9 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 			accessReq.DeviceHealth = DeviceHealthFromData(deviceData)
 		}
 	}
+	if pa != nil && pa.Sessions != nil {
+		pa.Sessions.RevokeSessionsForChangedSourceIP(accessReq)
+	}
 
 	authCtx := models.AuthContext{
 		ACR: strings.TrimSpace(claims.ACR),
@@ -164,6 +167,7 @@ func (pa *PolicyAdministrator) AuthorizeAgentResource(ctx context.Context, req A
 	decision.SessionID = session.ID
 	decision.ExpiresAt = session.ExpiresAt.Unix()
 	pa.auditAgentAuthorization(accessReq, decision, true)
+	pa.auditAgentResourceAccessGranted(accessReq, decision, reusedSession)
 	pa.recordAccessLocation(accessReq)
 
 	response := agentAuthorizationResponseFromDecision(decision)
@@ -198,20 +202,17 @@ func (pa *PolicyAdministrator) attachStepUpChallenge(decision *models.AccessDeci
 		DeviceID:       strings.TrimSpace(req.DeviceID),
 		ResourceID:     strings.TrimSpace(resource.ID),
 		PolicyID:       strings.TrimSpace(decision.MatchedRule),
+		SourceIP:       strings.TrimSpace(req.SourceIP),
+		RiskSignals:    append([]string(nil), decision.RiskSignals...),
 		PublicOrigin:   strings.TrimSpace(req.PublicOrigin),
 		Requirement:    requirement,
 	})
 	if err != nil {
 		return err
 	}
-	if pa.Audit != nil {
-		details := auditDetailsWithFields("Additional verification required for resource access", map[string]string{
-			"request_id":       req.RequestID,
-			"agent_session_id": claims.SessionID,
-			"challenge_id":     challenge.ID,
-		})
+	if pa.Audit != nil && !challenge.Reused {
 		pa.Audit.LogEvent("agent_step_up_required", claims.UserID, claims.Username, strings.TrimSpace(req.SourceIP),
-			resource.ID, models.DecisionStepUpRequired, details, true)
+			resource.ID, models.DecisionStepUpRequired, stepUpRequiredAuditDetails(decision), true)
 	}
 	requirement.ChallengeID = challenge.ID
 	requirement.URL = challenge.URL
@@ -469,26 +470,115 @@ func (pa *PolicyAdministrator) auditAgentAuthorization(req models.AccessRequest,
 	if pa == nil || pa.Audit == nil || decision == nil {
 		return
 	}
-	details := auditDetailsWithFields(decision.Reason, map[string]string{
-		"request_id": req.RequestID,
-		"session_id": decision.SessionID,
-		"gateway_id": req.GatewayID,
-	})
-	pa.Audit.LogEvent("agent_access_request", req.UserID, req.Username, req.SourceIP, req.Resource, decision.Decision, details, success)
+	if decision.Decision == models.DecisionAllow || decision.Decision == models.DecisionStepUpRequired {
+		return
+	}
+	pa.Audit.LogEvent("agent_access_request", req.UserID, req.Username, req.SourceIP, req.Resource, decision.Decision, accessDecisionAuditDetails(decision), success)
 }
 
-func auditDetailsWithFields(message string, fields map[string]string) string {
-	parts := make([]string, 0, 1+len(fields))
-	if trimmed := strings.TrimSpace(message); trimmed != "" {
-		parts = append(parts, trimmed)
+func (pa *PolicyAdministrator) auditAgentResourceAccessGranted(req models.AccessRequest, decision *models.AccessDecision, reusedSession bool) {
+	if pa == nil || pa.Audit == nil || decision == nil {
+		return
 	}
-	for _, key := range []string{"request_id", "session_id", "agent_session_id", "challenge_id", "gateway_id"} {
-		value := strings.TrimSpace(fields[key])
-		if value != "" {
-			parts = append(parts, key+"="+value)
+	if reusedSession {
+		return
+	}
+	message := "Resource access granted"
+	if decision.StepUp != nil && decision.StepUp.AlreadySatisfied {
+		message = "Resource access granted after completed additional verification"
+	}
+	pa.Audit.LogEvent("agent_resource_access_granted", req.UserID, req.Username, req.SourceIP, req.Resource, models.DecisionAllow, message, true)
+}
+
+func accessDecisionAuditDetails(decision *models.AccessDecision) string {
+	if decision == nil {
+		return "Resource access evaluated"
+	}
+	switch decision.Decision {
+	case models.DecisionStepUpRequired:
+		return stepUpRequiredAuditDetails(decision)
+	case models.DecisionAllow:
+		if decision.StepUp != nil && decision.StepUp.AlreadySatisfied {
+			return "Resource access allowed because additional verification is still valid for this context"
+		}
+		return "Resource access allowed by access policy"
+	case models.DecisionDeny:
+		return deniedAccessAuditDetails(decision.Reason)
+	default:
+		if reason := strings.TrimSpace(decision.Reason); reason != "" {
+			return reason
+		}
+		return "Resource access evaluated"
+	}
+}
+
+func deniedAccessAuditDetails(reason string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(normalized, "device health requirements failed"):
+		return "Resource access denied because device posture does not satisfy policy"
+	case strings.Contains(normalized, "blocked by policy"):
+		return "Resource access denied by access policy"
+	case strings.Contains(normalized, "no matching access rule"):
+		return "Resource access denied because no matching access policy was found"
+	case strings.TrimSpace(reason) != "":
+		return strings.TrimSpace(reason)
+	default:
+		return "Resource access denied"
+	}
+}
+
+func stepUpRequiredAuditDetails(decision *models.AccessDecision) string {
+	detected := auditRiskSignalReason(decisionRiskSignals(decision))
+	if detected != "" {
+		return "Additional verification required because " + detected
+	}
+	return "Additional verification required for resource access"
+}
+
+func decisionRiskSignals(decision *models.AccessDecision) []string {
+	if decision == nil {
+		return nil
+	}
+	return decision.RiskSignals
+}
+
+func auditRiskSignalReason(signals []string) string {
+	normalized := make(map[string]struct{}, len(signals))
+	for _, signal := range signals {
+		key := strings.ToLower(strings.TrimSpace(signal))
+		if key != "" {
+			normalized[key] = struct{}{}
 		}
 	}
-	return strings.Join(parts, " ")
+	has := func(values ...string) bool {
+		for _, value := range values {
+			if _, ok := normalized[value]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("impossible_travel", "unrealistic_travel"):
+		return "impossible travel was detected"
+	case has("new_location"):
+		return "a new location was detected"
+	case has("user_baseline_anomaly", "baseline_anomaly", "user_baseline"):
+		return "the access pattern differs from the user's baseline"
+	case has("new_device"):
+		return "a new device was detected"
+	case has("device_non_compliant", "non_compliant_device", "not_compliant_device"):
+		return "the device does not satisfy posture requirements"
+	case has("compromised_endpoint"):
+		return "endpoint compromise was detected"
+	case has("failed_attempts"):
+		return "recent authentication failures were detected"
+	case has("anomaly", "anomaly_alert"):
+		return "a risk anomaly was detected"
+	default:
+		return ""
+	}
 }
 
 func (pa *PolicyAdministrator) recordAccessLocation(req models.AccessRequest) {

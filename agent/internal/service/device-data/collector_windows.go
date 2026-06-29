@@ -13,28 +13,48 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const commandTimeout = 20 * time.Second
+const (
+	commandTimeout          = 20 * time.Second
+	stableDeviceCheckTTL    = 5 * time.Minute
+	unavailableCheckGrace   = 2 * time.Minute
+	deviceCheckWarningField = "LastCollectionWarning"
+)
 
 type defaultCollector struct {
 	logger *slog.Logger
+	mu     sync.Mutex
+	cache  map[string]cachedDeviceCheck
+}
+
+type cachedDeviceCheck struct {
+	check       Check
+	collectedAt time.Time
 }
 
 func NewDefaultCollector(logger *slog.Logger) Collector {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &defaultCollector{logger: logger}
+	return &defaultCollector{logger: logger, cache: map[string]cachedDeviceCheck{}}
 }
 
 func (collector *defaultCollector) Collect(ctx context.Context, deviceID string) (Report, error) {
 	hostname, _ := os.Hostname()
-	osInfo, osErr := collectWindowsOSInfo(ctx)
-	osName := strings.TrimSpace(stringFromMap(osInfo, "Caption"))
-	if osName == "" {
-		osName = runtime.GOOS
+	osCheck := collector.cachedCheck(ctx, "Operating System", stableDeviceCheckTTL, func(ctx context.Context) Check {
+		osInfo, osErr := collectWindowsOSInfo(ctx)
+		osName := strings.TrimSpace(stringFromMap(osInfo, "Caption"))
+		if osName == "" {
+			osName = runtime.GOOS
+		}
+		return operatingSystemCheck(osName, osInfo, osErr)
+	})
+	osName := runtime.GOOS
+	if osCheck.Status != StatusUnavailable && strings.TrimSpace(osCheck.Description) != "" {
+		osName = strings.TrimSpace(osCheck.Description)
 	}
 	report := Report{
 		DeviceID:    strings.TrimSpace(deviceID),
@@ -43,14 +63,91 @@ func (collector *defaultCollector) Collect(ctx context.Context, deviceID string)
 		CollectedAt: time.Now().UTC(),
 	}
 	report.Checks = []Check{
-		operatingSystemCheck(report.OS, osInfo, osErr),
-		windowsUpdatesCheck(ctx),
-		passwordLockCheck(ctx),
-		diskEncryptionCheck(ctx),
-		firewallCheck(ctx),
-		antivirusCheck(ctx),
+		osCheck,
+		collector.cachedCheck(ctx, "Windows Updates", stableDeviceCheckTTL, windowsUpdatesCheck),
+		collector.cachedCheck(ctx, "Password & Lock", stableDeviceCheckTTL, passwordLockCheck),
+		collector.cachedCheck(ctx, "Disk Encryption", stableDeviceCheckTTL, diskEncryptionCheck),
+		collector.transientAwareCheck(ctx, "Firewall", firewallCheck),
+		collector.transientAwareCheck(ctx, "Antivirus", antivirusCheck),
 	}
 	return report, nil
+}
+
+func (collector *defaultCollector) cachedCheck(ctx context.Context, name string, ttl time.Duration, collect func(context.Context) Check) Check {
+	name = strings.TrimSpace(name)
+	now := time.Now().UTC()
+	collector.mu.Lock()
+	if cached, ok := collector.cache[name]; ok && ttl > 0 && now.Sub(cached.collectedAt) < ttl {
+		collector.mu.Unlock()
+		return cloneCheck(cached.check)
+	}
+	collector.mu.Unlock()
+
+	check, fallback := collector.stabilizeCheck(name, collect(ctx), now)
+	if !fallback {
+		collector.mu.Lock()
+		if collector.cache == nil {
+			collector.cache = map[string]cachedDeviceCheck{}
+		}
+		collector.cache[name] = cachedDeviceCheck{check: cloneCheck(check), collectedAt: now}
+		collector.mu.Unlock()
+	}
+	return check
+}
+
+func (collector *defaultCollector) transientAwareCheck(ctx context.Context, name string, collect func(context.Context) Check) Check {
+	name = strings.TrimSpace(name)
+	now := time.Now().UTC()
+	check := collect(ctx)
+	check, fallback := collector.stabilizeCheck(name, check, now)
+	if !fallback {
+		collector.mu.Lock()
+		if collector.cache == nil {
+			collector.cache = map[string]cachedDeviceCheck{}
+		}
+		collector.cache[name] = cachedDeviceCheck{check: cloneCheck(check), collectedAt: now}
+		collector.mu.Unlock()
+	}
+	return check
+}
+
+func (collector *defaultCollector) stabilizeCheck(name string, check Check, now time.Time) (Check, bool) {
+	if collector == nil || normalizeCheckStatus(check.Status) != StatusUnavailable {
+		return check, false
+	}
+	collector.mu.Lock()
+	cached, ok := collector.cache[name]
+	collector.mu.Unlock()
+	if !ok || normalizeCheckStatus(cached.check.Status) == StatusUnavailable || now.Sub(cached.collectedAt) > unavailableCheckGrace {
+		return check, false
+	}
+	stable := cloneCheck(cached.check)
+	if stable.Details == nil {
+		stable.Details = map[string]string{}
+	}
+	warning := strings.TrimSpace(check.Description)
+	if reason := strings.TrimSpace(check.Details["Reason"]); reason != "" {
+		warning = firstNonEmptyString(warning, reason)
+	}
+	if warning != "" {
+		stable.Details[deviceCheckWarningField] = warning
+	}
+	return stable, true
+}
+
+func cloneCheck(check Check) Check {
+	clone := check
+	if check.Details != nil {
+		clone.Details = make(map[string]string, len(check.Details))
+		for key, value := range check.Details {
+			clone.Details[key] = value
+		}
+	}
+	return clone
+}
+
+func normalizeCheckStatus(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func collectWindowsOSInfo(ctx context.Context) (map[string]any, error) {
@@ -342,7 +439,74 @@ $profiles | ConvertTo-Json -Compress
 
 func antivirusCheck(ctx context.Context) Check {
 	info, err := runPowerShellJSONMap(ctx, `
-if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
+$products = @()
+function Convert-ProductState($value) {
+  $state = 0
+  try { $state = [int]$value } catch {}
+  $hex = ("{0:x6}" -f $state)
+  $protectionCode = $hex.Substring(2, 2)
+  $signatureCode = $hex.Substring(4, 2)
+  $enabled = $protectionCode -in @("10", "11")
+  $protectionState = switch ($protectionCode) {
+    "00" { "Off" }
+    "01" { "Expired" }
+    "10" { "On" }
+    "11" { "On" }
+    default { "Unknown" }
+  }
+  $signatureState = switch ($signatureCode) {
+    "00" { "UpToDate" }
+    "10" { "OutOfDate" }
+    default { "Unknown" }
+  }
+  [pscustomobject]@{
+    Hex = $hex
+    Enabled = [bool]$enabled
+    ProtectionState = $protectionState
+    SignaturesUpToDate = [bool]($signatureState -eq "UpToDate")
+    SignatureState = $signatureState
+  }
+}
+try {
+  $products = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object {
+    $state = Convert-ProductState $_.productState
+    [pscustomobject]@{
+      Provider = "Windows Security Center"
+      ProductName = [string]$_.displayName
+      ProductState = [string]$_.productState
+      ProductStateHex = [string]$state.Hex
+      SecurityCenterEnabled = [bool]$state.Enabled
+      SecurityCenterState = [string]$state.ProtectionState
+      SignaturesUpToDate = [bool]$state.SignaturesUpToDate
+      SignatureState = [string]$state.SignatureState
+      ProductExe = [string]$_.pathToSignedProductExe
+      ReportingExe = [string]$_.pathToSignedReportingExe
+    }
+  })
+} catch {}
+$selected = $null
+$thirdParty = @($products | Where-Object { $_.ProductName -and $_.ProductName -notmatch "(?i)(microsoft|defender)" })
+if ($thirdParty.Count -gt 0) {
+  $selected = $thirdParty | Sort-Object -Property @{Expression = { $_.SecurityCenterEnabled }; Descending = $true}, @{Expression = { $_.SignaturesUpToDate }; Descending = $true}, ProductName | Select-Object -First 1
+} elseif ($products.Count -gt 0) {
+  $selected = $products | Sort-Object -Property @{Expression = { $_.SecurityCenterEnabled }; Descending = $true}, @{Expression = { $_.SignaturesUpToDate }; Descending = $true}, ProductName | Select-Object -First 1
+}
+if ($selected) {
+  [pscustomobject]@{
+    Provider = [string]$selected.Provider
+    ProductName = [string]$selected.ProductName
+    ProductState = [string]$selected.ProductState
+    ProductStateHex = [string]$selected.ProductStateHex
+    SecurityCenterEnabled = [bool]$selected.SecurityCenterEnabled
+    SecurityCenterState = [string]$selected.SecurityCenterState
+    SignaturesUpToDate = [bool]$selected.SignaturesUpToDate
+    SignatureState = [string]$selected.SignatureState
+    ProductExe = [string]$selected.ProductExe
+    ReportingExe = [string]$selected.ReportingExe
+    ProductCount = [int]$products.Count
+    Products = [string](($products | ForEach-Object { $_.ProductName }) -join "; ")
+  } | ConvertTo-Json -Compress
+} elseif (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
   $mp = Get-MpComputerStatus
   [pscustomobject]@{
     Provider = "Microsoft Defender"
@@ -356,26 +520,21 @@ if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
     SignatureLastUpdated = [string]$mp.AntivirusSignatureLastUpdated
   } | ConvertTo-Json -Compress
 } else {
-  $product = Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($product) {
-    [pscustomobject]@{
-      Provider = "Windows Security Center"
-      ProductName = [string]$product.displayName
-      ProductState = [string]$product.productState
-    } | ConvertTo-Json -Compress
-  } else {
-    [pscustomobject]@{
-      Provider = "Windows Security Center"
-      ProductName = ""
-      ProductState = ""
-    } | ConvertTo-Json -Compress
-  }
+  [pscustomobject]@{
+    Provider = "Windows Security Center"
+    ProductName = ""
+    ProductState = ""
+  } | ConvertTo-Json -Compress
 }
 `)
+	return antivirusCheckFromInfo(info, err)
+}
+
+func antivirusCheckFromInfo(info map[string]any, err error) Check {
 	if err != nil {
 		return unavailableCheck("Antivirus", "Antivirus status is unavailable", err)
 	}
-	details := detailsFromMap(info, "Provider", "ProductName", "AntivirusEnabled", "RealTimeProtectionEnabled", "AMServiceEnabled", "AntispywareEnabled", "NISEnabled", "SignatureAge", "SignatureLastUpdated", "ProductState")
+	details := detailsFromMap(info, "Provider", "ProductName", "AntivirusEnabled", "RealTimeProtectionEnabled", "AMServiceEnabled", "AntispywareEnabled", "NISEnabled", "SignatureAge", "SignatureLastUpdated", "ProductState", "ProductStateHex", "SecurityCenterEnabled", "SecurityCenterState", "SignaturesUpToDate", "SignatureState", "ProductCount", "Products", "ProductExe", "ReportingExe")
 	productName := stringFromMap(info, "ProductName")
 	if productName == "" {
 		return Check{Name: "Antivirus", Status: StatusUnavailable, Description: "Antivirus product was not detected", Details: details}
@@ -389,6 +548,19 @@ if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
 			return Check{Name: "Antivirus", Status: StatusGood, Description: "Microsoft Defender real-time protection is enabled", Details: details}
 		}
 		return Check{Name: "Antivirus", Status: StatusWarning, Description: "Microsoft Defender is installed but protection is not fully healthy", Details: details}
+	}
+	if strings.EqualFold(stringFromMap(info, "Provider"), "Windows Security Center") {
+		enabled := boolFromMap(info, "SecurityCenterEnabled")
+		signaturesUpToDate := boolFromMap(info, "SignaturesUpToDate")
+		signatureState := stringFromMap(info, "SignatureState")
+		signatureKnown := signatureState != "" && !strings.EqualFold(signatureState, "Unknown")
+		if enabled && (!signatureKnown || signaturesUpToDate) {
+			return Check{Name: "Antivirus", Status: StatusGood, Description: productName + " is enabled", Details: details}
+		}
+		if !enabled {
+			return Check{Name: "Antivirus", Status: StatusCritical, Description: productName + " is installed but protection is not enabled", Details: details}
+		}
+		return Check{Name: "Antivirus", Status: StatusWarning, Description: productName + " is enabled but signatures are not up to date", Details: details}
 	}
 	return Check{Name: "Antivirus", Status: StatusGood, Description: productName, Details: details}
 }

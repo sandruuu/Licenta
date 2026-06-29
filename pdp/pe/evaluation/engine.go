@@ -63,6 +63,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 	stepUpRules := make([]*models.PolicyRule, 0)
 	var allowRule *models.PolicyRule
 	var sessionControls models.SessionPolicyControls
+	activeLayer := 0
 
 	for _, rule := range ctx.Rules {
 		if rule == nil || !rule.Enabled {
@@ -73,6 +74,11 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			continue
 		}
 
+		layer := policyLayerPriority(rule)
+		if activeLayer != 0 && layer != activeLayer {
+			break
+		}
+		activeLayer = layer
 		matchedRules = append(matchedRules, rule)
 		sessionControls = mergeSessionControls(sessionControls, rule.Conditions.Session)
 
@@ -124,7 +130,7 @@ func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 			SessionControls:  sessionControls,
 			MatchedRule:      requirement.PolicyID,
 		}
-		if stepUpSatisfied(ctx.Auth, requirement, now) {
+		if stepUpSatisfied(ctx.Auth, requirement, now) && stepUpContextMatches(ctx.Auth, req, riskSignals) {
 			decision.Decision = models.DecisionAllow
 			decision.Reason = fmt.Sprintf("Step-up verification already satisfies %d matching policy rule(s)", len(stepUpRules))
 			decision.Policies = []string{req.Resource}

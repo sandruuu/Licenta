@@ -338,28 +338,10 @@ func (s *Server) publishStepUpCompletedEvent(challenge *pa.StepUpChallenge) {
 
 func stepUpAuditDetails(challenge *pa.StepUpChallenge, message string) string {
 	message = strings.TrimSpace(message)
-	if challenge == nil {
+	if message != "" {
 		return message
 	}
-	fields := []struct {
-		name  string
-		value string
-	}{
-		{"request_id", challenge.RequestID},
-		{"agent_session_id", challenge.AgentSessionID},
-		{"challenge_id", challenge.ID},
-	}
-	for _, field := range fields {
-		value := strings.TrimSpace(field.value)
-		if value == "" {
-			continue
-		}
-		if message != "" {
-			message += " "
-		}
-		message += field.name + "=" + value
-	}
-	return message
+	return "Additional verification event recorded"
 }
 
 func (s *Server) renderStepUpPage(w http.ResponseWriter, r *http.Request, challenge *pa.StepUpChallenge, errorMessage, selectedMethod string) {

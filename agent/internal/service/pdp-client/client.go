@@ -54,13 +54,41 @@ func (client *Client) Connection(ctx context.Context, record enrollment.Enrollme
 	}
 	client.closeLocked()
 
-	endpoint, err := pdptransport.Endpoint(client.config.PDPGRPCEndpoint, "")
+	connection, cleanup, err := client.openConnection(ctx, record)
 	if err != nil {
 		return nil, err
 	}
+	client.connection = connection
+	client.cleanup = cleanup
+	client.deviceID = deviceID
+	client.certThumbprint = thumbprint
+	return connection, nil
+}
+
+func (client *Client) DedicatedConnection(ctx context.Context, record enrollment.EnrollmentRecord) (*grpc.ClientConn, func(), error) {
+	if client == nil {
+		return nil, nil, fmt.Errorf("PDP client is not configured")
+	}
+	connection, cleanup, err := client.openConnection(ctx, record)
+	if err != nil {
+		return nil, nil, err
+	}
+	return connection, func() {
+		_ = connection.Close()
+		if cleanup != nil {
+			cleanup()
+		}
+	}, nil
+}
+
+func (client *Client) openConnection(ctx context.Context, record enrollment.EnrollmentRecord) (*grpc.ClientConn, func(), error) {
+	endpoint, err := pdptransport.Endpoint(client.config.PDPGRPCEndpoint, "")
+	if err != nil {
+		return nil, nil, err
+	}
 	certificate, cleanup, err := client.identity.ClientCertificate(ctx, record)
 	if err != nil {
-		return nil, fmt.Errorf("load device client certificate: %w", err)
+		return nil, nil, fmt.Errorf("load device client certificate: %w", err)
 	}
 	connection, err := pdptransport.NewClient(pdptransport.Config{
 		Endpoint:     endpoint,
@@ -72,13 +100,9 @@ func (client *Client) Connection(ctx context.Context, record enrollment.Enrollme
 		if cleanup != nil {
 			cleanup()
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	client.connection = connection
-	client.cleanup = cleanup
-	client.deviceID = deviceID
-	client.certThumbprint = thumbprint
-	return connection, nil
+	return connection, cleanup, nil
 }
 
 func (client *Client) Close() error {

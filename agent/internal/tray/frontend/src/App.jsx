@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   GetDashboard,
   HideWindow,
@@ -28,6 +28,9 @@ function App() {
   const [enrollmentError, setEnrollmentError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
+  const [logoutLoading, setLogoutLoading] = useState(false);
+  const dashboardLoadInFlightRef = useRef(false);
+  const dashboardLoadQueuedRef = useRef(false);
 
   const loadDashboard = useCallback(async () => {
     if (!isWailsRuntimeReady()) {
@@ -37,14 +40,27 @@ function App() {
       return;
     }
 
+    if (dashboardLoadInFlightRef.current) {
+      dashboardLoadQueuedRef.current = true;
+      return;
+    }
+
+    dashboardLoadInFlightRef.current = true;
     try {
-      const nextDashboard = await GetDashboard();
-      setDashboard(nextDashboard);
-      setError('');
-    } catch (err) {
-      setError(errorMessage(err, 'Agent dashboard is unavailable'));
+      do {
+        dashboardLoadQueuedRef.current = false;
+        try {
+          const nextDashboard = await GetDashboard();
+          setDashboard(nextDashboard);
+          setError('');
+        } catch (err) {
+          setError(errorMessage(err, 'Agent dashboard is unavailable'));
+        } finally {
+          setLoading(false);
+        }
+      } while (dashboardLoadQueuedRef.current);
     } finally {
-      setLoading(false);
+      dashboardLoadInFlightRef.current = false;
     }
   }, []);
 
@@ -102,7 +118,8 @@ function App() {
   };
 
   const handleLogout = async () => {
-    setLoginLoading(true);
+    setLogoutLoading(true);
+    setLoginLoading(false);
     setLoginError('');
     try {
       await LogoutUserSession();
@@ -110,7 +127,7 @@ function App() {
     } catch (err) {
       setLoginError(errorMessage(err, 'Logout failed'));
     } finally {
-      setLoginLoading(false);
+      setLogoutLoading(false);
     }
   };
 
@@ -123,6 +140,7 @@ function App() {
       enrollmentLoading={enrollmentLoading}
       loginError={loginError}
       loginLoading={loginLoading}
+      logoutLoading={logoutLoading}
       onHide={handleHide}
       onLogout={handleLogout}
       onStartEnrollment={handleStartEnrollment}

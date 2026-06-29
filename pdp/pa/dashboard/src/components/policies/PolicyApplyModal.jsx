@@ -41,8 +41,8 @@ function PolicyPrecedenceNote() {
           <span>Multiple policy evaluation</span>
         </h3>
         <p className="mt-1 text-sm leading-6 text-text-secondary">
-          When multiple policies apply to the same access request, all matching policies are evaluated together.
-          Final decision priority is Block access, then Require MFA, then Skip MFA, then Allow access.
+          Policies are evaluated by assignment layer: Application-Group, Application, User-Group, then Global.
+          Lower layers are evaluated only when no matching policy is found at a more specific layer.
         </p>
       </div>
     </section>

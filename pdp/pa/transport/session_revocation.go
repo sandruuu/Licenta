@@ -31,9 +31,47 @@ func (s *Server) wireSessionDeleteSink() {
 				s.pa.StepUps.InvalidateCompletedAuthContext(session.UserID, session.DeviceID, session.Resource, session.OrganizationID)
 			}
 		}
+		s.auditResourceSessionDisconnected(session, reason)
 		s.publishCAEPEvent(events.TopicSessionDeleted, fields)
 		s.revokeProvisionedGatewaySession(session, reason)
 	})
+}
+
+func (s *Server) auditResourceSessionDisconnected(session *models.Session, reason string) {
+	if s == nil || s.pa == nil || s.pa.Audit == nil || session == nil {
+		return
+	}
+	eventType, decision, details := resourceSessionAuditEvent(reason)
+	s.pa.Audit.LogEvent(eventType, session.UserID, session.Username, session.SourceIP, session.Resource, decision, details, true)
+}
+
+func resourceSessionAuditEvent(reason string) (string, string, string) {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "agent_logout", "user_logout", "logout":
+		return "agent_resource_session_ended", "ended", "Resource session ended after user sign-out"
+	case "expired":
+		return "agent_resource_session_expired", "expired", "Resource session expired"
+	case "policy_updated":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked after policy update"
+	case "device_revoked":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked because the device was revoked"
+	case "resource_disabled", "resource_deleted":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked because the resource is no longer available"
+	case "gateway_revoked", "gateway_deleted":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked because the gateway is no longer available"
+	case "device_posture_status_changed", "device_posture_changed":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked after device posture changed"
+	case "source_ip_changed":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked because source IP changed"
+	case "admin_revoked":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked by administrator"
+	case "max_sessions_exceeded":
+		return "agent_resource_session_revoked", "revoked", "Resource session revoked because the session limit was reached"
+	case "":
+		return "agent_resource_session_ended", "ended", "Resource session ended"
+	default:
+		return "agent_resource_session_ended", "ended", "Resource session ended"
+	}
 }
 
 func (s *Server) rememberGatewaySession(sessionID, gatewayID string) {

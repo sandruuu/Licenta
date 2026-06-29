@@ -25,7 +25,7 @@ func (service *Service) dashboard(ctx context.Context) ipc.AgentDashboard {
 	deviceData := ipc.DeviceDataReport{}
 	if authenticated {
 		catalog = userSession.Catalog
-		deviceData = service.dashboardDeviceData(ctx, status)
+		deviceData = service.dashboardDeviceData(status)
 	} else {
 		status.DeviceDataStatus = ""
 		status.DeviceDataCheckCount = 0
@@ -71,12 +71,23 @@ func dashboardEnrollment(status ipc.AgentStatus) ipc.EnrollmentInfo {
 	return ipc.EnrollmentInfo{State: status.EnrollmentState, DeviceID: status.EnrollmentDeviceID, LastError: status.EnrollmentLastError}
 }
 
-func (service *Service) dashboardDeviceData(_ context.Context, status ipc.AgentStatus) ipc.DeviceDataReport {
+func (service *Service) dashboardDeviceData(status ipc.AgentStatus) ipc.DeviceDataReport {
 	deviceData := service.cachedDeviceDataReport()
 	if len(deviceData.Checks) == 0 {
+		if status.DeviceDataStatus == deviceDataStatusCollecting || status.DeviceDataStatus == deviceDataStatusUnknown {
+			return pendingDeviceDataReport(status)
+		}
 		return unavailableDeviceDataReport(status, nil)
 	}
 	return deviceData
+}
+
+func pendingDeviceDataReport(status ipc.AgentStatus) ipc.DeviceDataReport {
+	return ipc.DeviceDataReport{
+		Hostname:    "Unknown",
+		OS:          "Unknown",
+		CollectedAt: status.ReportedAt,
+	}
 }
 
 func unavailableDeviceDataReport(status ipc.AgentStatus, err error) ipc.DeviceDataReport {

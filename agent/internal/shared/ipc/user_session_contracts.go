@@ -54,6 +54,7 @@ type CatalogResource struct {
 	ResourceID  string `json:"resource_id"`
 	DisplayName string `json:"display_name,omitempty"`
 	FQDN        string `json:"fqdn,omitempty"`
+	Type        string `json:"type,omitempty"`
 	Protocol    string `json:"protocol,omitempty"`
 	Port        int    `json:"port,omitempty"`
 	AccessMode  string `json:"access_mode,omitempty"`

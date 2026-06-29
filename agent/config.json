@@ -12,7 +12,7 @@
   "session_renew_before": "2m",
   "session_renew_retry_interval": "15s",
   "device_data_sync_interval": "30m",
-  "device_data_sync_change_scan_interval": "5s",
+  "device_data_sync_change_scan_interval": "2s",
   "local_dns_listen_address": "127.0.0.1:53",
   "local_dns_server": "127.0.0.1",
   "synthetic_ip_cidr": "100.64.0.0/10",

@@ -1,12 +1,99 @@
 package policies
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"pdp/config"
 	"pdp/internal/testdb"
 	"pdp/store"
 )
+
+func TestLocateRetriesTemporaryProviderFailures(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"latitude": 33.749,
+			"longitude": -84.388,
+			"city": "Atlanta",
+			"country_name": "United States",
+			"country_code": "US"
+		}`))
+	}))
+	defer server.Close()
+
+	geo := NewGeoLocator(newGeoTestStore(t), newGeoTestRuntime(), config.GeoConfig{
+		ProviderURL: server.URL + "/{ip}",
+		HTTPTimeout: time.Second,
+		CacheTTL:    time.Minute,
+	})
+
+	loc, err := geo.Locate("185.238.28.38")
+	if err != nil {
+		t.Fatalf("Locate returned error: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if loc.City != "Atlanta" || loc.CountryCode != "US" || loc.Latitude == 0 || loc.Longitude == 0 {
+		t.Fatalf("location = %+v, want Atlanta/US with coordinates", loc)
+	}
+}
+
+func TestLocateUsesFallbackProviderAfterPrimaryRateLimit(t *testing.T) {
+	primaryAttempts := 0
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryAttempts++
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer primary.Close()
+
+	fallbackAttempts := 0
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackAttempts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"latitude": 33.7489954,
+			"longitude": -84.3879824,
+			"city": "Atlanta",
+			"country": "United States",
+			"country_code": "US"
+		}`))
+	}))
+	defer fallback.Close()
+
+	geo := NewGeoLocator(newGeoTestStore(t), newGeoTestRuntime(), config.GeoConfig{
+		ProviderURL: primary.URL + "/{ip}",
+		HTTPTimeout: time.Second,
+		CacheTTL:    time.Minute,
+	})
+	geo.providerURLs = []string{primary.URL + "/{ip}", fallback.URL + "/{ip}"}
+
+	loc, err := geo.Locate("185.238.28.51")
+	if err != nil {
+		t.Fatalf("Locate returned error: %v", err)
+	}
+	if primaryAttempts != geoLookupMaxAttempts {
+		t.Fatalf("primary attempts = %d, want %d", primaryAttempts, geoLookupMaxAttempts)
+	}
+	if fallbackAttempts != 1 {
+		t.Fatalf("fallback attempts = %d, want 1", fallbackAttempts)
+	}
+	if loc.City != "Atlanta" || loc.Country != "United States" || loc.CountryCode != "US" {
+		t.Fatalf("fallback location = %+v, want Atlanta/United States/US", loc)
+	}
+}
 
 func TestCheckAccessLocationBuildsUserBaselineAfterEnoughHistory(t *testing.T) {
 	s := newGeoTestStore(t)
