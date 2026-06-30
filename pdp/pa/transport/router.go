@@ -175,15 +175,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc(publicStepUpPathPrefix, s.handleBrowserStepUp)
 
 	// ─────────────────────────────────────────────
-	// OIDC / OAuth2 endpoints (PDP acts as IdP)
+	// External IAM browser callback
 	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/auth/authorize", s.handleOIDCAuthorize)                   // OIDC Authorization endpoint
-	s.mux.HandleFunc("/auth/federated/callback", s.handleFederatedCallback)      // External IdP callback
-	s.mux.HandleFunc("/auth/token", s.handleOIDCToken)                           // OIDC Token endpoint
-	s.mux.HandleFunc("/auth/userinfo", s.handleOIDCUserInfo)                     // OIDC UserInfo endpoint
-	s.mux.HandleFunc("/api/auth/oidc-complete", s.handleOIDCCompleteSession)     // Browser completes OIDC auth
-	s.mux.HandleFunc("/.well-known/jwks.json", s.handleJWKS)                     // JWKS public key endpoint
-	s.mux.HandleFunc("/.well-known/openid-configuration", s.handleOIDCDiscovery) // OIDC discovery doc
+	s.mux.HandleFunc("/auth/federated/callback", s.handleFederatedCallback) // External IAM callback
 
 	// SCIM inbound provisioning endpoints (Bearer token per organization IdP)
 	s.mux.HandleFunc("/scim/v2/", s.handleSCIM)

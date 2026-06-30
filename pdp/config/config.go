@@ -24,10 +24,6 @@ type RuntimeConfig struct {
 	CatalogTTLSeconds          int           `json:"catalog_ttl_seconds"`
 	AuthRateLimitWindow        time.Duration `json:"auth_rate_limit_window"`
 	AuthRateLimitMax           int           `json:"auth_rate_limit_max"`
-	OIDCAuthorizeSessionTTL    time.Duration `json:"oidc_authorize_session_ttl"`
-	OIDCAuthCodeTTL            time.Duration `json:"oidc_auth_code_ttl"`
-	OIDCRefreshTokenTTL        time.Duration `json:"oidc_refresh_token_ttl"`
-	OIDCCleanupInterval        time.Duration `json:"oidc_cleanup_interval"`
 	OIDCEnrollmentTokenTTL     time.Duration `json:"oidc_enrollment_token_ttl"`
 	WebAuthnChallengeTTL       time.Duration `json:"webauthn_challenge_ttl"`
 	WebAuthnCleanupInterval    time.Duration `json:"webauthn_cleanup_interval"`
@@ -100,9 +96,8 @@ type Config struct {
 	PKITimeout     time.Duration `json:"pki_timeout"`      // HTTP timeout for PKI API calls
 
 	// JWT settings
-	JWTExpiry           time.Duration `json:"jwt_expiry"`             // token lifetime
-	JWTTransitKey       string        `json:"jwt_transit_key"`        // Vault Transit key used for JWT signing key encryption
-	JWTKeyEncryptedPath string        `json:"jwt_key_encrypted_path"` // Vault Transit encrypted JWT signing key path
+	JWTTransitKey       string `json:"jwt_transit_key"`        // Vault Transit key used for JWT signing key encryption
+	JWTKeyEncryptedPath string `json:"jwt_key_encrypted_path"` // Vault Transit encrypted JWT signing key path
 
 	// TOTP settings
 	TOTPIssuer                string `json:"totp_issuer"`                   // issuer name shown in authenticator apps

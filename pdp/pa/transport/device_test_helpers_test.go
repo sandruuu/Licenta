@@ -85,7 +85,6 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 		PKIRoleGateway:      "trustgateway",
 		PKITransitKey:       "trustcloud-key",
 		PKITimeout:          10 * time.Second,
-		JWTExpiry:           time.Hour,
 		JWTTransitKey:       "trustcloud-key",
 		JWTKeyEncryptedPath: dataDir + "/jwt_signing_key.enc",
 		TOTPIssuer:          "TrustCloud",
@@ -109,10 +108,6 @@ func newDeviceAPITestServer(t *testing.T) (*Server, *store.Store) {
 			EventBufferSize:         64,
 			AuthRateLimitWindow:     time.Minute,
 			AuthRateLimitMax:        10,
-			OIDCAuthorizeSessionTTL: 5 * time.Minute,
-			OIDCAuthCodeTTL:         time.Minute,
-			OIDCRefreshTokenTTL:     time.Hour,
-			OIDCCleanupInterval:     time.Minute,
 			AdminAccessTokenTTL:     5 * time.Minute,
 			AdminSessionIdleTTL:     30 * time.Minute,
 			AdminSessionAbsoluteTTL: 8 * time.Hour,
@@ -173,7 +168,7 @@ func newTestPolicyAdministrator(t *testing.T, cfg *config.Config, dataStore *sto
 	if err != nil {
 		t.Fatalf("GenerateJWTSigningKey() error = %v", err)
 	}
-	jwtMgr, err := auth.NewJWTManager(jwtKey, cfg.JWTExpiry, cfg.Runtime.OIDCEnrollmentTokenTTL)
+	jwtMgr, err := auth.NewJWTManager(jwtKey, cfg.Runtime.AdminAccessTokenTTL, cfg.Runtime.OIDCEnrollmentTokenTTL)
 	if err != nil {
 		t.Fatalf("NewJWTManager() error = %v", err)
 	}
@@ -181,7 +176,6 @@ func newTestPolicyAdministrator(t *testing.T, cfg *config.Config, dataStore *sto
 	authService := &auth.Service{
 		Users:      auth.NewUserManager(dataStore),
 		JWT:        jwtMgr,
-		OIDC:       auth.NewOIDCManager(runtimeState, dataStore, cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
 		WebAuthn:   mfa.NewWebAuthnProvider(cfg, runtimeState),
 		Federation: auth.NewFederationProvider(runtimeState, cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
 		Store:      dataStore,

@@ -18,11 +18,10 @@ import (
 )
 
 // Service coordinates identity and authentication services owned by the PA.
-// It combines UserManager, JWTManager, TOTP MFA, WebAuthn, OIDC, and federation.
+// It combines UserManager, JWTManager, TOTP MFA, WebAuthn, and federation.
 type Service struct {
 	Users      *UserManager
 	JWT        *JWTManager
-	OIDC       *OIDCManager
 	WebAuthn   *mfa.WebAuthnProvider // nil if WebAuthn not configured
 	Federation *FederationProvider
 	Secrets    *SecretProtector
@@ -43,7 +42,7 @@ func New(cfg *config.Config, s *store.Store, runtimeState *redisstate.Client) *S
 		log.Fatalf("[AUTH] Failed to load JWT signing key: %v", err)
 	}
 
-	jwtMgr, err := NewJWTManager(jwtKey, cfg.JWTExpiry, cfg.Runtime.OIDCEnrollmentTokenTTL)
+	jwtMgr, err := NewJWTManager(jwtKey, cfg.Runtime.AdminAccessTokenTTL, cfg.Runtime.OIDCEnrollmentTokenTTL)
 	if err != nil {
 		log.Fatalf("[AUTH] Failed to initialize JWT manager: %v", err)
 	}
@@ -56,7 +55,6 @@ func New(cfg *config.Config, s *store.Store, runtimeState *redisstate.Client) *S
 	return &Service{
 		Users:      NewUserManager(s, secretProtector),
 		JWT:        jwtMgr,
-		OIDC:       NewOIDCManager(runtimeState, s, cfg.Runtime.OIDCAuthorizeSessionTTL, cfg.Runtime.OIDCAuthCodeTTL, cfg.Runtime.OIDCRefreshTokenTTL, cfg.Runtime.OIDCCleanupInterval),
 		WebAuthn:   mfa.NewWebAuthnProvider(cfg, runtimeState),
 		Federation: NewFederationProvider(runtimeState, cfg.Public.OIDCDefaultScopes, cfg.Public.OIDCDefaultClaimMapping, cfg.Runtime.FederationCacheTTL, cfg.Runtime.FederationHTTPTimeout),
 		Secrets:    secretProtector,

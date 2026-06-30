@@ -230,18 +230,6 @@ func (s *Store) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_gateways_token ON gateways(enrollment_token)`,
 
-		`CREATE TABLE IF NOT EXISTS oidc_clients (
-			client_id TEXT PRIMARY KEY,
-			client_secret TEXT DEFAULT '',
-			redirect_uris_json TEXT DEFAULT '[]',
-			name TEXT DEFAULT '',
-			public INTEGER DEFAULT 1,
-			require_pkce INTEGER DEFAULT 1,
-			require_device_id INTEGER DEFAULT 0,
-			created_at TEXT DEFAULT '',
-			updated_at TEXT DEFAULT ''
-		)`,
-
 		`CREATE TABLE IF NOT EXISTS login_locations (
 			id BIGSERIAL PRIMARY KEY,
 			user_id TEXT NOT NULL,

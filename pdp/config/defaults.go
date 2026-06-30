@@ -39,7 +39,7 @@ func (c *Config) ApplyDefaults() {
 		c.Runtime.BrowserAuthSessionTTL = 5 * time.Minute
 	}
 	if c.Runtime.AdminAccessTokenTTL <= 0 {
-		c.Runtime.AdminAccessTokenTTL = 5 * time.Minute
+		c.Runtime.AdminAccessTokenTTL = time.Hour
 	}
 	if c.Runtime.AdminSessionIdleTTL <= 0 {
 		c.Runtime.AdminSessionIdleTTL = 30 * time.Minute

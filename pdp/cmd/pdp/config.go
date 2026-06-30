@@ -99,7 +99,6 @@ func requiredStringSettings(cfg *config.Config) map[string]string {
 func requiredDurationSettings(cfg *config.Config) map[string]time.Duration {
 	return map[string]time.Duration{
 		"pki_timeout":                            cfg.PKITimeout,
-		"jwt_expiry":                             cfg.JWTExpiry,
 		"session_expiry":                         cfg.SessionExpiry,
 		"lockout_duration":                       cfg.LockoutDuration,
 		"runtime.store_auto_save_interval":       cfg.Runtime.StoreAutoSaveInterval,
@@ -111,10 +110,6 @@ func requiredDurationSettings(cfg *config.Config) map[string]time.Duration {
 		"runtime.http_shutdown_timeout":          cfg.Runtime.HTTPShutdownTimeout,
 		"runtime.readiness_drain_delay":          cfg.Runtime.ReadinessDrainDelay,
 		"runtime.auth_rate_limit_window":         cfg.Runtime.AuthRateLimitWindow,
-		"runtime.oidc_authorize_session_ttl":     cfg.Runtime.OIDCAuthorizeSessionTTL,
-		"runtime.oidc_auth_code_ttl":             cfg.Runtime.OIDCAuthCodeTTL,
-		"runtime.oidc_refresh_token_ttl":         cfg.Runtime.OIDCRefreshTokenTTL,
-		"runtime.oidc_cleanup_interval":          cfg.Runtime.OIDCCleanupInterval,
 		"runtime.oidc_enrollment_token_ttl":      cfg.Runtime.OIDCEnrollmentTokenTTL,
 		"runtime.webauthn_challenge_ttl":         cfg.Runtime.WebAuthnChallengeTTL,
 		"runtime.webauthn_cleanup_interval":      cfg.Runtime.WebAuthnCleanupInterval,

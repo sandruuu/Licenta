@@ -72,11 +72,7 @@ type FederationSession struct {
 
 // FederatedTokenResponse is the external IdP's token endpoint response.
 type FederatedTokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	IDToken      string `json:"id_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in"`
-	RefreshToken string `json:"refresh_token,omitempty"`
+	IDToken string `json:"id_token"`
 }
 
 // FederatedClaims are the identity claims extracted from the external id_token.

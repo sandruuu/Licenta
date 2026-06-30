@@ -212,7 +212,7 @@ Fisierul `pdp/config.json` curent configureaza duratele in nanosecunde, fiindca 
 - `runtime.federation_cache_ttl = 21600000000000`: 6h.
 - `runtime.federation_http_timeout = 10000000000`: 10s.
 - `runtime.browser_auth_session_ttl = 300000000000`: 5m.
-- `runtime.admin_access_token_ttl = 300000000000`: 5m.
+- `runtime.admin_access_token_ttl = 3600000000000`: 1h.
 - `runtime.admin_session_idle_ttl = 1800000000000`: 30m.
 - `runtime.admin_session_absolute_ttl = 28800000000000`: 8h.
 - `runtime.agent_session_access_token_ttl = 300000000000`: 5m.

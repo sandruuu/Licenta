@@ -57,7 +57,6 @@ func Reset(t *testing.T, databaseURL string) {
 		mfa_recovery_codes,
 		webauthn_credentials,
 		login_locations,
-		oidc_clients,
 		gateways,
 		device_users,
 		revoked_certs,
