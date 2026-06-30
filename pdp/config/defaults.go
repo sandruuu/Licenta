@@ -48,7 +48,7 @@ func (c *Config) ApplyDefaults() {
 		c.Runtime.AdminSessionAbsoluteTTL = 8 * time.Hour
 	}
 	if c.Runtime.AgentSessionAccessTokenTTL <= 0 {
-		c.Runtime.AgentSessionAccessTokenTTL = 5 * time.Minute
+		c.Runtime.AgentSessionAccessTokenTTL = time.Hour
 	}
 	if c.Runtime.AgentSessionIdleTTL <= 0 {
 		c.Runtime.AgentSessionIdleTTL = 30 * time.Minute

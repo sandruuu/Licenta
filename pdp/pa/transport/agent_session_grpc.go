@@ -289,7 +289,7 @@ func (service *agentSessionGRPCService) issueAgentSessionToken(session *agentSes
 	}
 	ttl := service.server.appConfig().Runtime.AgentSessionAccessTokenTTL
 	if ttl <= 0 {
-		ttl = 5 * time.Minute
+		ttl = time.Hour
 	}
 	serverExpiresAt := minNonZeroTime(session.IdleExpiresAt, session.AbsoluteExpiresAt)
 	if serverExpiresAt.IsZero() {

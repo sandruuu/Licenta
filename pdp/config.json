@@ -56,7 +56,7 @@
     "admin_access_token_ttl": 3600000000000,
     "admin_session_idle_ttl": 1800000000000,
     "admin_session_absolute_ttl": 28800000000000,
-    "agent_session_access_token_ttl": 300000000000,
+    "agent_session_access_token_ttl": 3600000000000,
     "agent_session_idle_ttl": 1800000000000,
     "agent_session_absolute_ttl": 28800000000000,
     "csrf_cookie_max_age_seconds": 3600,
