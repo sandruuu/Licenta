@@ -192,7 +192,6 @@ export namespace ipc {
 	    message?: string;
 	    // Go type: time
 	    expires_at?: any;
-	    poll_interval_seconds?: number;
 	    // Go type: time
 	    reported_at: any;
 
@@ -208,7 +207,6 @@ export namespace ipc {
 	        this.state = source["state"];
 	        this.message = source["message"];
 	        this.expires_at = this.convertValues(source["expires_at"], null);
-	        this.poll_interval_seconds = source["poll_interval_seconds"];
 	        this.reported_at = this.convertValues(source["reported_at"], null);
 	    }
 

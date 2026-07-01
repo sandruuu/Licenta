@@ -495,8 +495,8 @@ func (client *recordingSessionClient) StartSession(context.Context, StartSession
 	return StartSessionResponse{}, nil
 }
 
-func (client *recordingSessionClient) SessionStatus(context.Context, SessionStatusRequest) (SessionStatusResponse, error) {
-	return SessionStatusResponse{}, nil
+func (client *recordingSessionClient) WatchSessionStatus(context.Context, SessionStatusRequest, func(SessionStatusResponse) bool) error {
+	return nil
 }
 
 func (client *recordingSessionClient) ClaimSession(context.Context, ClaimSessionRequest) (ClaimSessionResponse, error) {

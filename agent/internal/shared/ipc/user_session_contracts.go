@@ -12,14 +12,13 @@ const (
 type StartUserLoginInteractiveRequest struct{}
 
 type StartUserLoginInteractiveResponse struct {
-	Started             bool      `json:"started"`
-	AuthURL             string    `json:"auth_url,omitempty"`
-	SessionRequestID    string    `json:"session_request_id,omitempty"`
-	State               string    `json:"state"`
-	Message             string    `json:"message,omitempty"`
-	ExpiresAt           time.Time `json:"expires_at,omitempty"`
-	PollIntervalSeconds int       `json:"poll_interval_seconds,omitempty"`
-	ReportedAt          time.Time `json:"reported_at"`
+	Started          bool      `json:"started"`
+	AuthURL          string    `json:"auth_url,omitempty"`
+	SessionRequestID string    `json:"session_request_id,omitempty"`
+	State            string    `json:"state"`
+	Message          string    `json:"message,omitempty"`
+	ExpiresAt        time.Time `json:"expires_at,omitempty"`
+	ReportedAt       time.Time `json:"reported_at"`
 }
 
 type LogoutUserSessionRequest struct{}

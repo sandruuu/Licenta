@@ -76,7 +76,7 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 		return
 	}
 	if browserFormCancelled(r) {
-		if _, err := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
+		if updated, err := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
 			if live.Status != agentSessionStatusWaitingForUserLogin {
 				return fmt.Errorf("authentication request is not waiting for user login")
 			}
@@ -85,6 +85,8 @@ func (s *Server) handleBrowserAgentSessionDiscovery(w http.ResponseWriter, r *ht
 			return nil
 		}); err != nil {
 			log.Printf("[AGENT-SESSION] Failed to cancel browser authentication session: session=%s err=%v", session.ID, err)
+		} else {
+			s.publishAgentSessionStatus(updated)
 		}
 		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, "", "", stepUpRemoteIP(r), models.DecisionDeny, "User authentication cancelled", false)
 		redirectBrowserCancelled(w, r)
@@ -227,16 +229,17 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 		return true
 	}
 	if user.Disabled {
-		_, _ = s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
+		updated, _ := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
 			live.Status = agentSessionStatusDenied
 			live.Reason = "user_disabled"
 			return nil
 		})
+		s.publishAgentSessionStatus(updated)
 		s.logAgentUserAuthenticationEvent("agent_user_authentication_denied", session, user.ID, user.Username, stepUpRemoteIP(r), models.DecisionDeny, "User account is disabled", false)
 		renderEnrollmentPage(w, "Authentication denied", "Authentication was denied. Contact your administrator.", "", false)
 		return true
 	}
-	if _, err := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
+	updated, err := s.agentSessions.update(session.ID, func(live *agentSessionTransaction) error {
 		live.AuthenticatedUserSubject = claims.Subject
 		live.AuthenticatedUserEmail = claims.Email
 		live.AuthenticatedUserIssuer = idpCfg.Issuer
@@ -245,10 +248,12 @@ func (s *Server) handleAgentSessionFederatedCallback(w http.ResponseWriter, r *h
 		live.AuthenticatedUserRole = user.Role
 		live.Status = agentSessionStatusReadyToClaim
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		http.Error(w, "Authentication session could not be completed", http.StatusConflict)
 		return true
 	}
+	s.publishAgentSessionStatus(updated)
 	s.logAgentUserAuthenticationEvent("agent_user_authentication_approved", session, user.ID, user.Username, stepUpRemoteIP(r), models.DecisionAllow, "User authenticated via organization sign-in", true)
 	renderEnrollmentPage(w, "Authentication complete", "You can return to TrustAgent.", "", false)
 	return true

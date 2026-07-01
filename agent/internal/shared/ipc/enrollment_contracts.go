@@ -11,6 +11,5 @@ type StartEnrollmentInteractiveResponse struct {
 	State               EnrollmentState `json:"state"`
 	Message             string          `json:"message,omitempty"`
 	ExpiresAt           time.Time       `json:"expires_at,omitempty"`
-	PollIntervalSeconds int             `json:"poll_interval_seconds,omitempty"`
 	ReportedAt          time.Time       `json:"reported_at"`
 }

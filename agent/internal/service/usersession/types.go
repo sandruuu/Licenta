@@ -21,7 +21,6 @@ const (
 	StatusClaimed             = "CLAIMED"
 
 	DefaultTimeout             = 10 * time.Minute
-	DefaultPollInterval        = time.Second
 	DefaultExpiryRevokeLead    = 30 * time.Second
 	DefaultExpiryRevokeTimeout = 10 * time.Second
 	DefaultSessionRenewBefore  = 2 * time.Minute
@@ -31,7 +30,6 @@ const (
 
 type Config struct {
 	LoginTimeout              time.Duration
-	LoginPollInterval         time.Duration
 	SessionRenewBefore        time.Duration
 	SessionRenewRetryInterval time.Duration
 	TrustedStepUpHosts        []string
@@ -56,7 +54,7 @@ type EnrollmentProvider interface {
 
 type Client interface {
 	StartSession(context.Context, StartSessionRequest) (StartSessionResponse, error)
-	SessionStatus(context.Context, SessionStatusRequest) (SessionStatusResponse, error)
+	WatchSessionStatus(context.Context, SessionStatusRequest, func(SessionStatusResponse) bool) error
 	ClaimSession(context.Context, ClaimSessionRequest) (ClaimSessionResponse, error)
 	GetCatalog(context.Context, GetCatalogRequest) (CatalogResponse, error)
 	RenewSession(context.Context, RenewSessionRequest) (RenewSessionResponse, error)
@@ -81,7 +79,6 @@ type StartSessionResponse struct {
 	AuthURL          string
 	ClaimSecret      string
 	ExpiresAt        time.Time
-	PollInterval     time.Duration
 	Status           string
 }
 
@@ -168,7 +165,6 @@ type sessionState struct {
 	claimSecret       string
 	authURL           string
 	expiresAt         time.Time
-	pollInterval      time.Duration
 	agentSessionID    string
 	agentSessionToken string
 	displayName       string

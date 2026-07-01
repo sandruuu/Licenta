@@ -7,7 +7,6 @@ type ServiceConfig struct {
 	PDPTLSServerName                 string
 	PDPCAFile                        string
 	EnrollmentTimeout                time.Duration
-	EnrollmentPollInterval           time.Duration
 	CertificateRenewBefore           time.Duration
 	CertificateRenewCheckInterval    time.Duration
 	CertificateRenewTimeout          time.Duration

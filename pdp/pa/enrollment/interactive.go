@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pdp/models"
+	"pdp/pa/events"
 	"pdp/util"
 )
 
@@ -162,6 +163,7 @@ func (s *Service) StartInteractiveSession(req InteractiveStartRequest) (*Interac
 	if err := s.saveInteractiveSession(session); err != nil {
 		return nil, err
 	}
+	s.publishInteractiveSessionStatus(session)
 
 	return &InteractiveStartResult{
 		SessionID:       sessionID,
@@ -218,6 +220,7 @@ func (s *Service) CleanExpiredInteractiveSessions(now time.Time) int {
 			count++
 			if sessionCopy.ID != "" && sessionCopy.Status != InteractiveStatusDenied && sessionCopy.Status != InteractiveStatusEnrolled {
 				expired = append(expired, sessionCopy)
+				s.publishInteractiveSessionStatusValue(sessionCopy.ID, InteractiveStatusDenied, "enrollment_session_expired")
 			}
 			s.deleteInteractiveSession(sessionCopy.ID)
 		}
@@ -251,6 +254,7 @@ func (s *Service) ExpireInteractiveSessionIfExpired(sessionID string, now time.T
 	s.deleteInteractiveSession(sessionID)
 
 	if expired != nil {
+		s.publishInteractiveSessionStatusValue(expired.ID, InteractiveStatusDenied, "enrollment_session_expired")
 		notifyInteractiveSessionsExpired(s.expiredHandler(), []InteractiveSession{*expired}, now)
 	}
 	return true
@@ -328,6 +332,9 @@ func (s *Service) BeginInteractiveIDPLogin(sessionID string, organization *model
 		updated = &sessionCopy
 		return nil
 	})
+	if updated != nil {
+		s.publishInteractiveSessionStatus(updated)
+	}
 	return updated, err
 }
 
@@ -364,6 +371,9 @@ func (s *Service) CompleteInteractiveIDPLogin(sessionID, subject, email, issuer,
 		updated = &sessionCopy
 		return nil
 	})
+	if updated != nil {
+		s.publishInteractiveSessionStatus(updated)
+	}
 	return updated, err
 }
 
@@ -393,6 +403,9 @@ func (s *Service) DenyInteractiveSession(sessionID, reason string) (*Interactive
 		updated = &sessionCopy
 		return nil
 	})
+	if updated != nil {
+		s.publishInteractiveSessionStatus(updated)
+	}
 	return updated, err
 }
 
@@ -424,6 +437,7 @@ func (s *Service) InteractiveSessionStatus(sessionID, deviceNonce, pollSecret st
 		return nil
 	})
 	if expired != nil {
+		s.publishInteractiveSessionStatusValue(expired.ID, InteractiveStatusDenied, "enrollment_session_expired")
 		notifyInteractiveSessionsExpired(s.expiredHandler(), []InteractiveSession{*expired}, time.Now().UTC())
 	}
 	return result, err
@@ -436,4 +450,25 @@ func notifyInteractiveSessionsExpired(handler InteractiveSessionExpiredHandler, 
 	for _, session := range sessions {
 		handler(session, now)
 	}
+}
+
+func (s *Service) publishInteractiveSessionStatus(session *InteractiveSession) {
+	if session == nil {
+		return
+	}
+	s.publishInteractiveSessionStatusValue(session.ID, session.Status, session.Reason)
+}
+
+func (s *Service) publishInteractiveSessionStatusValue(sessionID, statusValue, reason string) {
+	if s == nil || s.publisher == nil {
+		return
+	}
+	fields := map[string]string{
+		"session_id": strings.TrimSpace(sessionID),
+		"status":     strings.TrimSpace(statusValue),
+	}
+	if strings.TrimSpace(reason) != "" {
+		fields["reason"] = strings.TrimSpace(reason)
+	}
+	s.publisher.PublishCAEPEvent(events.TopicEnrollmentSessionUpdated, fields)
 }

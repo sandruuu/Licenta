@@ -250,7 +250,7 @@ Duratele efective in configuratia curenta:
 - WebAuthn challenge session: 5m. Este in Redis, cheia interna este `userID:ceremony:contextID`, iar TTL-ul este gestionat de Redis.
 - Browser agent session request: 5m. Este transaction-ul `srq` creat de `AgentSessionService/StartSession`; claim secret-ul este valid doar pana la expirarea transaction-ului si request-ul este consumat la `ClaimSession`.
 - Browser enrollment session: 5m. Este `PendingEnrollSession` cu status pending/authenticated/denied.
-- Interactive TrustAgent enrollment session: 5m. Include `enrollment_session_id`, `device_challenge`, `poll_secret`, poll interval de 3s si expirare transmisa in raspunsul gRPC.
+- Interactive TrustAgent enrollment session: 5m. Include `enrollment_session_id`, `device_challenge`, `poll_secret` si expirare transmisa in raspunsul gRPC.
 - Step-up challenge necompletat: 5m. Dupa expirare statusul devine `expired` si secretul TOTP pending este sters.
 - Step-up completat: implicit 10m. Dupa completare, `ExpiresAt = CompletedAt + MaxAgeSeconds`; daca politica nu seteaza `max_age_seconds`, defaultul este `600` secunde.
 - Step-up browser auth cookie/session: 5m. Cookie-ul `tc_stepup_auth` este HttpOnly, Secure, SameSite=Lax si este legat de challenge, user, metoda, hash IP si hash User-Agent.
@@ -1299,7 +1299,7 @@ Acest endpoint este protejat cu mTLS device si `deviceAuthMiddleware`. Body-ul a
 gRPC:
 
 - `trustagent.session.AgentSessionService/StartSession`;
-- `SessionStatus`;
+- `WatchSessionStatus`;
 - `ClaimSession`;
 - `GetCatalog`;
 - `RenewSession`;
@@ -1903,9 +1903,10 @@ Servicii:
 
 - `trustagent.session.AgentSessionService`
   - `StartSession`
-  - `SessionStatus`
+  - `WatchSessionStatus`
   - `ClaimSession`
   - `GetCatalog`
+  - `RenewSession`
   - `RevokeSession`
 - `trustcloud.catalog.DeviceCatalogService`
   - `GetCatalog`
@@ -1917,7 +1918,7 @@ Servicii:
   - `AuthorizeResource`
 - `trustagent.enrollment.EnrollmentService`
   - `StartSession`
-  - `SessionStatus`
+  - `WatchSessionStatus`
   - `CompleteSession`
 - `gateway.GatewayEnrollmentService`
   - `Enroll`
@@ -1934,16 +1935,17 @@ Interceptorul gRPC cere certificat client pentru serviciile device, cu exceptiil
 Full method paths gRPC folosite de interceptori/logica:
 
 - `/trustagent.session.AgentSessionService/StartSession`
-- `/trustagent.session.AgentSessionService/SessionStatus`
+- `/trustagent.session.AgentSessionService/WatchSessionStatus`
 - `/trustagent.session.AgentSessionService/ClaimSession`
 - `/trustagent.session.AgentSessionService/GetCatalog`
+- `/trustagent.session.AgentSessionService/RenewSession`
 - `/trustagent.session.AgentSessionService/RevokeSession`
 - `/trustcloud.catalog.DeviceCatalogService/GetCatalog`
 - `/trustagent.device.DeviceDataService/ReportDeviceData`
 - `/trustagent.events.AgentEventsService/Watch`
 - `/trustcloud.agent.AgentAuthorizationService/AuthorizeResource`
 - `/trustagent.enrollment.EnrollmentService/StartSession`
-- `/trustagent.enrollment.EnrollmentService/SessionStatus`
+- `/trustagent.enrollment.EnrollmentService/WatchSessionStatus`
 - `/trustagent.enrollment.EnrollmentService/CompleteSession`
 - `/gateway.GatewayEnrollmentService/Enroll`
 - `/gateway.GatewayEnrollmentService/RenewCertificate`

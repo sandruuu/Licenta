@@ -115,7 +115,7 @@ func (b *Broker) Publish(topic string, evt Event) {
 		evt.Type = topic
 	}
 	if b.runtime == nil {
-		log.Printf("[EVENTS] Redis runtime state unavailable for topic=%s", topic)
+		b.deliver(topic, evt)
 		return
 	}
 	raw, err := json.Marshal(evt)
@@ -125,6 +125,7 @@ func (b *Broker) Publish(topic string, evt Event) {
 	}
 	if err := b.runtime.PublishEvent(topic, raw); err != nil {
 		log.Printf("[EVENTS] publish topic=%s: %v", topic, err)
+		b.deliver(topic, evt)
 	}
 }
 
@@ -214,14 +215,16 @@ func (b *Broker) Shutdown() {
 }
 
 const (
-	TopicRevocation       = "revocation"
-	TopicPolicyUpdated    = "policy.updated"
-	TopicResourcesUpdated = "resources.updated"
-	TopicSessionDeleted   = "session.deleted"
-	TopicStepUpCompleted  = "step_up.completed"
-	TopicHealthChanged    = "health.changed"
-	TopicDeviceRevoked    = "device.revoked"
-	TopicGatewayRevoked   = "gateway.revoked"
+	TopicRevocation               = "revocation"
+	TopicPolicyUpdated            = "policy.updated"
+	TopicResourcesUpdated         = "resources.updated"
+	TopicSessionDeleted           = "session.deleted"
+	TopicStepUpCompleted          = "step_up.completed"
+	TopicHealthChanged            = "health.changed"
+	TopicDeviceRevoked            = "device.revoked"
+	TopicGatewayRevoked           = "gateway.revoked"
+	TopicEnrollmentSessionUpdated = "enrollment.session.updated"
+	TopicAgentSessionUpdated      = "agent.session.updated"
 )
 
 func standardTopics() []string {
@@ -234,5 +237,7 @@ func standardTopics() []string {
 		TopicHealthChanged,
 		TopicDeviceRevoked,
 		TopicGatewayRevoked,
+		TopicEnrollmentSessionUpdated,
+		TopicAgentSessionUpdated,
 	}
 }

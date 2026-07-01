@@ -298,7 +298,7 @@ function Test-AgentInstallConfig {
     Test-AgentCertificateFile -Config $config -ConfigPath $configPath -RepairPaths:$RepairPaths
     Test-GoDuration -Config $config -Name "tray_timeout" -Required $true
     Test-GoDuration -Config $config -Name "dashboard_refresh_interval" -Required $true
-    foreach ($durationName in @("enrollment_timeout", "enrollment_poll_interval", "device_data_sync_interval", "device_data_sync_change_scan_interval")) {
+    foreach ($durationName in @("enrollment_timeout", "device_data_sync_interval", "device_data_sync_change_scan_interval")) {
         Test-GoDuration -Config $config -Name $durationName
     }
 

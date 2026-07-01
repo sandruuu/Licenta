@@ -3,6 +3,7 @@ package usersession
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ import (
 const (
 	sessionGRPCServiceName       = "trustagent.session.AgentSessionService"
 	sessionGRPCStartSessionPath  = "/" + sessionGRPCServiceName + "/StartSession"
-	sessionGRPCSessionStatusPath = "/" + sessionGRPCServiceName + "/SessionStatus"
+	sessionGRPCWatchStatusPath   = "/" + sessionGRPCServiceName + "/WatchSessionStatus"
 	sessionGRPCClaimSessionPath  = "/" + sessionGRPCServiceName + "/ClaimSession"
 	sessionGRPCGetCatalogPath    = "/" + sessionGRPCServiceName + "/GetCatalog"
 	sessionGRPCRenewSessionPath  = "/" + sessionGRPCServiceName + "/RenewSession"
@@ -116,25 +117,44 @@ func (client *GRPCClient) StartSession(ctx context.Context, request StartSession
 		AuthURL:          stringField(fields, "auth_url"),
 		ClaimSecret:      stringField(fields, "claim_secret"),
 		ExpiresAt:        timeField(fields, "expires_at"),
-		PollInterval:     secondsField(fields, "poll_interval_seconds"),
 		Status:           stringField(fields, "status"),
 	}, nil
 }
 
-func (client *GRPCClient) SessionStatus(ctx context.Context, request SessionStatusRequest) (SessionStatusResponse, error) {
+func (client *GRPCClient) WatchSessionStatus(ctx context.Context, request SessionStatusRequest, handler func(SessionStatusResponse) bool) error {
+	if handler == nil {
+		return fmt.Errorf("session status handler is required")
+	}
 	payload, err := structpb.NewStruct(map[string]any{
 		"session_request_id": request.SessionRequestID,
 		"claim_secret":       request.ClaimSecret,
 	})
 	if err != nil {
-		return SessionStatusResponse{}, err
+		return err
 	}
-	var response structpb.Struct
-	if err := client.connection.Invoke(ctx, sessionGRPCSessionStatusPath, payload, &response); err != nil {
-		return SessionStatusResponse{}, err
+	stream, err := client.connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, sessionGRPCWatchStatusPath)
+	if err != nil {
+		return err
 	}
-	fields := response.AsMap()
-	return SessionStatusResponse{Status: stringField(fields, "status"), Reason: stringField(fields, "reason", "message")}, nil
+	if err := stream.SendMsg(payload); err != nil {
+		return err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return err
+	}
+	for {
+		message := &structpb.Struct{}
+		if err := stream.RecvMsg(message); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		fields := message.AsMap()
+		if !handler(SessionStatusResponse{Status: stringField(fields, "status"), Reason: stringField(fields, "reason", "message")}) {
+			return nil
+		}
+	}
 }
 
 func (client *GRPCClient) ClaimSession(ctx context.Context, request ClaimSessionRequest) (ClaimSessionResponse, error) {
@@ -277,14 +297,6 @@ func timeField(fields map[string]any, name string) time.Time {
 		return time.Time{}
 	}
 	return parsed.UTC()
-}
-
-func secondsField(fields map[string]any, name string) time.Duration {
-	value := numberField(fields, name)
-	if value <= 0 {
-		return 0
-	}
-	return time.Duration(value * float64(time.Second))
 }
 
 func catalogResources(value any) []ipc.CatalogResource {

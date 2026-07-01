@@ -39,7 +39,6 @@ func serviceConfigFromConfig(config ServiceConfig) service.Config {
 		PDPTLSServerName:                 config.PDPTLSServerName,
 		PDPCAFile:                        config.PDPCAFile,
 		EnrollmentTimeout:                config.EnrollmentTimeout,
-		EnrollmentPollInterval:           config.EnrollmentPollInterval,
 		CertificateRenewBefore:           config.CertificateRenewBefore,
 		CertificateRenewCheckInterval:    config.CertificateRenewCheckInterval,
 		CertificateRenewTimeout:          config.CertificateRenewTimeout,

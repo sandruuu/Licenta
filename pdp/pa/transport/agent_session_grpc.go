@@ -8,6 +8,7 @@ import (
 
 	"pdp/pa/auth"
 	"pdp/pa/catalog"
+	"pdp/pa/events"
 	"pdp/util"
 
 	"google.golang.org/grpc"
@@ -19,7 +20,7 @@ import (
 const (
 	agentSessionGRPCServiceName       = "trustagent.session.AgentSessionService"
 	agentSessionGRPCStartSessionPath  = "/trustagent.session.AgentSessionService/StartSession"
-	agentSessionGRPCSessionStatusPath = "/trustagent.session.AgentSessionService/SessionStatus"
+	agentSessionGRPCWatchStatusPath   = "/trustagent.session.AgentSessionService/WatchSessionStatus"
 	agentSessionGRPCClaimSessionPath  = "/trustagent.session.AgentSessionService/ClaimSession"
 	agentSessionGRPCGetCatalogPath    = "/trustagent.session.AgentSessionService/GetCatalog"
 	agentSessionGRPCRenewSessionPath  = "/trustagent.session.AgentSessionService/RenewSession"
@@ -28,7 +29,7 @@ const (
 
 type agentSessionGRPCServer interface {
 	StartSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
-	SessionStatus(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	WatchSessionStatus(*structpb.Struct, grpc.ServerStream) error
 	ClaimSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	GetCatalog(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RenewSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
@@ -98,25 +99,91 @@ func (service *agentSessionGRPCService) StartSession(ctx context.Context, reques
 	}
 	service.server.agentSessions.save(session)
 	return structpb.NewStruct(map[string]interface{}{
-		"session_request_id":    session.ID,
-		"auth_url":              session.AuthURL,
-		"claim_secret":          claimSecret,
-		"status":                session.Status,
-		"expires_at":            session.ExpiresAt.Format(time.RFC3339Nano),
-		"poll_interval_seconds": float64(1),
+		"session_request_id": session.ID,
+		"auth_url":           session.AuthURL,
+		"claim_secret":       claimSecret,
+		"status":             session.Status,
+		"expires_at":         session.ExpiresAt.Format(time.RFC3339Nano),
 	})
 }
 
-func (service *agentSessionGRPCService) SessionStatus(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (service *agentSessionGRPCService) WatchSessionStatus(request *structpb.Struct, stream grpc.ServerStream) error {
+	if service == nil || service.server == nil || service.server.agentSessions == nil {
+		return status.Error(codes.Internal, "agent session service is not initialized")
+	}
+	var sub *events.Subscription
+	if service.server.events != nil {
+		sub = service.server.events.Subscribe(events.TopicAgentSessionUpdated)
+		defer service.server.events.Unsubscribe(sub)
+	}
+	terminal, expiresAt, err := service.sendAgentSessionStatus(stream.Context(), request, stream)
+	if err != nil || terminal {
+		return err
+	}
+	timer := statusExpiryTimer(expiresAt)
+	if timer != nil {
+		defer timer.Stop()
+	}
+	var expiry <-chan time.Time
+	if timer != nil {
+		expiry = timer.C
+	}
+	sessionID := strings.TrimSpace(structFieldString(request, "session_request_id"))
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-expiry:
+			return sendStruct(stream, map[string]interface{}{"status": agentSessionStatusDenied, "reason": "authentication_request_expired"})
+		case evt, ok := <-eventChannel(sub):
+			if !ok {
+				return nil
+			}
+			fields := eventPayloadFields(evt)
+			if strings.TrimSpace(fields["session_id"]) != sessionID {
+				continue
+			}
+			terminal, expiresAt, err = service.sendAgentSessionStatus(stream.Context(), request, stream)
+			if err != nil || terminal {
+				return err
+			}
+			if resetStatusExpiryTimer(timer, expiresAt) {
+				expiry = timer.C
+			}
+		}
+	}
+}
+
+func (service *agentSessionGRPCService) sendAgentSessionStatus(ctx context.Context, request *structpb.Struct, stream grpc.ServerStream) (bool, time.Time, error) {
+	session, payload, err := service.agentSessionStatusPayload(ctx, request)
+	if err != nil {
+		return false, time.Time{}, err
+	}
+	if err := sendStruct(stream, payload); err != nil {
+		return false, time.Time{}, err
+	}
+	return agentSessionStatusTerminal(session.Status), session.ExpiresAt, nil
+}
+
+func (service *agentSessionGRPCService) agentSessionStatusPayload(ctx context.Context, request *structpb.Struct) (*agentSessionTransaction, map[string]interface{}, error) {
 	session, err := service.validatedSessionRequest(ctx, request)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	payload := map[string]interface{}{"status": session.Status}
 	if session.Reason != "" {
 		payload["reason"] = session.Reason
 	}
-	return structpb.NewStruct(payload)
+	return session, payload, nil
+}
+
+func agentSessionStatusTerminal(statusValue string) bool {
+	switch strings.ToUpper(strings.TrimSpace(statusValue)) {
+	case agentSessionStatusReadyToClaim, agentSessionStatusDenied, agentSessionStatusClaimed:
+		return true
+	default:
+		return false
+	}
 }
 
 func (service *agentSessionGRPCService) ClaimSession(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
@@ -511,21 +578,6 @@ func agentSessionStartSessionHandler(srv interface{}, ctx context.Context, decod
 	return interceptor(ctx, request, info, handler)
 }
 
-func agentSessionStatusHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	request := &structpb.Struct{}
-	if err := decoder(request); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(agentSessionGRPCServer).SessionStatus(ctx, request)
-	}
-	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: agentSessionGRPCSessionStatusPath}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(agentSessionGRPCServer).SessionStatus(ctx, req.(*structpb.Struct))
-	}
-	return interceptor(ctx, request, info, handler)
-}
-
 func agentSessionClaimHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	request := &structpb.Struct{}
 	if err := decoder(request); err != nil {
@@ -586,17 +638,26 @@ func agentSessionRevokeHandler(srv interface{}, ctx context.Context, decoder fun
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentSessionWatchStatusHandler(server interface{}, stream grpc.ServerStream) error {
+	request := &structpb.Struct{}
+	if err := stream.RecvMsg(request); err != nil {
+		return err
+	}
+	return server.(agentSessionGRPCServer).WatchSessionStatus(request, stream)
+}
+
 var agentSessionGRPCServiceDesc = grpc.ServiceDesc{
 	ServiceName: agentSessionGRPCServiceName,
 	HandlerType: (*agentSessionGRPCServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{MethodName: "StartSession", Handler: agentSessionStartSessionHandler},
-		{MethodName: "SessionStatus", Handler: agentSessionStatusHandler},
 		{MethodName: "ClaimSession", Handler: agentSessionClaimHandler},
 		{MethodName: "GetCatalog", Handler: agentSessionCatalogHandler},
 		{MethodName: "RenewSession", Handler: agentSessionRenewHandler},
 		{MethodName: "RevokeSession", Handler: agentSessionRevokeHandler},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{StreamName: "WatchSessionStatus", Handler: agentSessionWatchStatusHandler, ServerStreams: true},
+	},
 	Metadata: "trustagent_session.proto",
 }

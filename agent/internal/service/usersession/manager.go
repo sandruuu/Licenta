@@ -40,9 +40,6 @@ func normalizeConfig(config Config) Config {
 	if config.LoginTimeout <= 0 {
 		config.LoginTimeout = DefaultTimeout
 	}
-	if config.LoginPollInterval <= 0 {
-		config.LoginPollInterval = DefaultPollInterval
-	}
 	if config.SessionRenewBefore <= 0 {
 		config.SessionRenewBefore = DefaultSessionRenewBefore
 	}
@@ -65,14 +62,13 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 	manager.mu.Lock()
 	if existing := manager.sessions[key]; existing != nil && existing.state == ipc.UserSessionStateAuthenticating {
 		response := ipc.StartUserLoginInteractiveResponse{
-			Started:             false,
-			AuthURL:             existing.authURL,
-			SessionRequestID:    existing.sessionRequestID,
-			State:               existing.state,
-			Message:             "Authentication is already running",
-			ExpiresAt:           existing.expiresAt,
-			PollIntervalSeconds: int(existing.pollInterval.Seconds()),
-			ReportedAt:          now,
+			Started:          false,
+			AuthURL:          existing.authURL,
+			SessionRequestID: existing.sessionRequestID,
+			State:            existing.state,
+			Message:          "Authentication is already running",
+			ExpiresAt:        existing.expiresAt,
+			ReportedAt:       now,
 		}
 		manager.mu.Unlock()
 		return response, "", nil
@@ -105,10 +101,6 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 	if err := validateStartResponse(start); err != nil {
 		return ipc.StartUserLoginInteractiveResponse{}, ipc.ErrorCodeInvalidRequest, err
 	}
-	pollInterval := start.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = manager.config.LoginPollInterval
-	}
 	sessionCtx, cancel := context.WithCancel(context.Background())
 	state := &sessionState{
 		key:              key,
@@ -118,7 +110,6 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 		claimSecret:      start.ClaimSecret,
 		authURL:          start.AuthURL,
 		expiresAt:        start.ExpiresAt,
-		pollInterval:     pollInterval,
 		message:          "Open your browser to sign in.",
 		cancel:           cancel,
 	}
@@ -134,14 +125,13 @@ func (manager *Manager) StartInteractive(ctx context.Context, peer ipc.PeerIdent
 	go manager.runSession(sessionCtx, client, state, localSIDHash, deviceDataRevision)
 
 	return ipc.StartUserLoginInteractiveResponse{
-		Started:             true,
-		AuthURL:             start.AuthURL,
-		SessionRequestID:    start.SessionRequestID,
-		State:               ipc.UserSessionStateAuthenticating,
-		Message:             "Open your browser to sign in.",
-		ExpiresAt:           start.ExpiresAt,
-		PollIntervalSeconds: int(pollInterval.Seconds()),
-		ReportedAt:          now,
+		Started:          true,
+		AuthURL:          start.AuthURL,
+		SessionRequestID: start.SessionRequestID,
+		State:            ipc.UserSessionStateAuthenticating,
+		Message:          "Open your browser to sign in.",
+		ExpiresAt:        start.ExpiresAt,
+		ReportedAt:       now,
 	}, "", nil
 }
 
@@ -415,34 +405,31 @@ func (manager *Manager) RefreshCatalog(ctx context.Context, sessionID string) er
 }
 
 func (manager *Manager) runSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) {
-	ticker := time.NewTicker(session.pollInterval)
-	defer ticker.Stop()
 	deadline := session.expiresAt
 	if deadline.IsZero() {
 		deadline = manager.clock().UTC().Add(manager.config.LoginTimeout)
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if manager.clock().UTC().After(deadline) {
-				manager.setFailure(session.key, "Authentication request expired")
-				return
-			}
-			if done := manager.pollSession(ctx, client, session, localSIDHash, deviceDataRevision); done {
-				return
-			}
-		}
+	watchCtx, cancel := context.WithDeadline(ctx, deadline.Add(10*time.Second))
+	defer cancel()
+	completed := false
+	err := client.WatchSessionStatus(watchCtx, SessionStatusRequest{
+		SessionRequestID: session.sessionRequestID,
+		ClaimSecret:      session.claimSecret,
+	}, func(status SessionStatusResponse) bool {
+		completed = manager.handleSessionStatus(ctx, client, session, localSIDHash, deviceDataRevision, status)
+		return !completed
+	})
+	if completed || ctx.Err() != nil {
+		return
 	}
+	if err != nil {
+		manager.setFailure(session.key, err.Error())
+		return
+	}
+	manager.setFailure(session.key, "Authentication status stream ended before completion")
 }
 
-func (manager *Manager) pollSession(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string) bool {
-	status, err := client.SessionStatus(ctx, SessionStatusRequest{SessionRequestID: session.sessionRequestID, ClaimSecret: session.claimSecret})
-	if err != nil {
-		manager.setMessage(session.key, "Checking sign-in status...")
-		return false
-	}
+func (manager *Manager) handleSessionStatus(ctx context.Context, client Client, session *sessionState, localSIDHash, deviceDataRevision string, status SessionStatusResponse) bool {
 	switch strings.ToUpper(strings.TrimSpace(status.Status)) {
 	case StatusWaitingForUserLogin:
 		manager.setMessage(session.key, "Sign-in is in progress.")

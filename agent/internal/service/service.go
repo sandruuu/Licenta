@@ -33,12 +33,10 @@ type Config struct {
 	PDPTLSServerName                 string
 	PDPCAFile                        string
 	EnrollmentTimeout                time.Duration
-	EnrollmentPollInterval           time.Duration
 	CertificateRenewBefore           time.Duration
 	CertificateRenewCheckInterval    time.Duration
 	CertificateRenewTimeout          time.Duration
 	LoginTimeout                     time.Duration
-	LoginPollInterval                time.Duration
 	SessionRenewBefore               time.Duration
 	SessionRenewRetryInterval        time.Duration
 	DeviceDataSyncInterval           time.Duration
@@ -144,12 +142,10 @@ const (
 const (
 	defaultDeviceKeyName                    = enrollment.DefaultDeviceKeyName
 	defaultEnrollmentTimeout                = enrollment.DefaultTimeout
-	defaultEnrollmentPollInterval           = enrollment.DefaultPollInterval
 	defaultCertificateRenewBefore           = enrollment.DefaultCertificateRenewBefore
 	defaultCertificateRenewCheckInterval    = enrollment.DefaultCertificateRenewCheckInterval
 	defaultCertificateRenewTimeout          = enrollment.DefaultCertificateRenewTimeout
 	defaultLoginTimeout                     = usersession.DefaultTimeout
-	defaultLoginPollInterval                = usersession.DefaultPollInterval
 	defaultSessionRenewBefore               = usersession.DefaultSessionRenewBefore
 	defaultSessionRenewRetryInterval        = usersession.DefaultSessionRenewRetry
 	defaultDeviceDataSyncInterval           = devicedatasync.DefaultInterval

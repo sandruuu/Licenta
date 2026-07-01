@@ -38,9 +38,6 @@ func normalizeConfig(config Config) Config {
 	if config.EnrollmentTimeout <= 0 {
 		config.EnrollmentTimeout = defaultEnrollmentTimeout
 	}
-	if config.EnrollmentPollInterval <= 0 {
-		config.EnrollmentPollInterval = defaultEnrollmentPollInterval
-	}
 	if config.CertificateRenewBefore <= 0 {
 		config.CertificateRenewBefore = defaultCertificateRenewBefore
 	}
@@ -52,9 +49,6 @@ func normalizeConfig(config Config) Config {
 	}
 	if config.LoginTimeout <= 0 {
 		config.LoginTimeout = defaultLoginTimeout
-	}
-	if config.LoginPollInterval <= 0 {
-		config.LoginPollInterval = defaultLoginPollInterval
 	}
 	if config.SessionRenewBefore <= 0 {
 		config.SessionRenewBefore = defaultSessionRenewBefore
@@ -383,7 +377,6 @@ func enrollmentConfig(config Config) enrollment.Config {
 		PDPTLSServerName:              config.PDPTLSServerName,
 		PDPCAFile:                     config.PDPCAFile,
 		EnrollmentTimeout:             config.EnrollmentTimeout,
-		EnrollmentPollInterval:        config.EnrollmentPollInterval,
 		CertificateRenewBefore:        config.CertificateRenewBefore,
 		CertificateRenewCheckInterval: config.CertificateRenewCheckInterval,
 		CertificateRenewTimeout:       config.CertificateRenewTimeout,
@@ -395,7 +388,6 @@ func enrollmentConfig(config Config) enrollment.Config {
 func userSessionConfig(config Config) usersession.Config {
 	return usersession.Config{
 		LoginTimeout:              config.LoginTimeout,
-		LoginPollInterval:         config.LoginPollInterval,
 		SessionRenewBefore:        config.SessionRenewBefore,
 		SessionRenewRetryInterval: config.SessionRenewRetryInterval,
 		TrustedStepUpHosts:        trustedStepUpHosts(config),

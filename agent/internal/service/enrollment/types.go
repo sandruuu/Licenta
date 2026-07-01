@@ -29,7 +29,6 @@ const (
 const (
 	DefaultDeviceKeyName = "TrustAgentDeviceKey"
 	DefaultTimeout       = 10 * time.Minute
-	DefaultPollInterval  = 3 * time.Second
 
 	DefaultCertificateRenewBefore        = 12 * time.Hour
 	DefaultCertificateRenewCheckInterval = time.Hour
@@ -41,7 +40,6 @@ type Config struct {
 	PDPTLSServerName              string
 	PDPCAFile                     string
 	EnrollmentTimeout             time.Duration
-	EnrollmentPollInterval        time.Duration
 	CertificateRenewBefore        time.Duration
 	CertificateRenewCheckInterval time.Duration
 	CertificateRenewTimeout       time.Duration
@@ -61,7 +59,7 @@ type Dependencies struct {
 
 type Client interface {
 	StartSession(context.Context, EnrollmentStartSessionRequest) (EnrollmentStartSessionResponse, error)
-	SessionStatus(context.Context, EnrollmentSessionStatusRequest) (EnrollmentSessionStatusResponse, error)
+	WatchSessionStatus(context.Context, EnrollmentSessionStatusRequest, func(EnrollmentSessionStatusResponse) bool) error
 	CompleteSession(context.Context, EnrollmentCompleteSessionRequest) (EnrollmentCompleteSessionResponse, error)
 	Close() error
 }
@@ -138,7 +136,6 @@ type EnrollmentStartSessionResponse struct {
 	DeviceChallenge     string
 	PollSecret          string
 	ExpiresAt           time.Time
-	PollInterval        time.Duration
 }
 
 type EnrollmentSessionStatusRequest struct {

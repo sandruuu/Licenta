@@ -9,6 +9,7 @@ import (
 	"time"
 
 	paenrollment "pdp/pa/enrollment"
+	"pdp/pa/events"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -19,13 +20,13 @@ import (
 const (
 	agentEnrollmentGRPCServiceName         = "trustagent.enrollment.EnrollmentService"
 	agentEnrollmentGRPCStartSessionPath    = "/trustagent.enrollment.EnrollmentService/StartSession"
-	agentEnrollmentGRPCSessionStatusPath   = "/trustagent.enrollment.EnrollmentService/SessionStatus"
+	agentEnrollmentGRPCWatchStatusPath     = "/trustagent.enrollment.EnrollmentService/WatchSessionStatus"
 	agentEnrollmentGRPCCompleteSessionPath = "/trustagent.enrollment.EnrollmentService/CompleteSession"
 )
 
 type agentEnrollmentGRPCServer interface {
 	StartSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
-	SessionStatus(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	WatchSessionStatus(*structpb.Struct, grpc.ServerStream) error
 	CompleteSession(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
@@ -63,7 +64,6 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 		"device_challenge":       result.DeviceChallenge,
 		"poll_secret":            result.PollSecret,
 		"expires_at":             result.ExpiresAt.UTC().Format(time.RFC3339Nano),
-		"poll_interval_seconds":  float64(3),
 		"status":                 paenrollment.InteractiveStatusWaitingForIDPDiscovery,
 		"enrollment_flow":        "trustagent-device-enrollment",
 		"browser_transport":      "https",
@@ -72,23 +72,83 @@ func (service *agentEnrollmentGRPCService) StartSession(ctx context.Context, req
 	})
 }
 
-func (service *agentEnrollmentGRPCService) SessionStatus(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (service *agentEnrollmentGRPCService) WatchSessionStatus(request *structpb.Struct, stream grpc.ServerStream) error {
 	if service == nil || service.server == nil || service.server.pa == nil || service.server.pa.Enrollment == nil {
-		return nil, status.Error(codes.Internal, "enrollment service is not initialized")
+		return status.Error(codes.Internal, "enrollment service is not initialized")
 	}
+	var sub *events.Subscription
+	if service.server.events != nil {
+		sub = service.server.events.Subscribe(events.TopicEnrollmentSessionUpdated)
+		defer service.server.events.Unsubscribe(sub)
+	}
+	terminal, expiresAt, err := service.sendEnrollmentStatus(stream.Context(), request, stream)
+	if err != nil || terminal {
+		return err
+	}
+	timer := statusExpiryTimer(expiresAt)
+	if timer != nil {
+		defer timer.Stop()
+	}
+	var expiry <-chan time.Time
+	if timer != nil {
+		expiry = timer.C
+	}
+	sessionID := strings.TrimSpace(structFieldString(request, "enrollment_session_id"))
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-expiry:
+			return sendStruct(stream, map[string]interface{}{"status": paenrollment.InteractiveStatusDenied, "reason": "enrollment_session_expired"})
+		case evt, ok := <-eventChannel(sub):
+			if !ok {
+				return nil
+			}
+			fields := eventPayloadFields(evt)
+			if strings.TrimSpace(fields["session_id"]) != sessionID {
+				continue
+			}
+			terminal, expiresAt, err = service.sendEnrollmentStatus(stream.Context(), request, stream)
+			if err != nil || terminal {
+				return err
+			}
+			if resetStatusExpiryTimer(timer, expiresAt) {
+				expiry = timer.C
+			}
+		}
+	}
+}
+
+func (service *agentEnrollmentGRPCService) sendEnrollmentStatus(ctx context.Context, request *structpb.Struct, stream grpc.ServerStream) (bool, time.Time, error) {
 	result, err := service.server.pa.Enrollment.InteractiveSessionStatus(
 		strings.TrimSpace(structFieldString(request, "enrollment_session_id")),
 		strings.TrimSpace(structFieldString(request, "device_nonce")),
 		strings.TrimSpace(structFieldString(request, "poll_secret")),
 	)
 	if err != nil {
-		return nil, enrollmentGRPCError(err)
+		return false, time.Time{}, enrollmentGRPCError(err)
 	}
 	payload := map[string]interface{}{"status": result.Status}
 	if strings.TrimSpace(result.Reason) != "" {
 		payload["reason"] = result.Reason
 	}
-	return structpb.NewStruct(payload)
+	if err := sendStruct(stream, payload); err != nil {
+		return false, time.Time{}, err
+	}
+	expiresAt := time.Time{}
+	if session, ok := service.server.pa.Enrollment.GetInteractiveSession(strings.TrimSpace(structFieldString(request, "enrollment_session_id"))); ok && session != nil {
+		expiresAt = session.ExpiresAt
+	}
+	return enrollmentStatusTerminal(result.Status), expiresAt, nil
+}
+
+func enrollmentStatusTerminal(statusValue string) bool {
+	switch strings.ToUpper(strings.TrimSpace(statusValue)) {
+	case paenrollment.InteractiveStatusReadyForDeviceProof, paenrollment.InteractiveStatusDenied, paenrollment.InteractiveStatusEnrolled:
+		return true
+	default:
+		return false
+	}
 }
 
 func (service *agentEnrollmentGRPCService) CompleteSession(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
@@ -188,21 +248,6 @@ func agentEnrollmentGRPCStartSessionHandler(srv interface{}, ctx context.Context
 	return interceptor(ctx, request, info, handler)
 }
 
-func agentEnrollmentGRPCSessionStatusHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	request := &structpb.Struct{}
-	if err := decoder(request); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(agentEnrollmentGRPCServer).SessionStatus(ctx, request)
-	}
-	info := &grpc.UnaryServerInfo{Server: srv, FullMethod: agentEnrollmentGRPCSessionStatusPath}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(agentEnrollmentGRPCServer).SessionStatus(ctx, req.(*structpb.Struct))
-	}
-	return interceptor(ctx, request, info, handler)
-}
-
 func agentEnrollmentGRPCCompleteSessionHandler(srv interface{}, ctx context.Context, decoder func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	request := &structpb.Struct{}
 	if err := decoder(request); err != nil {
@@ -218,14 +263,23 @@ func agentEnrollmentGRPCCompleteSessionHandler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, request, info, handler)
 }
 
+func agentEnrollmentGRPCWatchStatusHandler(server interface{}, stream grpc.ServerStream) error {
+	request := &structpb.Struct{}
+	if err := stream.RecvMsg(request); err != nil {
+		return err
+	}
+	return server.(agentEnrollmentGRPCServer).WatchSessionStatus(request, stream)
+}
+
 var agentEnrollmentGRPCServiceDesc = grpc.ServiceDesc{
 	ServiceName: agentEnrollmentGRPCServiceName,
 	HandlerType: (*agentEnrollmentGRPCServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{MethodName: "StartSession", Handler: agentEnrollmentGRPCStartSessionHandler},
-		{MethodName: "SessionStatus", Handler: agentEnrollmentGRPCSessionStatusHandler},
 		{MethodName: "CompleteSession", Handler: agentEnrollmentGRPCCompleteSessionHandler},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{StreamName: "WatchSessionStatus", Handler: agentEnrollmentGRPCWatchStatusHandler, ServerStreams: true},
+	},
 	Metadata: "trustagent_enrollment.proto",
 }

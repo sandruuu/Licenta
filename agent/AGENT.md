@@ -235,7 +235,7 @@ Coduri de eroare IPC:
 `StartEnrollmentInteractive`:
 
 - request body gol;
-- response body: `started`, `auth_url`, `enrollment_session_id`, `state`, `message`, `expires_at`, `poll_interval_seconds`, `reported_at`;
+- response body: `started`, `auth_url`, `enrollment_session_id`, `state`, `message`, `expires_at`, `reported_at`;
 - daca enrollment-ul ruleaza deja, `started=false`, dar raspunsul pastreaza URL-ul si sesiunea curenta;
 - daca device-ul este deja enrolled local, `started=false` si mesajul este `Device is already enrolled`;
 - Tray-ul primeste `auth_url`, dar nu primeste `poll_secret`, `device_nonce`, `device_challenge`, CSR sau cheia privata.
@@ -244,7 +244,7 @@ Coduri de eroare IPC:
 
 - request body gol;
 - necesita peer identity verificata pe named pipe;
-- response body: `started`, `auth_url`, `session_request_id`, `state`, `message`, `expires_at`, `poll_interval_seconds`, `reported_at`;
+- response body: `started`, `auth_url`, `session_request_id`, `state`, `message`, `expires_at`, `reported_at`;
 - daca exista deja o sesiune de login in curs pentru acelasi user local, `started=false` si se refoloseste tranzactia curenta;
 - daca userul este deja autentificat, nu se porneste o noua sesiune;
 - Tray-ul primeste URL-ul, dar nu primeste `claim_secret`, token de sesiune sau catalog brut inainte de claim.
@@ -297,7 +297,6 @@ Configul curent din repository:
   "pdp_tls_server_name": "trust-cloud.dev",
   "pdp_ca_file": "pdp-ca.pem",
   "enrollment_timeout": "10m",
-  "enrollment_poll_interval": "3s",
   "certificate_renew_before": "12h",
   "certificate_renew_check_interval": "1h",
   "certificate_renew_timeout": "20s",
@@ -324,7 +323,6 @@ Campuri citite de `internal/app/config.go`:
 - `pdp_tls_server_name`: SNI/numele asteptat in certificatul TLS al PDP. Este folosit si ca host de incredere pentru URL-uri de step-up.
 - `pdp_ca_file`: CA-ul folosit pentru validarea PDP. Daca lipseste, TLS foloseste root-urile sistemului; daca este setat, fisierul trebuie sa contina certificate PEM valide.
 - `enrollment_timeout`: limita maxima pentru flow-ul interactiv de enrollment; default intern `10m`.
-- `enrollment_poll_interval`: interval fallback de polling catre PDP in timpul enrollment-ului; default intern `3s`. Daca PDP returneaza `poll_interval_seconds`, valoarea PDP poate controla polling-ul sesiunii.
 - `certificate_renew_before`: cat timp inainte de expirarea certificatului agentul incearca renewal; default intern `12h`.
 - `certificate_renew_check_interval`: cat de des ruleaza verificarea periodica de renewal; default intern `1h`.
 - `certificate_renew_timeout`: timeout-ul pentru un apel concret de renewal; default intern `20s`.
@@ -344,10 +342,9 @@ Campuri citite de `internal/app/config.go`:
 
 Campuri care nu sunt citite din JSON in implementarea curenta:
 
-- `login_timeout`;
-- `login_poll_interval`.
+- `login_timeout`.
 
-Exista default-uri interne pentru login in `usersession` (`10m` si `3s`), dar `internal/app/config.go` nu parseaza in prezent aceste doua chei din `config.json`. Daca apar in fisier, sunt ignorate de decoder-ul Go pentru ca structura `configFile` nu le contine.
+Exista default intern pentru login in `usersession` (`10m`), dar `internal/app/config.go` nu parseaza in prezent aceasta cheie din `config.json`. Daca apare in fisier, este ignorata de decoder-ul Go pentru ca structura `configFile` nu o contine.
 
 Configul nu contine `issuer_url`, client OIDC public sau redirect-uri local. Browser login-ul este orchestrat de PDP, iar Tray-ul primeste doar URL-uri HTTPS de browser.
 
@@ -424,7 +421,7 @@ Preflight `Test-AgentConfig.ps1`:
 - cere `pdp_ca_file` si verifica existenta si markerul PEM `BEGIN CERTIFICATE`;
 - poate repara `pdp_ca_file` relativ in cale absoluta cand `-RepairPaths` este activ;
 - cere `tray_timeout` si `dashboard_refresh_interval`;
-- valideaza optional `enrollment_timeout`, `enrollment_poll_interval`, `device_data_sync_interval`, `device_data_sync_change_scan_interval`;
+- valideaza optional `enrollment_timeout`, `device_data_sync_interval`, `device_data_sync_change_scan_interval`;
 - validarea duratelor foloseste sintaxa Go, de exemplu `10s`, `3m`, `1h30m`;
 - cere `local_dns_listen_address` in forma host:port;
 - impune portul DNS `53`, pentru ca Windows NRPT nu poate targeta un port DNS custom;
@@ -667,8 +664,7 @@ Pornire enrollment:
    - `auth_url`;
    - `device_challenge`;
    - `poll_secret`;
-   - `expires_at`;
-   - `poll_interval_seconds`.
+   - `expires_at`.
 10. Serviciul pastreaza secretele si trimite catre Tray doar `auth_url`.
 11. Tray deschide browserul catre URL-ul HTTPS.
 
@@ -706,9 +702,9 @@ Browser si IdP:
 
 Finalizare:
 
-1. Serviciul face polling prin gRPC `SessionStatus` cu `enrollment_session_id`, `device_nonce` si `poll_secret`.
-   - path complet: `/trustagent.enrollment.EnrollmentService/SessionStatus`.
-2. Cand statusul este `READY_FOR_DEVICE_PROOF`, serviciul trimite prin gRPC `CompleteSession`:
+1. Serviciul urmareste starea prin streamul gRPC `WatchSessionStatus` cu `enrollment_session_id`, `device_nonce` si `poll_secret`.
+   - path complet: `/trustagent.enrollment.EnrollmentService/WatchSessionStatus`.
+2. Cand streamul transmite statusul `READY_FOR_DEVICE_PROOF`, serviciul trimite prin gRPC `CompleteSession`:
    - CSR complet;
    - `device_nonce`;
    - `poll_secret`;
@@ -851,7 +847,7 @@ Pornire login:
 8. Requestul include obligatoriu `session_renewal_required=true`; sesiunea agent este intotdeauna gestionata server-side cu `RenewSession`.
 9. PDP nu are incredere in `device_id` din request; identitatea device-ului vine din certificatul mTLS.
 10. PDP creeaza `AgentSessionTransaction` cu status `WAITING_FOR_USER_LOGIN`.
-11. PDP returneaza `auth_url`, `claim_secret`, TTL si poll interval.
+11. PDP returneaza `auth_url`, `claim_secret` si TTL.
 12. Serviciul pastreaza `claim_secret`; Tray primeste doar `auth_url`.
 
 Browser si IdP:
@@ -869,9 +865,9 @@ Browser si IdP:
 
 Claim si catalog:
 
-1. Serviciul face polling prin gRPC `SessionStatus` cu `session_request_id` si `claim_secret`.
-   - path complet: `/trustagent.session.AgentSessionService/SessionStatus`.
-2. Cand statusul este `READY_TO_CLAIM`, serviciul apeleaza `ClaimSession`.
+1. Serviciul urmareste starea prin streamul gRPC `WatchSessionStatus` cu `session_request_id` si `claim_secret`.
+   - path complet: `/trustagent.session.AgentSessionService/WatchSessionStatus`.
+2. Cand streamul transmite statusul `READY_TO_CLAIM`, serviciul apeleaza `ClaimSession`.
    - path complet: `/trustagent.session.AgentSessionService/ClaimSession`.
 3. PDP verifica:
    - sesiunea exista si nu a expirat;
@@ -977,7 +973,7 @@ Mesaje locale din flow-ul de login:
 
 - daca exista deja login in curs pentru acelasi peer local, raspunsul are `started=false` si mesaj `Authentication is already running`;
 - cand login-ul porneste cu succes, mesajul sesiunii este `Open your browser to sign in.`;
-- daca polling-ul catre PDP da eroare tranzitorie, mesajul devine `Checking sign-in status...`;
+- daca streamul de stare catre PDP se inchide inainte de finalizarea autentificarii, autentificarea este marcata ca esuata;
 - pentru status PDP `WAITING_FOR_USER_LOGIN`, mesajul devine `Sign-in is in progress.`;
 - pentru statusuri necunoscute, dar nefinale, mesajul devine `Finalizing sign in...`;
 - daca deadline-ul local expira inainte de claim, eroarea devine `Authentication request expired`;
@@ -1917,7 +1913,7 @@ Tipuri tratate explicit:
 gRPC fara certificat de device, inainte de enrollment:
 
 - `/trustagent.enrollment.EnrollmentService/StartSession`;
-- `/trustagent.enrollment.EnrollmentService/SessionStatus`;
+- `/trustagent.enrollment.EnrollmentService/WatchSessionStatus`;
 - `/trustagent.enrollment.EnrollmentService/CompleteSession`.
 
 HTTP mTLS pentru renewal certificat:
@@ -1927,7 +1923,7 @@ HTTP mTLS pentru renewal certificat:
 gRPC mTLS dupa enrollment:
 
 - `/trustagent.session.AgentSessionService/StartSession`;
-- `/trustagent.session.AgentSessionService/SessionStatus`;
+- `/trustagent.session.AgentSessionService/WatchSessionStatus`;
 - `/trustagent.session.AgentSessionService/ClaimSession`;
 - `/trustagent.session.AgentSessionService/GetCatalog`;
 - `/trustagent.session.AgentSessionService/RenewSession`;
@@ -1971,7 +1967,7 @@ Functii si metode exportate:
 
 Constante, statusuri si valori exportate/importante:
 
-- `Caption`, `CodeAuthInvalid`, `CodeAuthRequired`, `CodeBadRequest`, `CodeDNSNotFound`, `CodeDNSResolveFailed`, `CodeInternalError`, `CodeOK`, `CodePolicyDenied`, `CodeRateLimited`, `CodeResourceUnavailable`, `CodeResourceUnknown`, `CodeRiskDenied`, `CodeSessionExpired`, `CodeSessionInvalid`, `CodeSessionStoreUnavailable`, `CodeStepUpRequired`, `CodeTrustCloudUnreachable`, `DecisionAllow`, `DecisionDeny`, `DecisionStepUpRequired`, `DefaultCallTimeout`, `DefaultCertificateRenewBefore`, `DefaultCertificateRenewCheckInterval`, `DefaultCertificateRenewTimeout`, `DefaultCGNATCIDR`, `DefaultChangeScanInterval`, `DefaultDeviceKeyName`, `DefaultDevicePath`, `DefaultExpiryRevokeLead`, `DefaultExpiryRevokeTimeout`, `DefaultInterval`, `DefaultPollInterval`, `DefaultProxyListenAddress`, `DefaultTimeout`, `DeviceDataStatusCritical`, `DeviceDataStatusGood`, `DeviceDataStatusUnavailable`, `DeviceDataStatusWarning`, `ErrorCodeInternal`, `ErrorCodeInvalidRequest`, `ErrorCodeServiceUnavailable`, `ErrorCodeUnsupported`, `ErrPoolExhausted`, `ErrResourceNotInCatalog`, `ProofType`, `ProtocolMaxClientVersion`, `ProtocolMinClientVersion`, `ServiceDescription`, `ServiceDisplayName`, `ServiceName`, `StatusClaimed`, `StatusCritical`, `StatusDegraded`, `StatusDenied`, `StatusDisabled`, `StatusDriverMissing`, `StatusError`, `StatusGood`, `StatusReady`, `StatusReadyForDeviceProof`, `StatusReadyToClaim`, `StatusStarting`, `StatusStopped`, `StatusUnavailable`, `StatusWaiting`, `StatusWaitingForIDPDiscovery`, `StatusWaitingForUserLogin`, `StatusWarning`, `TypeAccessRevoked`, `TypeCatalogInvalidated`, `UserSessionStateAuthenticated`, `UserSessionStateAuthenticating`, `UserSessionStateFailed`, `UserSessionStateSignedOut`.
+- `Caption`, `CodeAuthInvalid`, `CodeAuthRequired`, `CodeBadRequest`, `CodeDNSNotFound`, `CodeDNSResolveFailed`, `CodeInternalError`, `CodeOK`, `CodePolicyDenied`, `CodeRateLimited`, `CodeResourceUnavailable`, `CodeResourceUnknown`, `CodeRiskDenied`, `CodeSessionExpired`, `CodeSessionInvalid`, `CodeSessionStoreUnavailable`, `CodeStepUpRequired`, `CodeTrustCloudUnreachable`, `DecisionAllow`, `DecisionDeny`, `DecisionStepUpRequired`, `DefaultCallTimeout`, `DefaultCertificateRenewBefore`, `DefaultCertificateRenewCheckInterval`, `DefaultCertificateRenewTimeout`, `DefaultCGNATCIDR`, `DefaultChangeScanInterval`, `DefaultDeviceKeyName`, `DefaultDevicePath`, `DefaultExpiryRevokeLead`, `DefaultExpiryRevokeTimeout`, `DefaultInterval`, `DefaultProxyListenAddress`, `DefaultTimeout`, `DeviceDataStatusCritical`, `DeviceDataStatusGood`, `DeviceDataStatusUnavailable`, `DeviceDataStatusWarning`, `ErrorCodeInternal`, `ErrorCodeInvalidRequest`, `ErrorCodeServiceUnavailable`, `ErrorCodeUnsupported`, `ErrPoolExhausted`, `ErrResourceNotInCatalog`, `ProofType`, `ProtocolMaxClientVersion`, `ProtocolMinClientVersion`, `ServiceDescription`, `ServiceDisplayName`, `ServiceName`, `StatusClaimed`, `StatusCritical`, `StatusDegraded`, `StatusDenied`, `StatusDisabled`, `StatusDriverMissing`, `StatusError`, `StatusGood`, `StatusReady`, `StatusReadyForDeviceProof`, `StatusReadyToClaim`, `StatusStarting`, `StatusStopped`, `StatusUnavailable`, `StatusWaiting`, `StatusWaitingForIDPDiscovery`, `StatusWaitingForUserLogin`, `StatusWarning`, `TypeAccessRevoked`, `TypeCatalogInvalidated`, `UserSessionStateAuthenticated`, `UserSessionStateAuthenticating`, `UserSessionStateFailed`, `UserSessionStateSignedOut`.
 
 Literaluri si API-uri Windows importante:
 
@@ -2035,8 +2031,7 @@ nrptNamesFromCatalog, nrptNameValue, numberField, openLocalMachineMyStore,
 openNCryptSigner, openNCryptSignerWithProvider, operatingSystemCheck,
 optionalConfigDuration, originFromURL, parseECDSAPublicBlob,
 passwordLockCheck, pathOrDefault, pauseProtectedResourcesFromRemoteEvent,
-pdpClientConfig, peerIdentityForConnection, pollEnrollmentSession,
-pollSession, powerShellString, processImagePath, protectedResourcesConfig,
+pdpClientConfig, peerIdentityForConnection, powerShellString, processImagePath, protectedResourcesConfig,
 protocolName, protocolNumber, queryRedirectContextFromSocket, randomURLToken,
 readFileConfig, recordAuthenticationRequired, recordResourceAllowed,
 recordResourceDenied, recordStepUpRequired, recordStream,

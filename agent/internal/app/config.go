@@ -21,7 +21,6 @@ type configFile struct {
 	PDPTLSServerName                 string `json:"pdp_tls_server_name,omitempty"`
 	PDPCAFile                        string `json:"pdp_ca_file,omitempty"`
 	EnrollmentTimeout                string `json:"enrollment_timeout,omitempty"`
-	EnrollmentPollInterval           string `json:"enrollment_poll_interval,omitempty"`
 	CertificateRenewBefore           string `json:"certificate_renew_before,omitempty"`
 	CertificateRenewCheckInterval    string `json:"certificate_renew_check_interval,omitempty"`
 	CertificateRenewTimeout          string `json:"certificate_renew_timeout,omitempty"`
@@ -78,9 +77,6 @@ func applyServiceConfig(options ServiceConfig, config configFile) (ServiceConfig
 		options.WFPFailClosed = *config.WFPFailClosed
 	}
 	if options.EnrollmentTimeout, err = optionalConfigDuration("enrollment_timeout", config.EnrollmentTimeout); err != nil {
-		return options, err
-	}
-	if options.EnrollmentPollInterval, err = optionalConfigDuration("enrollment_poll_interval", config.EnrollmentPollInterval); err != nil {
 		return options, err
 	}
 	if options.CertificateRenewBefore, err = optionalConfigDuration("certificate_renew_before", config.CertificateRenewBefore); err != nil {

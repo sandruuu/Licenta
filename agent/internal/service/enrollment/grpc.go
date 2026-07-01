@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"strconv"
+	"io"
 	"strings"
 	"time"
 
@@ -17,7 +17,7 @@ import (
 const (
 	enrollmentGRPCServiceName         = "trustagent.enrollment.EnrollmentService"
 	enrollmentGRPCStartSessionPath    = "/" + enrollmentGRPCServiceName + "/StartSession"
-	enrollmentGRPCSessionStatusPath   = "/" + enrollmentGRPCServiceName + "/SessionStatus"
+	enrollmentGRPCWatchStatusPath     = "/" + enrollmentGRPCServiceName + "/WatchSessionStatus"
 	enrollmentGRPCCompleteSessionPath = "/" + enrollmentGRPCServiceName + "/CompleteSession"
 )
 
@@ -60,25 +60,44 @@ func (client *GRPCEnrollmentClient) StartSession(ctx context.Context, request En
 		DeviceChallenge:     stringField(fields, "device_challenge"),
 		PollSecret:          stringField(fields, "poll_secret"),
 		ExpiresAt:           timeField(fields, "expires_at"),
-		PollInterval:        secondsField(fields, "poll_interval_seconds"),
 	}, nil
 }
 
-func (client *GRPCEnrollmentClient) SessionStatus(ctx context.Context, request EnrollmentSessionStatusRequest) (EnrollmentSessionStatusResponse, error) {
+func (client *GRPCEnrollmentClient) WatchSessionStatus(ctx context.Context, request EnrollmentSessionStatusRequest, handler func(EnrollmentSessionStatusResponse) bool) error {
+	if handler == nil {
+		return fmt.Errorf("enrollment status handler is required")
+	}
 	payload, err := structpb.NewStruct(map[string]any{
 		"enrollment_session_id": request.EnrollmentSessionID,
 		"device_nonce":          request.DeviceNonce,
 		"poll_secret":           request.PollSecret,
 	})
 	if err != nil {
-		return EnrollmentSessionStatusResponse{}, err
+		return err
 	}
-	var response structpb.Struct
-	if err := client.connection.Invoke(ctx, enrollmentGRPCSessionStatusPath, payload, &response); err != nil {
-		return EnrollmentSessionStatusResponse{}, err
+	stream, err := client.connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, enrollmentGRPCWatchStatusPath)
+	if err != nil {
+		return err
 	}
-	fields := response.AsMap()
-	return EnrollmentSessionStatusResponse{Status: stringField(fields, "status"), Reason: stringField(fields, "reason", "message")}, nil
+	if err := stream.SendMsg(payload); err != nil {
+		return err
+	}
+	if err := stream.CloseSend(); err != nil {
+		return err
+	}
+	for {
+		message := &structpb.Struct{}
+		if err := stream.RecvMsg(message); err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+		fields := message.AsMap()
+		if !handler(EnrollmentSessionStatusResponse{Status: stringField(fields, "status"), Reason: stringField(fields, "reason", "message")}) {
+			return nil
+		}
+	}
 }
 
 func (client *GRPCEnrollmentClient) CompleteSession(ctx context.Context, request EnrollmentCompleteSessionRequest) (EnrollmentCompleteSessionResponse, error) {
@@ -142,23 +161,4 @@ func timeField(fields map[string]any, name string) time.Time {
 		return time.Time{}
 	}
 	return parsed.UTC()
-}
-
-func secondsField(fields map[string]any, name string) time.Duration {
-	value, ok := fields[name]
-	if !ok {
-		return 0
-	}
-	switch typed := value.(type) {
-	case float64:
-		return time.Duration(typed * float64(time.Second))
-	case int:
-		return time.Duration(typed) * time.Second
-	case string:
-		seconds, err := strconv.Atoi(strings.TrimSpace(typed))
-		if err == nil {
-			return time.Duration(seconds) * time.Second
-		}
-	}
-	return 0
 }

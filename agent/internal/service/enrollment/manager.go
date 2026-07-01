@@ -58,9 +58,6 @@ func normalizeConfig(config Config) Config {
 	if config.EnrollmentTimeout <= 0 {
 		config.EnrollmentTimeout = DefaultTimeout
 	}
-	if config.EnrollmentPollInterval <= 0 {
-		config.EnrollmentPollInterval = DefaultPollInterval
-	}
 	if config.CertificateRenewBefore <= 0 {
 		config.CertificateRenewBefore = DefaultCertificateRenewBefore
 	}
@@ -187,7 +184,6 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 			State:               manager.enrollment.State,
 			Message:             "Enrollment is already running",
 			ExpiresAt:           manager.enrollment.ExpiresAt,
-			PollIntervalSeconds: int(manager.config.EnrollmentPollInterval.Seconds()),
 			ReportedAt:          now,
 		}
 		manager.mu.Unlock()
@@ -243,10 +239,6 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 		return ipc.StartEnrollmentInteractiveResponse{}, ipc.ErrorCodeInvalidRequest, err
 	}
 
-	pollInterval := startResponse.PollInterval
-	if pollInterval <= 0 {
-		pollInterval = manager.config.EnrollmentPollInterval
-	}
 	enrollmentCtx, cancel := context.WithCancel(context.Background())
 	manager.mu.Lock()
 	if manager.enrollmentCancel != nil {
@@ -269,7 +261,6 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 		PollSecret:          startResponse.PollSecret,
 		AuthURL:             startResponse.AuthURL,
 		ExpiresAt:           startResponse.ExpiresAt,
-		PollInterval:        pollInterval,
 	}
 	go manager.runEnrollmentSession(enrollmentCtx, client, session)
 
@@ -280,7 +271,6 @@ func (manager *Manager) StartInteractive(ctx context.Context) (ipc.StartEnrollme
 		State:               ipc.EnrollmentStateEnrolling,
 		Message:             "Open your browser to enroll this device.",
 		ExpiresAt:           startResponse.ExpiresAt,
-		PollIntervalSeconds: int(pollInterval.Seconds()),
 		ReportedAt:          now,
 	}, "", nil
 }
@@ -292,7 +282,6 @@ type enrollmentSession struct {
 	PollSecret          string
 	AuthURL             string
 	ExpiresAt           time.Time
-	PollInterval        time.Duration
 }
 
 func validateStartSessionResponse(response EnrollmentStartSessionResponse) error {
@@ -315,38 +304,32 @@ func validateStartSessionResponse(response EnrollmentStartSessionResponse) error
 }
 
 func (manager *Manager) runEnrollmentSession(ctx context.Context, client Client, session enrollmentSession) {
-	ticker := time.NewTicker(session.PollInterval)
-	defer ticker.Stop()
 	deadline := session.ExpiresAt
 	if deadline.IsZero() {
 		deadline = manager.clock().UTC().Add(manager.config.EnrollmentTimeout)
 	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if manager.clock().UTC().After(deadline) {
-				manager.setEnrollmentFailure(fmt.Errorf("enrollment session expired"))
-				return
-			}
-			if done := manager.pollEnrollmentSession(ctx, client, session); done {
-				return
-			}
-		}
-	}
-}
-
-func (manager *Manager) pollEnrollmentSession(ctx context.Context, client Client, session enrollmentSession) bool {
-	status, err := client.SessionStatus(ctx, EnrollmentSessionStatusRequest{
+	watchCtx, cancel := context.WithDeadline(ctx, deadline.Add(10*time.Second))
+	defer cancel()
+	completed := false
+	err := client.WatchSessionStatus(watchCtx, EnrollmentSessionStatusRequest{
 		EnrollmentSessionID: session.EnrollmentSessionID,
 		DeviceNonce:         session.CSR.DeviceNonce,
 		PollSecret:          session.PollSecret,
+	}, func(status EnrollmentSessionStatusResponse) bool {
+		completed = manager.handleEnrollmentStatus(ctx, client, session, status)
+		return !completed
 	})
-	if err != nil {
-		manager.setEnrollmentMessage("Checking enrollment status...")
-		return false
+	if completed || ctx.Err() != nil {
+		return
 	}
+	if err != nil {
+		manager.setEnrollmentFailure(err)
+		return
+	}
+	manager.setEnrollmentFailure(fmt.Errorf("enrollment status stream ended before completion"))
+}
+
+func (manager *Manager) handleEnrollmentStatus(ctx context.Context, client Client, session enrollmentSession, status EnrollmentSessionStatusResponse) bool {
 	switch strings.ToUpper(strings.TrimSpace(status.Status)) {
 	case StatusWaitingForIDPDiscovery:
 		return false

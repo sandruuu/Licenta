@@ -150,7 +150,6 @@ func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T
 			DeviceChallenge:     "device-challenge",
 			PollSecret:          "poll-secret",
 			ExpiresAt:           now.Add(time.Minute),
-			PollInterval:        10 * time.Millisecond,
 		},
 		statuses: []enrollment.EnrollmentSessionStatusResponse{{Status: enrollment.StatusReadyForDeviceProof}},
 		complete: enrollment.EnrollmentCompleteSessionResponse{
@@ -162,7 +161,7 @@ func TestServiceStartsInteractiveEnrollmentAndCompletesInBackground(t *testing.T
 			PDPEndpoint:           "https://pdp.example.com",
 		},
 	}
-	service := New(Config{EnrollmentPollInterval: 10 * time.Millisecond, EnrollmentTimeout: time.Minute}, Dependencies{
+	service := New(Config{EnrollmentTimeout: time.Minute}, Dependencies{
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:            func() time.Time { return now },
 		EnrollmentClient: client,
@@ -221,7 +220,7 @@ func TestServiceDoesNotStartInteractiveEnrollmentWhenAlreadyEnrolled(t *testing.
 			ExpiresAt:           now.Add(time.Minute),
 		},
 	}
-	service := New(Config{EnrollmentPollInterval: 10 * time.Millisecond, EnrollmentTimeout: time.Minute}, Dependencies{
+	service := New(Config{EnrollmentTimeout: time.Minute}, Dependencies{
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:            func() time.Time { return now },
 		EnrollmentClient: client,
@@ -267,7 +266,6 @@ func TestServiceReportsDeviceDataAfterUserAuthentication(t *testing.T) {
 			DeviceChallenge:     "device-challenge",
 			PollSecret:          "poll-secret",
 			ExpiresAt:           now.Add(time.Minute),
-			PollInterval:        10 * time.Millisecond,
 		},
 		statuses: []enrollment.EnrollmentSessionStatusResponse{{Status: enrollment.StatusReadyForDeviceProof}},
 		complete: enrollment.EnrollmentCompleteSessionResponse{
@@ -279,9 +277,7 @@ func TestServiceReportsDeviceDataAfterUserAuthentication(t *testing.T) {
 	}
 	sessionClient := authenticatedFakeUserSessionClient(now)
 	service := New(Config{
-		EnrollmentPollInterval:           10 * time.Millisecond,
 		EnrollmentTimeout:                time.Minute,
-		LoginPollInterval:                10 * time.Millisecond,
 		LoginTimeout:                     time.Minute,
 		DeviceDataSyncInterval:           30 * time.Minute,
 		DeviceDataSyncChangeScanInterval: time.Hour,
@@ -552,7 +548,6 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
-			PollInterval:     10 * time.Millisecond,
 			Status:           usersession.StatusWaitingForUserLogin,
 		},
 		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
@@ -581,7 +576,7 @@ func TestServiceStartsUserLoginAndLoadsCatalog(t *testing.T) {
 	collector := &sequenceDeviceDataCollector{reports: []ipc.DeviceDataReport{
 		testDeviceDataReport(now, ipc.DeviceDataStatusCritical),
 	}}
-	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+	service := New(Config{LoginTimeout: time.Minute}, Dependencies{
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:               func() time.Time { return now },
 		EnrollmentStore:     store,
@@ -672,7 +667,7 @@ func TestServiceWaitsForDeviceDataReportBeforeApplyingCatalog(t *testing.T) {
 		reportRelease: reportRelease,
 	}
 	protectedResources := &fakeProtectedResources{}
-	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+	service := New(Config{LoginTimeout: time.Minute}, Dependencies{
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:               func() time.Time { return now },
 		EnrollmentStore:     store,
@@ -735,7 +730,6 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
-			PollInterval:     10 * time.Millisecond,
 		},
 		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
 		claim: usersession.ClaimSessionResponse{
@@ -769,7 +763,7 @@ func TestServicePausesAndRestoresProtectedResourcesOnLocalPostureChange(t *testi
 		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusCritical),
 		testDeviceDataReport(now.Add(time.Second), ipc.DeviceDataStatusGood),
 	}}
-	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+	service := New(Config{LoginTimeout: time.Minute}, Dependencies{
 		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:               func() time.Time { return now },
 		EnrollmentStore:     store,
@@ -842,7 +836,6 @@ func TestServiceLogoutRevokesSessionAndClearsCatalog(t *testing.T) {
 			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
-			PollInterval:     10 * time.Millisecond,
 			Status:           usersession.StatusWaitingForUserLogin,
 		},
 		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
@@ -866,7 +859,7 @@ func TestServiceLogoutRevokesSessionAndClearsCatalog(t *testing.T) {
 		},
 	}
 	protectedResources := &fakeProtectedResources{}
-	service := New(Config{LoginPollInterval: 10 * time.Millisecond, LoginTimeout: time.Minute}, Dependencies{
+	service := New(Config{LoginTimeout: time.Minute}, Dependencies{
 		Logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Clock:              func() time.Time { return now },
 		EnrollmentStore:    store,
@@ -1220,7 +1213,6 @@ func authenticatedFakeUserSessionClient(now time.Time) *fakeUserSessionClient {
 			AuthURL:          "https://pdp.example.com/sign-in/srq_123",
 			ClaimSecret:      "claim-secret",
 			ExpiresAt:        now.Add(time.Minute),
-			PollInterval:     10 * time.Millisecond,
 			Status:           usersession.StatusWaitingForUserLogin,
 		},
 		statuses: []usersession.SessionStatusResponse{{Status: usersession.StatusReadyToClaim}},
@@ -1270,13 +1262,19 @@ func (client *fakeEnrollmentClient) StartSession(context.Context, enrollment.Enr
 	return client.start, nil
 }
 
-func (client *fakeEnrollmentClient) SessionStatus(context.Context, enrollment.EnrollmentSessionStatusRequest) (enrollment.EnrollmentSessionStatusResponse, error) {
+func (client *fakeEnrollmentClient) WatchSessionStatus(_ context.Context, _ enrollment.EnrollmentSessionStatusRequest, handler func(enrollment.EnrollmentSessionStatusResponse) bool) error {
 	if len(client.statuses) == 0 {
-		return enrollment.EnrollmentSessionStatusResponse{Status: enrollment.StatusWaitingForUserLogin}, nil
+		handler(enrollment.EnrollmentSessionStatusResponse{Status: enrollment.StatusWaitingForUserLogin})
+		return nil
 	}
-	next := client.statuses[0]
-	client.statuses = client.statuses[1:]
-	return next, nil
+	for len(client.statuses) > 0 {
+		next := client.statuses[0]
+		client.statuses = client.statuses[1:]
+		if !handler(next) {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (client *fakeEnrollmentClient) CompleteSession(context.Context, enrollment.EnrollmentCompleteSessionRequest) (enrollment.EnrollmentCompleteSessionResponse, error) {
@@ -1298,13 +1296,19 @@ func (client *fakeUserSessionClient) StartSession(context.Context, usersession.S
 	return client.start, nil
 }
 
-func (client *fakeUserSessionClient) SessionStatus(context.Context, usersession.SessionStatusRequest) (usersession.SessionStatusResponse, error) {
+func (client *fakeUserSessionClient) WatchSessionStatus(_ context.Context, _ usersession.SessionStatusRequest, handler func(usersession.SessionStatusResponse) bool) error {
 	if len(client.statuses) == 0 {
-		return usersession.SessionStatusResponse{Status: usersession.StatusWaitingForUserLogin}, nil
+		handler(usersession.SessionStatusResponse{Status: usersession.StatusWaitingForUserLogin})
+		return nil
 	}
-	next := client.statuses[0]
-	client.statuses = client.statuses[1:]
-	return next, nil
+	for len(client.statuses) > 0 {
+		next := client.statuses[0]
+		client.statuses = client.statuses[1:]
+		if !handler(next) {
+			return nil
+		}
+	}
+	return nil
 }
 
 func (client *fakeUserSessionClient) ClaimSession(context.Context, usersession.ClaimSessionRequest) (usersession.ClaimSessionResponse, error) {

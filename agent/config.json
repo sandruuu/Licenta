@@ -5,7 +5,6 @@
   "pdp_tls_server_name": "trust-cloud.dev",
   "pdp_ca_file": "pdp-ca.pem",
   "enrollment_timeout": "10m",
-  "enrollment_poll_interval": "3s",
   "certificate_renew_before": "12h",
   "certificate_renew_check_interval": "1h",
   "certificate_renew_timeout": "20s",
