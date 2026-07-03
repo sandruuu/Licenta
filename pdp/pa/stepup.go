@@ -100,17 +100,8 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 	if manager == nil || manager.state == nil {
 		return nil, fmt.Errorf("step-up manager is unavailable")
 	}
-	if strings.TrimSpace(req.AgentSessionID) == "" {
-		return nil, fmt.Errorf("agent session id is required")
-	}
-	if strings.TrimSpace(req.UserID) == "" {
-		return nil, fmt.Errorf("user id is required")
-	}
-	if strings.TrimSpace(req.DeviceID) == "" {
-		return nil, fmt.Errorf("device id is required")
-	}
-	if strings.TrimSpace(req.ResourceID) == "" {
-		return nil, fmt.Errorf("resource id is required")
+	if err := validateStepUpChallengeRequest(req); err != nil {
+		return nil, err
 	}
 	requirement := req.Requirement
 	if requirement == nil {
@@ -159,6 +150,24 @@ func (manager *StepUpManager) CreateChallenge(req StepUpChallengeRequest) (*Step
 		return nil, err
 	}
 	return cloneStepUpChallenge(challenge), nil
+}
+
+func validateStepUpChallengeRequest(req StepUpChallengeRequest) error {
+	required := []struct {
+		name  string
+		value string
+	}{
+		{name: "agent session id", value: req.AgentSessionID},
+		{name: "user id", value: req.UserID},
+		{name: "device id", value: req.DeviceID},
+		{name: "resource id", value: req.ResourceID},
+	}
+	for _, field := range required {
+		if strings.TrimSpace(field.value) == "" {
+			return fmt.Errorf("%s is required", field.name)
+		}
+	}
+	return nil
 }
 
 func (manager *StepUpManager) AuthContext(agentSessionID, userID, deviceID, resourceID string, now time.Time) models.AuthContext {

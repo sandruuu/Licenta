@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -34,6 +33,8 @@ const (
 
 	// TOTPSkew allows codes from adjacent time steps (±1) to compensate for clock drift
 	TOTPSkew = 1
+
+	totpModulus = 1000000
 )
 
 // GenerateTOTPSecret generates a new random TOTP secret (base32-encoded)
@@ -48,31 +49,29 @@ func GenerateTOTPSecret() (string, error) {
 	return encoded, nil
 }
 
-// GenerateTOTPCode generates a TOTP code for the given secret and time
+// GenerateTOTPCode generates a TOTP code for the given secret and time.
 func GenerateTOTPCode(secret string, t time.Time) (string, error) {
-	// Decode the base32 secret
 	key, err := decodeSecret(secret)
 	if err != nil {
 		return "", fmt.Errorf("decode secret: %w", err)
 	}
 
-	// Calculate the time counter (number of time steps since Unix epoch)
 	counter := uint64(t.Unix()) / TOTPPeriod
-
-	// Generate HOTP value using HMAC-SHA1
-	code := generateHOTP(key, counter)
-
-	// Format to 6 digits with leading zeros
+	code := generateTOTPValue(key, counter)
 	return fmt.Sprintf("%0*d", TOTPDigits, code), nil
 }
 
-// ValidateTOTPCode validates a TOTP code against a secret, allowing for clock skew
+// ValidateTOTPCode validates a TOTP code against a secret, allowing for clock skew.
 func ValidateTOTPCode(secret, code string) (bool, error) {
-	valid, _, err := ValidateTOTPCodeWithCounter(secret, code, time.Now())
+	valid, _, err := validateTOTPCodeAtTime(secret, code, time.Now())
 	return valid, err
 }
 
 func ValidateTOTPCodeWithCounter(secret, code string, now time.Time) (bool, int64, error) {
+	return validateTOTPCodeAtTime(secret, code, now)
+}
+
+func validateTOTPCodeAtTime(secret, code string, now time.Time) (bool, int64, error) {
 	code = strings.TrimSpace(code)
 	if len(code) != TOTPDigits {
 		return false, 0, nil
@@ -80,24 +79,28 @@ func ValidateTOTPCodeWithCounter(secret, code string, now time.Time) (bool, int6
 	if now.IsZero() {
 		now = time.Now()
 	}
+	key, err := decodeSecret(secret)
+	if err != nil {
+		return false, 0, fmt.Errorf("decode secret: %w", err)
+	}
 
-	// Check current time step and adjacent steps (to handle clock drift)
 	baseCounter := now.Unix() / TOTPPeriod
 	for i := -TOTPSkew; i <= TOTPSkew; i++ {
 		counter := baseCounter + int64(i)
 		if counter < 0 {
 			continue
 		}
-		expected, err := GenerateTOTPCode(secret, time.Unix(counter*TOTPPeriod, 0))
-		if err != nil {
-			return false, 0, err
-		}
-		if hmac.Equal([]byte(expected), []byte(code)) {
+		if validTOTPCodeForCounter(key, code, uint64(counter)) {
 			return true, counter, nil
 		}
 	}
 
 	return false, 0, nil
+}
+
+func validTOTPCodeForCounter(key []byte, code string, counter uint64) bool {
+	expected := fmt.Sprintf("%0*d", TOTPDigits, generateTOTPValue(key, counter))
+	return hmac.Equal([]byte(expected), []byte(code))
 }
 
 // BuildTOTPURI constructs an otpauth:// URI for QR code generation
@@ -122,9 +125,7 @@ func BuildTOTPQRCodeImage(uri string) (string, error) {
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
 }
 
-// generateHOTP implements HOTP (RFC 4226) using HMAC-SHA1
-func generateHOTP(key []byte, counter uint64) int {
-	// Step 1: Generate HMAC-SHA1 value
+func generateTOTPValue(key []byte, counter uint64) int {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, counter)
 
@@ -132,17 +133,9 @@ func generateHOTP(key []byte, counter uint64) int {
 	mac.Write(buf)
 	hash := mac.Sum(nil)
 
-	// Step 2: Dynamic truncation
-	// Use the last nibble of the hash to determine the offset
 	offset := hash[len(hash)-1] & 0x0f
-
-	// Extract 4 bytes starting at the offset
 	truncated := binary.BigEndian.Uint32(hash[offset:offset+4]) & 0x7fffffff
-
-	// Step 3: Compute TOTP code as truncated value mod 10^digits
-	code := int(truncated % uint32(math.Pow10(TOTPDigits)))
-
-	return code
+	return int(truncated % totpModulus)
 }
 
 // decodeSecret decodes a base32-encoded TOTP secret
