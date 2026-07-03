@@ -3,6 +3,7 @@ package agentevents
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 const (
@@ -18,6 +19,7 @@ type WatchRequest struct {
 
 type Event struct {
 	Type           string
+	Time           time.Time
 	Message        string
 	Reason         string
 	SessionID      string

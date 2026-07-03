@@ -135,12 +135,13 @@ func (service *Service) handleAgentEvent(ctx context.Context, session usersessio
 				return false
 			}
 		}
-		service.userSessions.SetAuthenticatedMessage(message)
+		service.userSessions.SetAuthenticatedMessageAt(message, event.Time)
 		if strings.EqualFold(strings.TrimSpace(event.Reason), "device_posture_changed") {
 			service.pauseProtectedResourcesFromRemoteEvent(ctx, message)
 		}
 		return true
 	case agentevents.TypeCatalogInvalidated:
+		message := firstNonEmptyServiceString(event.Message, "Protected resource access changed.")
 		if err := service.userSessions.RefreshCatalog(ctx, firstNonEmptyServiceString(event.SessionID, session.AgentSessionID)); err != nil {
 			if code := status.Code(err); code == codes.Unauthenticated || code == codes.PermissionDenied {
 				service.userSessions.RevokeRemote(context.Background(), session.AgentSessionID, "Your session is no longer valid. Sign in again to access protected resources.")
@@ -148,12 +149,14 @@ func (service *Service) handleAgentEvent(ctx context.Context, session usersessio
 			}
 			service.logger.Warn("failed to refresh protected resource catalog after PDP event", "session_id", session.AgentSessionID, "reason", event.Reason, "error", err)
 		}
+		service.userSessions.SetAuthenticatedMessageAt(message, event.Time)
 		return true
 	case agentevents.TypeStepUpCompleted:
-		service.userSessions.MarkAuthenticatedStepUpCompleted(
+		service.userSessions.MarkAuthenticatedStepUpCompletedAt(
 			firstNonEmptyServiceString(event.SessionID, session.AgentSessionID),
 			event.ResourceID,
 			"",
+			event.Time,
 		)
 		return true
 	default:

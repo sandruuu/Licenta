@@ -2,6 +2,7 @@ package transport
 
 import (
 	"testing"
+	"time"
 
 	"pdp/pa/auth"
 	"pdp/pa/events"
@@ -91,6 +92,7 @@ func TestAgentEventStreamPublishesStepUpCompletionForMatchingSession(t *testing.
 
 	payload, ok := service.agentEventForClaims(events.Event{
 		Type: events.TopicStepUpCompleted,
+		Time: time.Date(2026, 6, 29, 13, 22, 26, 865538204, time.UTC),
 		Payload: map[string]string{
 			"session_id":      "agent-session-1",
 			"user_id":         "user-1",
@@ -104,6 +106,9 @@ func TestAgentEventStreamPublishesStepUpCompletionForMatchingSession(t *testing.
 	}
 	if payload["type"] != agentEventStepUpCompleted || payload["resource_id"] != "res-1" {
 		t.Fatalf("payload = %+v", payload)
+	}
+	if payload["event_time"] != "2026-06-29T13:22:26.865538204Z" {
+		t.Fatalf("event_time = %v", payload["event_time"])
 	}
 
 	if _, ok := service.agentEventForClaims(events.Event{

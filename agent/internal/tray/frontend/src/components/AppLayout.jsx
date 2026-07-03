@@ -40,6 +40,7 @@ function AppLayout({
   const userSessionState = String(userSession.state || 'SIGNED_OUT').toUpperCase();
   const authenticated = userSessionState === 'AUTHENTICATED';
   const stepUpURL = userSession.step_up_url || '';
+  const sessionMessageAt = notificationTimestamp(userSession.message_at || userSession.messageAt);
   const stepUpMessage = stepUpURL ? formatStepUpToastMessage(userSession.message) : '';
   const sessionMessage = authenticated && !stepUpURL && isDisplayableSessionMessage(userSession.message)
     ? userSession.message
@@ -88,13 +89,14 @@ function AppLayout({
       return;
     }
     const notification = {
-      id: `step-up:${stepUpURL}`,
+      id: `step-up:${stepUpURL}:${sessionMessageAt || ''}`,
       title: 'Security verification required',
       message: stepUpMessage,
       variant: 'warning',
+      createdAt: sessionMessageAt,
     };
     enqueueNotification(setNotifications, setHasUnreadNotifications, notificationIdsRef, activeViewRef, notification);
-  }, [stepUpMessage, stepUpURL]);
+  }, [sessionMessageAt, stepUpMessage, stepUpURL]);
 
   useEffect(() => {
     if (!sessionMessage) {
@@ -102,13 +104,14 @@ function AppLayout({
     }
     const variant = sessionToastVariant(sessionMessage);
     const notification = {
-      id: `session:${sessionMessage}`,
+      id: `session:${sessionMessage}:${sessionMessageAt || ''}`,
       title: sessionToastTitle(sessionMessage, variant),
       message: sessionMessage,
       variant,
+      createdAt: sessionMessageAt,
     };
     enqueueNotification(setNotifications, setHasUnreadNotifications, notificationIdsRef, activeViewRef, notification);
-  }, [sessionMessage]);
+  }, [sessionMessage, sessionMessageAt]);
 
   useEffect(() => {
     if (!sessionError) {
@@ -205,7 +208,7 @@ function enqueueNotification(
       title: notification.title,
       message: notification.message,
       variant: notification.variant,
-      createdAt: Date.now(),
+      createdAt: notificationTimestamp(notification.createdAt) || Date.now(),
     },
   ]);
   if (activeViewRef.current !== 'notifications') {
@@ -374,7 +377,7 @@ function NotificationCard({ notification }) {
 }
 
 function formatNotificationTime(value) {
-  const timestamp = Number(value || 0);
+  const timestamp = notificationTimestamp(value);
   if (!timestamp) {
     return '';
   }
@@ -383,6 +386,17 @@ function formatNotificationTime(value) {
     minute: '2-digit',
     second: '2-digit',
   });
+}
+
+function notificationTimestamp(value) {
+  if (!value) {
+    return 0;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) || parsed <= 0 ? 0 : parsed;
 }
 
 function ResourcesView({ dashboard }) {

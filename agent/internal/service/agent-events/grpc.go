@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -68,6 +69,7 @@ func eventFromStruct(value *structpb.Struct) Event {
 	}
 	return Event{
 		Type:           stringField(fields, "type", "event_type"),
+		Time:           timeField(fields, "time", "event_time"),
 		Message:        stringField(fields, "message"),
 		Reason:         stringField(fields, "reason"),
 		SessionID:      stringField(fields, "session_id"),
@@ -79,6 +81,20 @@ func eventFromStruct(value *structpb.Struct) Event {
 		PolicyID:       stringField(fields, "policy_id"),
 		Action:         stringField(fields, "action"),
 	}
+}
+
+func timeField(fields map[string]any, names ...string) time.Time {
+	for _, name := range names {
+		value, ok := fields[name]
+		if !ok {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(fmt.Sprint(value)))
+		if err == nil {
+			return parsed.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func stringField(fields map[string]any, names ...string) string {

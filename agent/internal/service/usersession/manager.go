@@ -190,6 +190,7 @@ func runtimeForSession(session *sessionState) RuntimeState {
 			DisplayName: session.displayName,
 			Email:       session.email,
 			Message:     session.message,
+			MessageAt:   session.messageAt,
 			LastError:   session.lastError,
 			ExpiresAt:   session.expiresAt,
 			StepUpURL:   session.stepUpURL,
@@ -517,6 +518,7 @@ func (manager *Manager) claimSession(ctx context.Context, client Client, session
 		current.email = claimedSession.Email
 		current.expiresAt = claimedSession.ExpiresAt
 		current.message = "Authenticated"
+		current.messageAt = manager.clock().UTC()
 		current.lastError = ""
 		clearStepUpLocked(current)
 		current.catalog = catalogInfo
@@ -635,6 +637,7 @@ func (manager *Manager) renewAuthenticatedSession(ctx context.Context, key, sess
 	session.agentSessionToken = renewed.AgentSessionToken
 	session.expiresAt = renewed.ExpiresAt
 	session.message = "Authenticated"
+	session.messageAt = manager.clock().UTC()
 	session.lastError = ""
 	return renewed, nil
 }
@@ -721,9 +724,14 @@ func (manager *Manager) authenticatedSessionExpiryWait(expiresAt time.Time) time
 }
 
 func (manager *Manager) setMessage(key, message string) {
+	manager.setMessageAt(key, message, manager.clock().UTC())
+}
+
+func (manager *Manager) setMessageAt(key, message string, at time.Time) {
 	manager.mu.Lock()
 	if session := manager.sessions[key]; session != nil && session.state == ipc.UserSessionStateAuthenticating {
 		session.message = strings.TrimSpace(message)
+		session.messageAt = normalizeMessageTime(at, manager.clock)
 	}
 	manager.mu.Unlock()
 }
@@ -732,7 +740,15 @@ func (manager *Manager) SetAuthenticatedMessage(message string) {
 	if manager == nil {
 		return
 	}
+	manager.SetAuthenticatedMessageAt(message, manager.clock().UTC())
+}
+
+func (manager *Manager) SetAuthenticatedMessageAt(message string, at time.Time) {
+	if manager == nil {
+		return
+	}
 	message = strings.TrimSpace(message)
+	messageAt := normalizeMessageTime(at, manager.clock)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	for _, session := range manager.sessions {
@@ -740,6 +756,7 @@ func (manager *Manager) SetAuthenticatedMessage(message string) {
 			continue
 		}
 		session.message = message
+		session.messageAt = messageAt
 		session.lastError = ""
 		clearStepUpLocked(session)
 	}
@@ -763,6 +780,7 @@ func (manager *Manager) SetAuthenticatedStepUp(message, url, resourceID, target 
 		}
 		clearStepUpLocked(session)
 		session.message = firstNonEmpty(message, "Additional verification is required to access this resource.")
+		session.messageAt = manager.clock().UTC()
 		session.lastError = ""
 		session.stepUpURL = url
 		session.stepUpResourceID = strings.TrimSpace(resourceID)
@@ -854,6 +872,7 @@ func (manager *Manager) MarkAuthenticatedStepUpAllowed(resourceID, target string
 		clearStepUpLocked(session)
 		session.lastError = ""
 		session.message = "Access granted to " + displayTarget + "."
+		session.messageAt = manager.clock().UTC()
 	}
 }
 
@@ -861,9 +880,17 @@ func (manager *Manager) MarkAuthenticatedStepUpCompleted(sessionID, resourceID, 
 	if manager == nil {
 		return
 	}
+	manager.MarkAuthenticatedStepUpCompletedAt(sessionID, resourceID, target, manager.clock().UTC())
+}
+
+func (manager *Manager) MarkAuthenticatedStepUpCompletedAt(sessionID, resourceID, target string, at time.Time) {
+	if manager == nil {
+		return
+	}
 	sessionID = strings.TrimSpace(sessionID)
 	resourceID = strings.TrimSpace(resourceID)
 	target = strings.TrimSpace(target)
+	messageAt := normalizeMessageTime(at, manager.clock)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	for _, session := range manager.sessions {
@@ -880,6 +907,7 @@ func (manager *Manager) MarkAuthenticatedStepUpCompleted(sessionID, resourceID, 
 		clearStepUpLocked(session)
 		session.lastError = ""
 		session.message = "Security verification completed for " + displayTarget + "."
+		session.messageAt = messageAt
 	}
 }
 
@@ -901,10 +929,12 @@ func (manager *Manager) MarkAuthenticatedResourceDenied(resourceID, target, reas
 			displayTarget = stepUpDisplayTarget(session, resourceID, target)
 			clearStepUpLocked(session)
 			session.message = "Authenticated"
+			session.messageAt = manager.clock().UTC()
 			session.lastError = securityVerificationFailedMessage(displayTarget, reason)
 			continue
 		}
 		session.lastError = resourceAccessDeniedMessage(displayTarget, reason)
+		session.messageAt = manager.clock().UTC()
 	}
 }
 
@@ -919,6 +949,7 @@ func (manager *Manager) setFailure(key, message string) {
 	if session := manager.sessions[key]; session != nil {
 		session.state = ipc.UserSessionStateFailed
 		session.message = "Authentication failed"
+		session.messageAt = manager.clock().UTC()
 		session.lastError = displayMessage
 		clearStepUpLocked(session)
 		if session.cancel != nil {
@@ -958,6 +989,7 @@ func (manager *Manager) markStepUpExpired(key, url string) {
 	target := stepUpDisplayTarget(session, "", "")
 	clearStepUpLocked(session)
 	session.message = "Authenticated"
+	session.messageAt = manager.clock().UTC()
 	session.lastError = securityVerificationExpiredMessage(target)
 }
 
@@ -1081,4 +1113,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeMessageTime(value time.Time, clock func() time.Time) time.Time {
+	if !value.IsZero() {
+		return value.UTC()
+	}
+	if clock == nil {
+		return time.Now().UTC()
+	}
+	return clock().UTC()
 }

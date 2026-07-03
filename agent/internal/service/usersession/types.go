@@ -170,6 +170,7 @@ type sessionState struct {
 	displayName       string
 	email             string
 	message           string
+	messageAt         time.Time
 	lastError         string
 	stepUpURL         string
 	stepUpResourceID  string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"pdp/pa/auth"
 	"pdp/pa/events"
@@ -108,7 +109,7 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
-		return agentEventPayload(agentEventAccessRevoked, claims, fields, "Access to protected resources was revoked."), true
+		return agentEventPayload(agentEventAccessRevoked, claims, fields, evt.Time, "Access to protected resources was revoked."), true
 	case events.TopicDeviceRevoked:
 		if !sameEventField(fields, "device_id", claims.DeviceID) {
 			return nil, false
@@ -117,7 +118,7 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 			return nil, false
 		}
 		fields["session_id"] = claims.SessionID
-		return agentEventPayload(agentEventAccessRevoked, claims, fields, "This device enrollment was revoked."), true
+		return agentEventPayload(agentEventAccessRevoked, claims, fields, evt.Time, "This device enrollment was revoked."), true
 	case events.TopicStepUpCompleted:
 		if !sameEventField(fields, "session_id", claims.SessionID) ||
 			!sameEventField(fields, "device_id", claims.DeviceID) ||
@@ -127,18 +128,18 @@ func (service *agentEventsGRPCService) agentEventForClaims(evt events.Event, cla
 		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
-		return agentEventPayload(agentEventStepUpCompleted, claims, fields, "Security verification completed."), true
+		return agentEventPayload(agentEventStepUpCompleted, claims, fields, evt.Time, "Security verification completed."), true
 	case events.TopicResourcesUpdated, events.TopicPolicyUpdated, events.TopicGatewayRevoked:
 		if !organizationMatches(fields["organization_id"], claims.OrganizationID) {
 			return nil, false
 		}
-		return agentEventPayload(agentEventCatalogInvalidated, claims, fields, "Protected resource access changed."), true
+		return agentEventPayload(agentEventCatalogInvalidated, claims, fields, evt.Time, "Protected resource access changed."), true
 	default:
 		return nil, false
 	}
 }
 
-func agentEventPayload(eventType string, claims *auth.CustomClaims, fields map[string]string, defaultMessage string) map[string]interface{} {
+func agentEventPayload(eventType string, claims *auth.CustomClaims, fields map[string]string, eventTime time.Time, defaultMessage string) map[string]interface{} {
 	reason := strings.TrimSpace(fields["reason"])
 	message := agentEventMessage(eventType, reason, defaultMessage)
 	payload := map[string]interface{}{
@@ -150,6 +151,11 @@ func agentEventPayload(eventType string, claims *auth.CustomClaims, fields map[s
 		"device_id":       claims.DeviceID,
 		"user_id":         claims.UserID,
 		"organization_id": claims.OrganizationID,
+	}
+	if !eventTime.IsZero() {
+		timestamp := eventTime.UTC().Format(time.RFC3339Nano)
+		payload["time"] = timestamp
+		payload["event_time"] = timestamp
 	}
 	for _, key := range []string{"resource_id", "gateway_id", "policy_id", "action"} {
 		if value := strings.TrimSpace(fields[key]); value != "" {

@@ -35,6 +35,7 @@ type UserSessionInfo struct {
 	DisplayName string    `json:"display_name,omitempty"`
 	Email       string    `json:"email,omitempty"`
 	Message     string    `json:"message,omitempty"`
+	MessageAt   time.Time `json:"message_at,omitempty"`
 	LastError   string    `json:"last_error,omitempty"`
 	ExpiresAt   time.Time `json:"expires_at,omitempty"`
 	StepUpURL   string    `json:"step_up_url,omitempty"`
