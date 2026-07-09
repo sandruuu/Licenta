@@ -18,6 +18,169 @@ type adminPasskeyLoginBeginRequest struct {
 	Email string `json:"email"`
 }
 
+type adminPasskeySecretRequest struct {
+	CurrentPassword string `json:"current_password"`
+}
+
+type adminPasskeyResponse struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (s *Server) handleAdminAccountPasskeys(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		user, ok := s.currentAdminUser(w, r)
+		if !ok {
+			return
+		}
+		creds, err := s.pa.Store.GetWebAuthnCredentials(user.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load passkeys"})
+			return
+		}
+		writeJSON(w, http.StatusOK, models.APIResponse{
+			Success: true,
+			Data:    adminPasskeyPayload(creds),
+		})
+
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (s *Server) handleAdminAccountPasskeyAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/account/passkeys/"), "/")
+	if path == "enrollment-token" {
+		s.handleAdminAccountPasskeyEnrollmentToken(w, r)
+		return
+	}
+	if path == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "passkey not found"})
+		return
+	}
+	s.handleAdminAccountPasskeyByID(w, r, path)
+}
+
+func (s *Server) handleAdminAccountPasskeyEnrollmentToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	user, ok := s.currentAdminUser(w, r)
+	if !ok {
+		return
+	}
+	if s.pa.Auth.WebAuthn == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "passkey registration is not configured"})
+		return
+	}
+	var req adminPasskeySecretRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := s.pa.Auth.Users.VerifyPassword(user.ID, req.CurrentPassword); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	token, err := s.pa.Auth.JWT.GenerateAuthTokenWithPurpose(user.ID, user.Username, user.Role, "", "", true, paauth.PasskeyEnrollmentPurpose)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start passkey registration"})
+		return
+	}
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_passkey_enrollment_started", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey enrollment started from account settings", true)
+	}
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Data: map[string]string{
+			"auth_token": token,
+			"purpose":    paauth.PasskeyEnrollmentPurpose,
+		},
+	})
+}
+
+func (s *Server) handleAdminAccountPasskeyByID(w http.ResponseWriter, r *http.Request, passkeyID string) {
+	if r.Method != http.MethodDelete {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	user, ok := s.currentAdminUser(w, r)
+	if !ok {
+		return
+	}
+	var req adminPasskeySecretRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := s.pa.Auth.Users.VerifyPassword(user.ID, req.CurrentPassword); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	creds, err := s.pa.Store.GetWebAuthnCredentials(user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load passkeys"})
+		return
+	}
+	found := false
+	for _, cred := range creds {
+		if cred != nil && cred.ID == passkeyID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "passkey not found"})
+		return
+	}
+	if err := s.pa.Store.DeleteWebAuthnCredential(passkeyID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete passkey"})
+		return
+	}
+	remaining, err := s.pa.Store.GetWebAuthnCredentials(user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load passkeys"})
+		return
+	}
+	if len(remaining) == 0 {
+		s.pa.Auth.Users.RemoveMFAMethod(user.ID, "webauthn")
+	}
+	if s.pa.Audit != nil {
+		s.pa.Audit.LogEvent("admin_passkey_deleted", user.ID, user.Username, r.RemoteAddr, "", "", "Dashboard passkey deleted from account settings", true)
+	}
+	writeJSON(w, http.StatusOK, models.APIResponse{
+		Success: true,
+		Message: "Passkey deleted",
+		Data:    adminPasskeyPayload(remaining),
+	})
+}
+
+func adminPasskeyPayload(creds []*models.WebAuthnCredential) []adminPasskeyResponse {
+	response := make([]adminPasskeyResponse, 0, len(creds))
+	for _, cred := range creds {
+		if cred == nil {
+			continue
+		}
+		createdAt := ""
+		if !cred.CreatedAt.IsZero() {
+			createdAt = cred.CreatedAt.Format("2006-01-02 15:04:05")
+		}
+		name := strings.TrimSpace(cred.Name)
+		if name == "" {
+			name = "Passkey"
+		}
+		response = append(response, adminPasskeyResponse{
+			ID:        cred.ID,
+			Name:      name,
+			CreatedAt: createdAt,
+		})
+	}
+	return response
+}
+
 func (s *Server) handleAdminPasskeyRegisterBegin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

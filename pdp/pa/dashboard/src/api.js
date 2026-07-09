@@ -320,7 +320,7 @@ export async function validateAdminSession() {
       retryOnUnauthorized: false,
       clearOnUnauthorized: false,
     });
-  } catch (err) {
+  } catch {
     return refreshAdminSession();
   }
 }
@@ -345,6 +345,28 @@ export async function changeAdminPassword(currentPassword, newPassword, confirmP
 export async function regenerateAdminRecoveryCodes(currentPassword) {
   return apiFetch('/admin/account/recovery-codes', {
     method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+    }),
+  });
+}
+
+export async function getAdminPasskeys() {
+  return apiFetch('/admin/account/passkeys');
+}
+
+export async function createAdminPasskeyEnrollmentToken(currentPassword) {
+  return apiFetch('/admin/account/passkeys/enrollment-token', {
+    method: 'POST',
+    body: JSON.stringify({
+      current_password: currentPassword,
+    }),
+  });
+}
+
+export async function deleteAdminPasskey(id, currentPassword) {
+  return apiFetch(`/admin/account/passkeys/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
     body: JSON.stringify({
       current_password: currentPassword,
     }),

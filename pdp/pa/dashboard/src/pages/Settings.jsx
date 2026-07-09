@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, CircleAlert } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleAlert, KeyRound, Trash2 } from 'lucide-react';
 import {
+  beginPasskeyRegistration,
   changeAdminPassword,
+  createAdminPasskeyEnrollmentToken,
+  deleteAdminPasskey,
+  finishPasskeyRegistration,
   getAdminAccount,
+  getAdminPasskeys,
   regenerateAdminRecoveryCodes,
+  setAuthSession,
 } from '../api';
 import { formatPasswordPolicyError, getPasswordPolicyIssues, passwordPolicyRequirements } from '../passwordPolicy';
 import { requiredFieldsMessage } from '../formValidation';
+import { credentialToJSON, prepareCreationOptions } from '../webauthn';
 import PageHeader from '../components/ui/PageHeader';
 import Button from '../components/ui/Button';
 import FormField, { FormInput } from '../components/ui/FormField';
@@ -16,6 +23,28 @@ const methodLabels = {
   totp: 'Authenticator app',
   webauthn: 'Passkey',
 };
+
+function passkeyErrorMessage(err) {
+  const message = err?.message || '';
+  const name = err?.name || '';
+  const normalized = `${name} ${message}`.toLowerCase();
+  if (normalized.includes('notallowed')) return 'Passkey setup was cancelled or timed out.';
+  if (normalized.includes('security') || normalized.includes('rp id') || normalized.includes('domain')) {
+    return 'Passkey domain mismatch. Open the configured PDP URL.';
+  }
+  return message || 'Passkey operation failed.';
+}
+
+async function fetchAccountSettings() {
+  const [account, passkeys] = await Promise.all([
+    getAdminAccount(),
+    getAdminPasskeys(),
+  ]);
+  return {
+    account,
+    passkeys: Array.isArray(passkeys) ? passkeys : [],
+  };
+}
 
 function normalizeMethods(methods) {
   if (!Array.isArray(methods)) return [];
@@ -156,6 +185,7 @@ function AccountProfile({ account, activeMethodsText, mfaActive, recoveryCodeCou
 
 export default function Settings() {
   const [account, setAccount] = useState(null);
+  const [passkeys, setPasskeys] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [passwordForm, setPasswordForm] = useState({
@@ -171,8 +201,14 @@ export default function Settings() {
   const [recoverySaving, setRecoverySaving] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState([]);
   const [recoveryError, setRecoveryError] = useState('');
+  const [passkeyPassword, setPasskeyPassword] = useState('');
+  const [passkeySaving, setPasskeySaving] = useState(false);
+  const [passkeyDeleting, setPasskeyDeleting] = useState('');
+  const [passkeyMessage, setPasskeyMessage] = useState('');
+  const [passkeyError, setPasskeyError] = useState('');
   const [passwordSectionOpen, setPasswordSectionOpen] = useState(false);
   const [recoverySectionOpen, setRecoverySectionOpen] = useState(false);
+  const [passkeySectionOpen, setPasskeySectionOpen] = useState(false);
 
   const methods = useMemo(() => normalizeMethods(account?.mfa_methods), [account]);
   const mfaActive = !!account?.mfa_enabled;
@@ -195,8 +231,11 @@ export default function Settings() {
       setLoading(true);
       setLoadError('');
       try {
-        const data = await getAdminAccount();
-        if (!cancelled) setAccount(data);
+        const data = await fetchAccountSettings();
+        if (!cancelled) {
+          setAccount(data.account);
+          setPasskeys(data.passkeys);
+        }
       } catch (err) {
         if (!cancelled) setLoadError(err.message || 'Account settings could not be loaded');
       } finally {
@@ -275,6 +314,76 @@ export default function Settings() {
       setRecoveryError(err.message || 'Recovery codes could not be regenerated');
     } finally {
       setRecoverySaving(false);
+    }
+  };
+
+  const refreshSettings = async () => {
+    const data = await fetchAccountSettings();
+    setAccount(data.account);
+    setPasskeys(data.passkeys);
+  };
+
+  const handlePasskeyAdd = async (event) => {
+    event.preventDefault();
+    setPasskeyError('');
+    setPasskeyMessage('');
+
+    if (!passkeyPassword) {
+      setPasskeyError(requiredFieldsMessage(['Current password']));
+      return;
+    }
+    if (!window.PublicKeyCredential) {
+      setPasskeyError('This browser cannot create a passkey.');
+      return;
+    }
+
+    setPasskeySaving(true);
+    try {
+      const tokenData = await createAdminPasskeyEnrollmentToken(passkeyPassword);
+      const enrollmentToken = tokenData?.auth_token || tokenData?.token;
+      if (!enrollmentToken) {
+        throw new Error('Passkey setup could not be started');
+      }
+      const options = await beginPasskeyRegistration(enrollmentToken);
+      const credential = await navigator.credentials.create({ publicKey: prepareCreationOptions(options) });
+      if (!credential) {
+        throw new Error('Passkey setup was cancelled');
+      }
+      const session = await finishPasskeyRegistration(enrollmentToken, credentialToJSON(credential));
+      if (session?.auth_token || session?.token) {
+        setAuthSession(session);
+      }
+      await refreshSettings();
+      setPasskeyPassword('');
+      setPasskeyMessage('Passkey added.');
+    } catch (err) {
+      setPasskeyError(passkeyErrorMessage(err));
+    } finally {
+      setPasskeySaving(false);
+    }
+  };
+
+  const handlePasskeyDelete = async (passkey) => {
+    setPasskeyError('');
+    setPasskeyMessage('');
+    if (!passkeyPassword) {
+      setPasskeyError(requiredFieldsMessage(['Current password']));
+      return;
+    }
+    if (!window.confirm('Delete this passkey?')) {
+      return;
+    }
+
+    setPasskeyDeleting(passkey.id);
+    try {
+      await deleteAdminPasskey(passkey.id, passkeyPassword);
+      await refreshSettings();
+      setPasskeyPassword('');
+      setPasskeyMessage('Passkey deleted.');
+    } catch (err) {
+      setPasskeyError(err.message || 'Passkey could not be deleted');
+    } finally {
+      setPasskeyDeleting('');
     }
   };
 
@@ -420,6 +529,62 @@ export default function Settings() {
                   </div>
                 </div>
               )}
+            </CollapsibleSection>
+
+            <CollapsibleSection
+              title="Passkeys"
+              open={passkeySectionOpen}
+              onToggle={() => setPasskeySectionOpen((current) => !current)}
+            >
+              <form noValidate onSubmit={handlePasskeyAdd} className="grid w-full max-w-3xl gap-1">
+                {passkeyError && <Alert type="error">{passkeyError}</Alert>}
+                {passkeyMessage && <Alert>{passkeyMessage}</Alert>}
+                <FormField label="Current password" htmlFor="settings-passkey-password" labelClassName="[font-size:13px]">
+                  <FormInput
+                    id="settings-passkey-password"
+                    type="password"
+                    value={passkeyPassword}
+                    onChange={(event) => setPasskeyPassword(event.target.value)}
+                    autoComplete="current-password"
+                    className="[font-size:15px] py-3"
+                    required
+                  />
+                </FormField>
+                <div className="mt-2">
+                  <Button type="submit" disabled={passkeySaving || !!passkeyDeleting} className="[font-size:14px] px-5 py-2.5">
+                    <KeyRound size={15} strokeWidth={2.3} aria-hidden="true" />
+                    {passkeySaving ? 'Adding...' : 'Add passkey'}
+                  </Button>
+                </div>
+              </form>
+
+              <div className="mt-5 grid max-w-3xl gap-3">
+                {passkeys.length > 0 ? (
+                  passkeys.map((passkey) => (
+                    <div
+                      key={passkey.id}
+                      className="flex flex-col gap-3 rounded-md border border-border bg-surface-card px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[15px] font-bold text-text-primary">{passkey.name || 'Passkey'}</p>
+                        <p className="mt-1 text-[13px] font-semibold text-text-secondary">{passkey.created_at || 'Date unavailable'}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="danger"
+                        disabled={passkeySaving || passkeyDeleting === passkey.id}
+                        onClick={() => handlePasskeyDelete(passkey)}
+                        className="w-fit [font-size:13px]"
+                      >
+                        <Trash2 size={14} strokeWidth={2.3} aria-hidden="true" />
+                        {passkeyDeleting === passkey.id ? 'Deleting...' : 'Delete'}
+                      </Button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-[15px] font-semibold text-text-secondary">No passkeys enrolled.</p>
+                )}
+              </div>
             </CollapsibleSection>
           </section>
         </div>

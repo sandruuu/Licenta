@@ -595,6 +595,21 @@ func (um *UserManager) AddMFAMethod(userID, method string) {
 	log.Printf("[AUTH] MFA method '%s' added for user %s", method, user.Username)
 }
 
+// RemoveMFAMethod removes an MFA method from the user's method list.
+func (um *UserManager) RemoveMFAMethod(userID, method string) {
+	user, exists := um.store.GetUser(userID)
+	if !exists {
+		return
+	}
+	if !containsMethod(user.MFAMethods, method) {
+		return
+	}
+	user.MFAMethods = removeMethod(user.MFAMethods, method)
+	user.UpdatedAt = time.Now()
+	um.store.SaveUser(user)
+	log.Printf("[AUTH] MFA method '%s' removed for user %s", method, user.Username)
+}
+
 func (um *UserManager) ProtectMFAValue(value string) (string, error) {
 	return um.protectMFAValue(value)
 }

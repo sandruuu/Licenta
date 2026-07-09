@@ -210,6 +210,8 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/account", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccount)))
 	s.mux.Handle("/api/admin/account/password", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountPassword)))
 	s.mux.Handle("/api/admin/account/recovery-codes", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountRecoveryCodes)))
+	s.mux.Handle("/api/admin/account/passkeys", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountPasskeys)))
+	s.mux.Handle("/api/admin/account/passkeys/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountPasskeyAction)))
 	s.mux.Handle("/api/admin/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminUsers)))
 	s.mux.Handle("/api/admin/organizations", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizations)))
 	s.mux.Handle("/api/admin/organizations/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminOrganizationByID)))
