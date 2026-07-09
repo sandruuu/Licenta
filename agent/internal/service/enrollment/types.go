@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 const (

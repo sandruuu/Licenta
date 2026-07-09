@@ -8,6 +8,32 @@ func TestLoadProjectConfig(t *testing.T) {
 	}
 }
 
+func TestLoadProjectConfigAppliesDefaults(t *testing.T) {
+	cfg, err := LoadFromFile("../config.json")
+	if err != nil {
+		t.Fatalf("LoadFromFile failed for project config.json: %v", err)
+	}
+
+	if cfg.ListenAddr != ":8443" {
+		t.Fatalf("ListenAddr = %q", cfg.ListenAddr)
+	}
+	if cfg.PKIPath != "pki_int" || cfg.PKIRolePDP != "trustcloud" || cfg.PKIRoleDevice != "trustagent" || cfg.PKIRoleGateway != "trustgateway" {
+		t.Fatalf("PKI defaults = path:%q roles:%q/%q/%q", cfg.PKIPath, cfg.PKIRolePDP, cfg.PKIRoleDevice, cfg.PKIRoleGateway)
+	}
+	if cfg.Public.FederatedCallbackURL != "https://trust-cloud.dev/auth/federated/callback" {
+		t.Fatalf("FederatedCallbackURL = %q", cfg.Public.FederatedCallbackURL)
+	}
+	if cfg.WebAuthnRPID != "trust-cloud.dev" || cfg.WebAuthnRPOrigins != "https://trust-cloud.dev" {
+		t.Fatalf("WebAuthn defaults = rp_id:%q origins:%q", cfg.WebAuthnRPID, cfg.WebAuthnRPOrigins)
+	}
+	if cfg.Runtime.EventBufferSize != 64 || cfg.Runtime.AuthRateLimitMax != 10 {
+		t.Fatalf("Runtime defaults = event_buffer:%d auth_limit:%d", cfg.Runtime.EventBufferSize, cfg.Runtime.AuthRateLimitMax)
+	}
+	if cfg.Public.OIDCDefaultClaimMapping["username"] != "preferred_username" || cfg.Public.ResourceDefaultPorts["rdp"] != 3389 {
+		t.Fatalf("Public defaults = claims:%#v ports:%#v", cfg.Public.OIDCDefaultClaimMapping, cfg.Public.ResourceDefaultPorts)
+	}
+}
+
 func TestApplyEnvironmentOverridesPublicOrigin(t *testing.T) {
 	t.Setenv(PDPPublicHostEnv, "policy-admin.remote-access-demo.xyz")
 

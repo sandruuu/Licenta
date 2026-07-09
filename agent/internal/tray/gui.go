@@ -13,7 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 //go:embed all:frontend/dist

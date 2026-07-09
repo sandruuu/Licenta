@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func TestActiveAuthenticatedSessionReturnsOnlyAuthenticatedSession(t *testing.T) {

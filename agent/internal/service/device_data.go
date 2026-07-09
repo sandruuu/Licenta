@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func (service *Service) collectDeviceData(ctx context.Context, deviceID string) (ipc.DeviceDataReport, error) {

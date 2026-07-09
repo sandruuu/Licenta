@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 type Manager struct {

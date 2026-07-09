@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/ipc"
 	"agent/internal/service/enrollment"
-	"agent/internal/shared/ipc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"

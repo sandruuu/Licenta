@@ -5,7 +5,7 @@ provider "digitalocean" {
 locals {
   common_tags = [
     "trustcloud",
-    "trustcloud-edge-private",
+    "trustcloud-digitalocean",
   ]
 
   gateway_tags      = concat(local.common_tags, ["trustcloud-gateway"])
@@ -17,7 +17,7 @@ locals {
   )
 }
 
-resource "digitalocean_vpc" "edge_private" {
+resource "digitalocean_vpc" "private_network" {
   name     = var.vpc_name
   region   = var.region
   ip_range = var.vpc_ip_range
@@ -28,7 +28,7 @@ resource "digitalocean_droplet" "gateway" {
   name     = "trustcloud-gateway"
   region   = var.region
   size     = var.gateway_size
-  vpc_uuid = digitalocean_vpc.edge_private.id
+  vpc_uuid = digitalocean_vpc.private_network.id
   ssh_keys = var.ssh_key_fingerprints
   tags     = local.gateway_tags
 
@@ -51,7 +51,7 @@ resource "digitalocean_droplet" "internal_resource" {
   name     = "trustcloud-resource-${count.index + 1}"
   region   = var.region
   size     = var.resource_size
-  vpc_uuid = digitalocean_vpc.edge_private.id
+  vpc_uuid = digitalocean_vpc.private_network.id
   ssh_keys = var.ssh_key_fingerprints
   tags     = local.resource_tags
 
@@ -69,7 +69,7 @@ resource "digitalocean_droplet" "rdp_resource" {
   name     = "trustcloud-rdp-${count.index + 1}"
   region   = var.region
   size     = var.resource_size
-  vpc_uuid = digitalocean_vpc.edge_private.id
+  vpc_uuid = digitalocean_vpc.private_network.id
   ssh_keys = var.ssh_key_fingerprints
   tags     = local.rdp_resource_tags
 

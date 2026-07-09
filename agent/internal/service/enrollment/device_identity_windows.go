@@ -26,7 +26,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 const (

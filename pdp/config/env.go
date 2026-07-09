@@ -56,7 +56,7 @@ func (c *Config) ApplyEnvironmentOverrides() {
 	applyStringEnv(PDPDatabaseURLEnv, &c.DatabaseURL)
 	applyStringEnv(PDPRedisURLEnv, &c.RedisURL)
 	if origin, rpHost := publicOriginFromEnvironment(); origin != "" {
-		c.applyPublicOrigin(origin, rpHost)
+		c.applyPublicOrigin(origin, rpHost, true)
 	}
 	if value := strings.TrimSpace(os.Getenv(PDPFederatedCallbackURLEnv)); value != "" {
 		c.Public.FederatedCallbackURL = value
@@ -102,10 +102,10 @@ func normalizePublicOrigin(value string) (string, string) {
 	return parsed.Scheme + "://" + parsed.Host, parsed.Hostname()
 }
 
-func (c *Config) applyPublicOrigin(origin, rpHost string) {
+func (c *Config) applyPublicOrigin(origin, rpHost string, overrideRPID bool) {
 	c.Public.FederatedCallbackURL = strings.TrimRight(origin, "/") + "/auth/federated/callback"
 	c.WebAuthnRPOrigins = origin
-	if rpHost != "" && c.WebAuthnRPID == "" {
+	if rpHost != "" && (overrideRPID || c.WebAuthnRPID == "") {
 		c.WebAuthnRPID = rpHost
 	}
 	c.CORSOrigins = appendUnique(c.CORSOrigins, origin)

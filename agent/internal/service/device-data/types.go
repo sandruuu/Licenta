@@ -3,7 +3,7 @@ package devicedata
 import (
 	"context"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 type Report = ipc.DeviceDataReport

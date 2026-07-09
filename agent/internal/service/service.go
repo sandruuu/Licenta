@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/ipc"
 	agentevents "agent/internal/service/agent-events"
 	devicedata "agent/internal/service/device-data"
 	devicedatasync "agent/internal/service/device-data-sync"
@@ -15,7 +16,6 @@ import (
 	gatewaytunnel "agent/internal/service/gateway-tunnel"
 	pdpclient "agent/internal/service/pdp-client"
 	"agent/internal/service/usersession"
-	"agent/internal/shared/ipc"
 )
 
 type State string

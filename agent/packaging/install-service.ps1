@@ -49,10 +49,6 @@ function Set-TrustAgentAutomaticStart {
 
 $runtime = (Resolve-Path -LiteralPath $RuntimePath).ProviderPath
 $binaryPath = '"' + $runtime + '"'
-$preflightScript = Join-Path $PSScriptRoot "Test-AgentConfig.ps1"
-if (-not (Test-Path -LiteralPath $preflightScript)) {
-    throw "TrustAgent config preflight script is missing: $preflightScript"
-}
 
 $existing = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -ne $existing) {
@@ -74,8 +70,6 @@ if ($null -ne $wfpService -and $wfpService.Status -ne "Running") {
         Write-Warning "TrustAgent WFP driver service is not running yet: $($_.Exception.Message)"
     }
 }
-
-& $preflightScript -RuntimePath $runtime -RepairPaths -SkipEnvironmentChecks
 
 & sc.exe description $serviceName $description | Out-Null
 Set-TrustAgentAutomaticStart

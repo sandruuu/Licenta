@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func TestNewGUIAppRequiresExplicitTimeout(t *testing.T) {

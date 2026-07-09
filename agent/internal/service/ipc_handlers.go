@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func (service *Service) HandleIPC(ctx context.Context, request *ipc.Request) (*ipc.Response, error) {

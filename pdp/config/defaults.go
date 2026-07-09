@@ -2,125 +2,139 @@ package config
 
 import "time"
 
-// ApplyDefaults fills defensive defaults for zero-value runtime settings.
-// Runtime deployments should keep these values explicit in config.json.
+// ApplyDefaults fills stable operational defaults so config.json only needs
+// deployment-specific values.
 func (c *Config) ApplyDefaults() {
 	if c == nil {
 		return
 	}
-	if c.Runtime.EventBufferSize <= 0 {
-		c.Runtime.EventBufferSize = 64
+	defaultString(&c.ListenAddr, ":8443")
+	defaultString(&c.TLSCert, "/app/data/pdp-server-tls-cert.pem")
+	defaultString(&c.MTLSCA, "/app/data/vault-pki-ca-cert.pem")
+	defaultString(&c.DataDir, "/app/data")
+
+	defaultString(&c.PKIPath, "pki_int")
+	defaultString(&c.PKIRolePDP, "trustcloud")
+	defaultString(&c.PKIRoleDevice, "trustagent")
+	defaultString(&c.PKIRoleGateway, "trustgateway")
+	defaultDuration(&c.PKITimeout, 10*time.Second)
+	defaultString(&c.JWTTransitKey, c.PKITransitKey)
+
+	defaultString(&c.TOTPIssuer, "TrustCloud")
+	defaultString(&c.MFATransitKey, firstNonEmpty(c.JWTTransitKey, c.PKITransitKey))
+	defaultString(&c.PDPKeyEncryptedPath, c.DataDir+"/pdp_key.enc")
+	defaultString(&c.JWTKeyEncryptedPath, c.DataDir+"/jwt_signing_key.enc")
+	defaultString(&c.MFASecretKeyEncryptedPath, c.DataDir+"/mfa_secret.key.enc")
+
+	defaultDuration(&c.SessionExpiry, 10*time.Minute)
+	defaultInt(&c.MaxSessions, 5)
+	defaultInt(&c.MaxLoginAttempts, 5)
+	defaultDuration(&c.LockoutDuration, 15*time.Minute)
+	defaultString(&c.WebAuthnRPName, "TrustCloud")
+
+	defaultDuration(&c.Runtime.StoreAutoSaveInterval, time.Minute)
+	defaultDuration(&c.Runtime.SessionCleanupInterval, 5*time.Minute)
+	defaultDuration(&c.Runtime.EnrollmentCleanupInterval, time.Minute)
+	defaultDuration(&c.Runtime.CertificateRenewBefore, 24*time.Hour)
+	defaultDuration(&c.Runtime.PKIRenewCheckInterval, 6*time.Hour)
+	defaultDuration(&c.Runtime.HTTPReadHeaderTimeout, 10*time.Second)
+	defaultDuration(&c.Runtime.HTTPShutdownTimeout, 15*time.Second)
+	defaultDuration(&c.Runtime.ReadinessDrainDelay, 5*time.Second)
+	defaultInt(&c.Runtime.EventBufferSize, 64)
+	defaultInt(&c.Runtime.CatalogTTLSeconds, 300)
+	defaultDuration(&c.Runtime.AuthRateLimitWindow, 15*time.Minute)
+	defaultInt(&c.Runtime.AuthRateLimitMax, 10)
+	defaultDuration(&c.Runtime.OIDCEnrollmentTokenTTL, 5*time.Minute)
+	defaultDuration(&c.Runtime.WebAuthnChallengeTTL, 5*time.Minute)
+	defaultDuration(&c.Runtime.WebAuthnCleanupInterval, 2*time.Minute)
+	defaultDuration(&c.Runtime.FederationCacheTTL, 6*time.Hour)
+	defaultDuration(&c.Runtime.FederationHTTPTimeout, 10*time.Second)
+	defaultDuration(&c.Runtime.BrowserAuthSessionTTL, 5*time.Minute)
+	defaultDuration(&c.Runtime.AdminAccessTokenTTL, time.Hour)
+	defaultDuration(&c.Runtime.AdminSessionIdleTTL, 30*time.Minute)
+	defaultDuration(&c.Runtime.AdminSessionAbsoluteTTL, 8*time.Hour)
+	defaultDuration(&c.Runtime.AgentSessionAccessTokenTTL, time.Hour)
+	defaultDuration(&c.Runtime.AgentSessionIdleTTL, 30*time.Minute)
+	defaultDuration(&c.Runtime.AgentSessionAbsoluteTTL, 8*time.Hour)
+	defaultInt(&c.Runtime.CSRFCookieMaxAgeSeconds, 3600)
+	defaultDuration(&c.Runtime.EnrollRateLimitWindow, time.Minute)
+	defaultInt(&c.Runtime.EnrollRateLimitMax, 5)
+	defaultDuration(&c.Runtime.GatewayRevokeTimeout, 5*time.Second)
+	defaultDuration(&c.Runtime.ResourceSessionRenewBefore, time.Minute)
+
+	defaultString(&c.Public.OIDCDefaultScopes, "openid profile email")
+	defaultMapEntry(&c.Public.OIDCDefaultClaimMapping, "username", "preferred_username")
+	defaultMapEntry(&c.Public.OIDCDefaultClaimMapping, "email", "email")
+	defaultMapEntry(&c.Public.OIDCDefaultClaimMapping, "groups", "groups")
+	defaultIntMapEntry(&c.Public.ResourceDefaultPorts, "web", 443)
+	defaultIntMapEntry(&c.Public.ResourceDefaultPorts, "ssh", 22)
+	defaultIntMapEntry(&c.Public.ResourceDefaultPorts, "rdp", 3389)
+
+	defaultInt(&c.Gateway.CertificateValidityDays, 7)
+	defaultDuration(&c.Gateway.EnrollmentTokenTTL, time.Hour)
+	defaultInt(&c.Enrollment.CertificateValidityDays, 1)
+	defaultDuration(&c.Enrollment.BrowserSessionTTL, 5*time.Minute)
+
+	defaultString(&c.Geo.ProviderURL, "https://ipapi.co/{ip}/json/")
+	defaultDuration(&c.Geo.HTTPTimeout, 3*time.Second)
+	defaultDuration(&c.Geo.CacheTTL, time.Hour)
+	defaultInt(&c.Geo.CacheMaxEntries, 10000)
+	defaultFloat(&c.Geo.SameAreaDistanceKM, 50)
+	defaultFloat(&c.Geo.SuspiciousTravelSpeedKMH, 500)
+	defaultFloat(&c.Geo.ImpossibleTravelSpeedKMH, 900)
+
+	if origin, rpHost := normalizePublicOrigin(c.PublicOrigin); origin != "" {
+		c.applyPublicOrigin(origin, rpHost, false)
 	}
-	if c.Runtime.CatalogTTLSeconds <= 0 {
-		c.Runtime.CatalogTTLSeconds = 300
+}
+
+func defaultString(value *string, fallback string) {
+	if value != nil && *value == "" && fallback != "" {
+		*value = fallback
 	}
-	if c.Runtime.PKIRenewCheckInterval <= 0 {
-		c.Runtime.PKIRenewCheckInterval = 6 * time.Hour
+}
+
+func defaultDuration(value *time.Duration, fallback time.Duration) {
+	if value != nil && *value <= 0 {
+		*value = fallback
 	}
-	if c.Runtime.EnrollmentCleanupInterval <= 0 {
-		c.Runtime.EnrollmentCleanupInterval = time.Minute
+}
+
+func defaultInt(value *int, fallback int) {
+	if value != nil && *value <= 0 {
+		*value = fallback
 	}
-	if c.Runtime.OIDCEnrollmentTokenTTL <= 0 {
-		c.Runtime.OIDCEnrollmentTokenTTL = 5 * time.Minute
+}
+
+func defaultFloat(value *float64, fallback float64) {
+	if value != nil && *value <= 0 {
+		*value = fallback
 	}
-	if c.Runtime.WebAuthnChallengeTTL <= 0 {
-		c.Runtime.WebAuthnChallengeTTL = 5 * time.Minute
+}
+
+func defaultMapEntry(values *map[string]string, key, fallback string) {
+	if *values == nil {
+		*values = map[string]string{}
 	}
-	if c.Runtime.WebAuthnCleanupInterval <= 0 {
-		c.Runtime.WebAuthnCleanupInterval = 2 * time.Minute
+	if (*values)[key] == "" {
+		(*values)[key] = fallback
 	}
-	if c.Runtime.FederationCacheTTL <= 0 {
-		c.Runtime.FederationCacheTTL = 6 * time.Hour
+}
+
+func defaultIntMapEntry(values *map[string]int, key string, fallback int) {
+	if *values == nil {
+		*values = map[string]int{}
 	}
-	if c.Runtime.FederationHTTPTimeout <= 0 {
-		c.Runtime.FederationHTTPTimeout = 10 * time.Second
+	if (*values)[key] <= 0 {
+		(*values)[key] = fallback
 	}
-	if c.Runtime.BrowserAuthSessionTTL <= 0 {
-		c.Runtime.BrowserAuthSessionTTL = 5 * time.Minute
-	}
-	if c.Runtime.AdminAccessTokenTTL <= 0 {
-		c.Runtime.AdminAccessTokenTTL = time.Hour
-	}
-	if c.Runtime.AdminSessionIdleTTL <= 0 {
-		c.Runtime.AdminSessionIdleTTL = 30 * time.Minute
-	}
-	if c.Runtime.AdminSessionAbsoluteTTL <= 0 {
-		c.Runtime.AdminSessionAbsoluteTTL = 8 * time.Hour
-	}
-	if c.Runtime.AgentSessionAccessTokenTTL <= 0 {
-		c.Runtime.AgentSessionAccessTokenTTL = time.Hour
-	}
-	if c.Runtime.AgentSessionIdleTTL <= 0 {
-		c.Runtime.AgentSessionIdleTTL = 30 * time.Minute
-	}
-	if c.Runtime.AgentSessionAbsoluteTTL <= 0 {
-		c.Runtime.AgentSessionAbsoluteTTL = 8 * time.Hour
-	}
-	if c.Runtime.CSRFCookieMaxAgeSeconds <= 0 {
-		c.Runtime.CSRFCookieMaxAgeSeconds = 3600
-	}
-	if c.Runtime.EnrollRateLimitWindow <= 0 {
-		c.Runtime.EnrollRateLimitWindow = time.Minute
-	}
-	if c.Runtime.EnrollRateLimitMax <= 0 {
-		c.Runtime.EnrollRateLimitMax = 5
-	}
-	if c.Runtime.GatewayRevokeTimeout <= 0 {
-		c.Runtime.GatewayRevokeTimeout = 5 * time.Second
-	}
-	if c.Runtime.ResourceSessionRenewBefore <= 0 {
-		c.Runtime.ResourceSessionRenewBefore = time.Minute
-	}
-	if c.Runtime.HTTPShutdownTimeout <= 0 {
-		c.Runtime.HTTPShutdownTimeout = 15 * time.Second
-	}
-	if c.Runtime.ReadinessDrainDelay <= 0 {
-		c.Runtime.ReadinessDrainDelay = 5 * time.Second
-	}
-	if c.TOTPIssuer == "" {
-		c.TOTPIssuer = "TrustCloud"
-	}
-	if c.MFATransitKey == "" {
-		if c.JWTTransitKey != "" {
-			c.MFATransitKey = c.JWTTransitKey
-		} else {
-			c.MFATransitKey = c.PKITransitKey
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
-	if c.MFASecretKeyEncryptedPath == "" && c.DataDir != "" {
-		c.MFASecretKeyEncryptedPath = c.DataDir + "/mfa_secret.key.enc"
-	}
-	if c.Gateway.CertificateValidityDays <= 0 {
-		c.Gateway.CertificateValidityDays = 7
-	}
-	if c.Gateway.EnrollmentTokenTTL <= 0 {
-		c.Gateway.EnrollmentTokenTTL = time.Hour
-	}
-	if c.Enrollment.CertificateValidityDays <= 0 {
-		c.Enrollment.CertificateValidityDays = 1
-	}
-	if c.Enrollment.BrowserSessionTTL <= 0 {
-		c.Enrollment.BrowserSessionTTL = 5 * time.Minute
-	}
-	if c.Geo.ProviderURL == "" {
-		c.Geo.ProviderURL = "https://ipapi.co/{ip}/json/"
-	}
-	if c.Geo.HTTPTimeout <= 0 {
-		c.Geo.HTTPTimeout = 3 * time.Second
-	}
-	if c.Geo.CacheTTL <= 0 {
-		c.Geo.CacheTTL = time.Hour
-	}
-	if c.Geo.CacheMaxEntries <= 0 {
-		c.Geo.CacheMaxEntries = 10000
-	}
-	if c.Geo.SameAreaDistanceKM <= 0 {
-		c.Geo.SameAreaDistanceKM = 50
-	}
-	if c.Geo.SuspiciousTravelSpeedKMH <= 0 {
-		c.Geo.SuspiciousTravelSpeedKMH = 500
-	}
-	if c.Geo.ImpossibleTravelSpeedKMH <= 0 {
-		c.Geo.ImpossibleTravelSpeedKMH = 900
-	}
+	return ""
 }

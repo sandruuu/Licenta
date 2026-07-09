@@ -1,23 +1,5 @@
 {
-  "tray_timeout": "10s",
-  "dashboard_refresh_interval": "1s",
   "pdp_grpc_endpoint": "mtls.trust-cloud.dev:443",
   "pdp_tls_server_name": "trust-cloud.dev",
-  "pdp_ca_file": "pdp-ca.pem",
-  "enrollment_timeout": "10m",
-  "certificate_renew_before": "12h",
-  "certificate_renew_check_interval": "1h",
-  "certificate_renew_timeout": "20s",
-  "session_renew_before": "2m",
-  "session_renew_retry_interval": "15s",
-  "device_data_sync_interval": "30m",
-  "device_data_sync_change_scan_interval": "2s",
-  "local_dns_listen_address": "127.0.0.1:53",
-  "local_dns_server": "127.0.0.1",
-  "synthetic_ip_cidr": "100.64.0.0/10",
-  "harden_browser_doh": false,
-  "traffic_interception_enabled": true,
-  "traffic_proxy_listen_address": "127.0.0.1:18787",
-  "wfp_driver_device_path": "\\\\.\\TrustAgentWfp",
-  "wfp_fail_closed": true
+  "pdp_ca_file": "pdp-ca.pem"
 }

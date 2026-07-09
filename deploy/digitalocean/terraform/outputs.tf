@@ -1,6 +1,6 @@
 output "vpc_id" {
   description = "DigitalOcean VPC ID."
-  value       = digitalocean_vpc.edge_private.id
+  value       = digitalocean_vpc.private_network.id
 }
 
 output "gateway_public_ip" {

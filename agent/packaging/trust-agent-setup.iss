@@ -38,7 +38,6 @@ Source: "{#SourceDir}\config.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\pdp-ca.pem"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#SourceDir}\prepare-install.ps1"; Flags: dontcopy
 Source: "{#SourceDir}\install-service.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
-Source: "{#SourceDir}\Test-AgentConfig.ps1"; DestDir: "{tmp}"; Flags: deleteafterinstall
 Source: "{#SourceDir}\uninstall-cleanup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\wfp-driver\*"; DestDir: "{app}\wfp-driver"; Flags: ignoreversion recursesubdirs createallsubdirs
 

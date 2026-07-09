@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"

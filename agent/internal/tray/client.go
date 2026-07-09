@@ -1,5 +1,5 @@
 package tray
 
-import "agent/internal/shared/ipc"
+import "agent/internal/ipc"
 
 var newDefaultClient = ipc.NewDefaultClient

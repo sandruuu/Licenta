@@ -156,8 +156,7 @@ $staleOutputs = @(
     "install-service.ps1",
     "launch-tray.ps1",
     "install-wfp-driver.ps1",
-    "uninstall-cleanup.ps1",
-    "Test-AgentConfig.ps1"
+    "uninstall-cleanup.ps1"
 )
 foreach ($staleOutput in $staleOutputs) {
     $stalePath = Join-Path $OutputDir $staleOutput
@@ -199,7 +198,6 @@ Copy-Item -LiteralPath (Join-Path $scriptDir "install-service.ps1") -Destination
 Copy-Item -LiteralPath (Join-Path $scriptDir "prepare-install.ps1") -Destination (Join-Path $OutputDir "prepare-install.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $scriptDir "install-wfp-driver.ps1") -Destination (Join-Path $OutputDir "install-wfp-driver.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $scriptDir "uninstall-cleanup.ps1") -Destination (Join-Path $OutputDir "uninstall-cleanup.ps1") -Force
-Copy-Item -LiteralPath (Join-Path $scriptDir "Test-AgentConfig.ps1") -Destination (Join-Path $OutputDir "Test-AgentConfig.ps1") -Force
 Copy-WfpDriverPackage -AgentRoot $agentRoot -DestinationDir $OutputDir
 
 $resolvedConfigPath = $ConfigPath.Trim()
@@ -214,7 +212,6 @@ if ($resolvedConfigPath -eq "") {
 }
 $resolvedConfigPath = (Resolve-Path -LiteralPath $resolvedConfigPath).ProviderPath
 Copy-AgentConfig -SourceConfigPath $resolvedConfigPath -DestinationDir $OutputDir | Out-Null
-& (Join-Path $OutputDir "Test-AgentConfig.ps1") -RuntimePath (Join-Path $OutputDir "trust-agent.exe") -SkipEnvironmentChecks
 
 $iscc = Find-InnoSetupCompiler
 if ($iscc.Trim() -ne "") {

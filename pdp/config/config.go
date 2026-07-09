@@ -77,11 +77,12 @@ type GeoConfig struct {
 // Config holds all PDP service configuration
 type Config struct {
 	// Server settings
-	ListenAddr  string   `json:"listen_addr"`   // e.g. ":8443"
-	PDPFQDN     string   `json:"pdp_fqdn"`      // FQDN for self-enrollment CSR (e.g. "pdp")
-	TLSDNSNames []string `json:"tls_dns_names"` // Additional DNS SANs for the PDP TLS certificate
-	TLSCert     string   `json:"tls_cert"`      // Path where the PDP TLS certificate is stored
-	MTLSCA      string   `json:"mtls_ca"`       // Path where the issuer CA certificate is stored
+	ListenAddr   string   `json:"listen_addr"`   // e.g. ":8443"
+	PDPFQDN      string   `json:"pdp_fqdn"`      // FQDN for self-enrollment CSR (e.g. "pdp")
+	TLSDNSNames  []string `json:"tls_dns_names"` // Additional DNS SANs for the PDP TLS certificate
+	PublicOrigin string   `json:"public_origin"` // Browser origin used to derive public callback, WebAuthn and CORS defaults
+	TLSCert      string   `json:"tls_cert"`      // Path where the PDP TLS certificate is stored
+	MTLSCA       string   `json:"mtls_ca"`       // Path where the issuer CA certificate is stored
 
 	// Vault PKI settings (certificate signing backend)
 	PKIURL         string        `json:"pki_url"`          // Vault base URL (e.g. "https://vault:8200")

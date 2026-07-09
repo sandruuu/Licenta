@@ -13,7 +13,7 @@ variable "region" {
 variable "vpc_name" {
   description = "Name of the private VPC used by gateway and internal resources."
   type        = string
-  default     = "trustcloud-edge-private"
+  default     = "trustcloud-digitalocean"
 }
 
 variable "vpc_ip_range" {

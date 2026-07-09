@@ -1,152 +1,53 @@
-# ============================================================
-#  TrustCloud — Root .gitignore
-#  Generated after full project analysis (2026-05-11)
-# ============================================================
-
-# ── Secrets & Environment ──
-# .env contains local credentials and secrets — NEVER COMMIT REAL SECRETS
+# Local environment and secrets
 .env
-.env.local
-.env.*.local
-deploy/kubernetes/**/secret.yaml
+.env.*
 deploy/kubernetes/**/*secret*.yaml
-deploy/kubernetes/**/tls-secret.yaml
-deploy/kubernetes/**/vault-ca-secret.yaml
-deploy/digitalocean/**/*.tfvars
-deploy/digitalocean/**/.env
-deploy/digitalocean/**/pa-ca.crt
-!deploy/digitalocean/**/*.tfvars.example
-!deploy/digitalocean/**/*.env.example
-!deploy/kubernetes/**/*.example.yaml
 
-# ── Certificates & Keys (sensitive material) ──
+# Certificates and private keys
 *.pem
-# Public PDP CA used by the agent config; private keys/certs remain ignored.
 !agent/pdp-ca.pem
 *.key
-!*.pub                    # allow public keys (e.g. jwt-signing.pub)
+!*.pub
 *.crt
 *.csr
 *.srl
+*.cer
 *.pfx
 *.p12
 
-# ── Database ──
-*.db
-*.db-shm
-*.db-wal
-*.sqlite
-*.sqlite3
+# Build output and dependencies
+build/
+bin/
+dist/
+dist-ssr/
+node_modules/
+coverage/
+vendor/
+package-lock.json.md5
 
-# ── Binaries ──
-# Compiled Go / Wails output
+# Binaries and generated objects
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 *.test
-*.out
 *.test.exe
+*.out
+*.pdb
+*.obj
 
-# ── Build output ──
-build/bin/
-agent/build/
-agent/wfp-driver/x64/
-agent/wfp-driver/trustagent_wfp/
-infrastructure/vault/state/
-deploy/openstack/vault/state/
-deploy/openstack/vault/tls/
-deploy/openstack/pdp/data/
-deploy/openstack/pdp/vault-ca.crt
-deploy/openstack/pdp/*.tar
-dist/
-dist-ssr/
-frontend/dist/
-
-# ── WFP driver generated artifacts ──
+# Agent WFP driver build artifacts
 agent/wfp-driver/**/*.tlog/
-agent/wfp-driver/**/*.obj
-agent/wfp-driver/**/*.pdb
 agent/wfp-driver/**/*.sys
 agent/wfp-driver/**/*.cat
-agent/wfp-driver/**/*.cer
 agent/wfp-driver/**/*.recipe
 agent/wfp-driver/**/*.lastbuildstate
 agent/wfp-driver/**/*.FileListAbsolute.txt
 
-# ── Node.js dependencies ──
-node_modules/
-package-lock.json.md5    # Wails auto-generated checksum
-
-# ── Go ──
-vendor/
-
-# ── IDE / Editor ──
-.vscode/
-!.vscode/extensions.json
-!.vscode/settings.json
-.idea/
-*.swp
-*.swo
-*.swn
-*~
-.DS_Store
-Thumbs.db
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.csproj
-*.user
-*.orig
-
-# ── Logs ──
-*.log
-*.err
-logs/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-# ── Runtime / transient data ──
-data/
-certs/
-tmp/
-temp/
-*.tmp
-
-# ── OS files (Windows / macOS / Linux) ──
-Desktop.ini
-$RECYCLE.BIN/
-ehthumbs.db
-Icon?
-
-# ── Archives / large binary files ──
-*.zip
-*.tar.gz
-*.tar
-*.tgz
-*.7z
-*.rar
-*.dat
-*.raw
-*.bin
-*.msi
-
-# ── Coverage / profiling ──
-*.coverprofile
-*.prof
-coverage/
-coverage.out
-
-# ── Docker (keep Dockerfiles, ignore runtime overrides) ──
-docker-compose.override.yml
-
-# Terraform
+# Terraform local state
 **/.terraform/
+*.tfvars
 *.tfstate
 *.tfstate.*
 crash.log
@@ -155,5 +56,53 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-.tmp-tunnel/
-.claude
+# Logs and temporary files
+*.log
+*.err
+logs/
+tmp/
+temp/
+*.tmp
+.gocache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Archives and installers
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.msi
+
+# Local Docker overrides
+docker-compose.override.yml
+
+# Editor and OS files
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+*.suo
+*.user
+*.orig
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+Icon?

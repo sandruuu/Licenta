@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func TestRenewCertificateIfNeededSkipsBeforeRenewalWindow(t *testing.T) {

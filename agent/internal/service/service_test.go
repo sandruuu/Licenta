@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"agent/internal/ipc"
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
 	flowauthorization "agent/internal/service/flow-authorization"
 	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/service/usersession"
-	"agent/internal/shared/ipc"
 )
 
 type serviceTestOptions struct {

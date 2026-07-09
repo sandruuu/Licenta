@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func NewManager(config Config, dependencies Dependencies) *Manager {

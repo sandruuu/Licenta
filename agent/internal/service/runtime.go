@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"agent/internal/shared/ipc"
+	"agent/internal/ipc"
 )
 
 func (service *Service) Run(ctx context.Context) error {

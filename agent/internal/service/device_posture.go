@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/ipc"
 	"agent/internal/service/usersession"
-	"agent/internal/shared/ipc"
 )
 
 const localPostureRequiredDefaultStatus = ipc.DeviceDataStatusGood

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"agent/internal/ipc"
 	"agent/internal/service/enrollment"
-	"agent/internal/shared/ipc"
 )
 
 const (

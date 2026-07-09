@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"agent/internal/ipc"
 	dnscontrol "agent/internal/service/dns-control"
 	dnsresolver "agent/internal/service/dns-resolver"
 	trafficinterception "agent/internal/service/traffic-interception"
-	"agent/internal/shared/ipc"
 
 	"github.com/miekg/dns"
 )

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"agent/internal/ipc"
 	agentevents "agent/internal/service/agent-events"
 	devicedatasync "agent/internal/service/device-data-sync"
 	"agent/internal/service/enrollment"
@@ -16,7 +17,6 @@ import (
 	protectedresources "agent/internal/service/protected-resources"
 	trafficinterception "agent/internal/service/traffic-interception"
 	"agent/internal/service/usersession"
-	"agent/internal/shared/ipc"
 )
 
 func New(config Config, dependencies Dependencies) *Service {
