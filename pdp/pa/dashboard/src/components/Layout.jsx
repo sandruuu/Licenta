@@ -1,7 +1,8 @@
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { logoutAdminSession } from '../api';
 import BrandLogo from './ui/BrandLogo';
+import SettingsModal from './settings/SettingsModal';
 import {
   Server,
   Router,
@@ -11,7 +12,7 @@ import {
   LogOut,
   Building2,
   ShieldCheck,
-  Settings,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 
 const navSections = [
@@ -30,6 +31,7 @@ const navSections = [
 
 export default function Layout() {
   const navigate = useNavigate();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleLogout = async () => {
     await logoutAdminSession();
@@ -85,23 +87,26 @@ export default function Layout() {
           </nav>
 
           <div className="shrink-0 space-y-1 p-3">
-            <NavLink
-              to="/settings"
+            <button
+              type="button"
+              onClick={() => setSettingsOpen(true)}
               title="Settings"
-              className={({ isActive }) =>
+              aria-haspopup="dialog"
+              aria-expanded={settingsOpen}
+              className={
                 [
-                  'flex h-11 items-center justify-center gap-0 overflow-hidden rounded-md px-3 text-sm font-bold no-underline transition-all duration-200 hover:text-[15px] hover:[&>svg]:h-5 hover:[&>svg]:w-5 group-hover:justify-start group-hover:gap-3',
-                  isActive
+                  'flex h-11 w-full items-center justify-center gap-0 overflow-hidden rounded-md bg-transparent px-3 text-sm font-bold no-underline transition-all duration-200 hover:text-[15px] hover:[&>svg]:h-5 hover:[&>svg]:w-5 group-hover:justify-start group-hover:gap-3',
+                  settingsOpen
                     ? 'text-[15px] text-accent [&>svg]:h-5 [&>svg]:w-5'
                     : 'text-text-secondary hover:text-text-primary',
                 ].join(' ')
               }
             >
-              <Settings className="h-[18px] w-[18px] shrink-0 transition-all duration-200" />
+              <SettingsIcon className="h-[18px] w-[18px] shrink-0 transition-all duration-200" />
               <span className="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100">
                 Settings
               </span>
-            </NavLink>
+            </button>
             <button
               type="button"
               onClick={handleLogout}
@@ -122,6 +127,13 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
+
+      {settingsOpen && (
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
     </div>
   );
 }

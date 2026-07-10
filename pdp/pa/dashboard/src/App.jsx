@@ -23,7 +23,6 @@ import Audit from './pages/Audit';
 import DeviceHealth from './pages/DeviceHealth';
 import Gateways from './pages/Gateways';
 import GatewayDetail from './pages/GatewayDetail';
-import Settings from './pages/Settings';
 
 const DASHBOARD_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -137,7 +136,6 @@ function App() {
           <Route path="device-data" element={<DeviceHealth />} />
           <Route path="device-health" element={<Navigate to="/device-data" replace />} />
           <Route path="audit" element={<Audit />} />
-          <Route path="settings" element={<Settings />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

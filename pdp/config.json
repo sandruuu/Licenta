@@ -2,5 +2,8 @@
   "pdp_fqdn": "mtls.trust-cloud.dev",
   "tls_dns_names": ["trust-cloud.dev", "mtls.trust-cloud.dev"],
   "public_origin": "https://trust-cloud.dev",
-  "pki_ca_file": "/app/vault-ca/vault-ca.crt"
+  "pki_ca_file": "/app/vault-ca/vault-ca.crt",
+  "enrollment": {
+    "certificate_validity_days": 30
+  }
 }

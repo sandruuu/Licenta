@@ -210,7 +210,7 @@ func (s *Server) handleStepUpWebAuthnRegisterFinish(w http.ResponseWriter, r *ht
 		return
 	}
 	s.pa.Auth.Users.AddMFAMethod(user.ID, "webauthn")
-	recoveryCodes, err := s.pa.Auth.Users.GenerateRecoveryCodes(user.ID)
+	recoveryCodes, err := s.recoveryCodesForStepUpMFAEnrollment(user.ID)
 	if err != nil {
 		log.Printf("[STEP-UP] Recovery code generation failed after WebAuthn enrollment: challenge=%s user=%s err=%v", challenge.ID, user.ID, err)
 	}

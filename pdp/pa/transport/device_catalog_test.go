@@ -81,7 +81,7 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 
-	response, err := server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceCatalogGRPCGetCatalogPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	response, err := server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceCatalogGRPCGetCatalogPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return service.GetCatalog(ctx, req.(*structpb.Struct))
 	})
 	if err != nil {
@@ -127,6 +127,49 @@ func TestDeviceCatalogGRPCInterceptorRequiresEnrolledMTLSIdentity(t *testing.T) 
 	}
 }
 
+func TestDeviceCatalogGRPCStreamInterceptorAddsEnrollmentContext(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	certPEM, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
+	dataStore.SaveDeviceEnrollment(&models.DeviceEnrollment{
+		ID:              "enroll-1",
+		DeviceID:        "device-1",
+		OrganizationID:  transportTestOrganizationID,
+		Component:       "endpoint",
+		Status:          "approved",
+		CertPEM:         string(certPEM),
+		CertFingerprint: clientCertificateFingerprint(cert),
+		EnrolledAt:      time.Now().Add(-time.Minute),
+		ExpiresAt:       time.Now().Add(time.Hour),
+	})
+	grpcContext := peer.NewContext(context.Background(), &peer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{cert},
+		VerifiedChains:   [][]*x509.Certificate{{cert}},
+	}}})
+	stream := newTestGatewayControlStream(grpcContext)
+	called := false
+
+	err := server.endpointDeviceGRPCStreamAuthInterceptor()(nil, stream, &grpc.StreamServerInfo{
+		FullMethod:     agentSessionGRPCWatchStatusPath,
+		IsServerStream: true,
+	}, func(srv interface{}, stream grpc.ServerStream) error {
+		called = true
+		enrollment, ok := deviceEnrollmentFromContextValue(stream.Context())
+		if !ok || enrollment.DeviceID != "device-1" {
+			t.Fatalf("stream enrollment context = %+v, ok=%v", enrollment, ok)
+		}
+		if _, ok := clientCertificateFromGRPCContext(stream.Context()); !ok {
+			t.Fatalf("stream context lost TLS peer certificate")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream interceptor returned error: %v", err)
+	}
+	if !called {
+		t.Fatalf("stream handler was not called")
+	}
+}
+
 func TestDeviceCatalogGRPCInterceptorRejectsFingerprintMismatch(t *testing.T) {
 	server, dataStore := newDeviceAPITestServer(t)
 	_, cert := newDeviceAPICertificate(t, "device-1", time.Now().Add(time.Hour))
@@ -149,7 +192,7 @@ func TestDeviceCatalogGRPCInterceptorRejectsFingerprintMismatch(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceCatalogGRPCGetCatalogPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err = server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceCatalogGRPCGetCatalogPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		t.Fatalf("gRPC handler should not be reached")
 		return nil, nil
 	})

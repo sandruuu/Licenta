@@ -54,7 +54,7 @@ func TestDeviceDataGRPCReportDeviceDataStoresRawData(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceDataGRPCService{server: server}
-	response, err := server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	response, err := server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if err != nil {
@@ -119,7 +119,7 @@ func TestDeviceDataGRPCReportDeviceDataRejectsDeviceMismatch(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceDataGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err = server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if status.Code(err) != codes.PermissionDenied {
@@ -156,7 +156,7 @@ func TestDeviceDataGRPCReportDeviceDataRejectsMissingSessionToken(t *testing.T) 
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceDataGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err = server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if status.Code(err) != codes.Unauthenticated {
@@ -196,7 +196,7 @@ func TestDeviceDataGRPCReportDeviceDataRejectsSessionMismatch(t *testing.T) {
 		VerifiedChains:   [][]*x509.Certificate{{cert}},
 	}}})
 	service := &deviceDataGRPCService{server: server}
-	_, err = server.deviceCatalogGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
+	_, err = server.endpointDeviceGRPCAuthInterceptor()(grpcContext, request, &grpc.UnaryServerInfo{FullMethod: deviceDataGRPCReportDeviceDataPath}, func(ctx context.Context, req interface{}) (interface{}, error) {
 		return service.ReportDeviceData(ctx, req.(*structpb.Struct))
 	})
 	if status.Code(err) != codes.PermissionDenied {

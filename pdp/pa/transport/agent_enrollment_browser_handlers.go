@@ -235,7 +235,7 @@ func renderEnrollmentPage(w http.ResponseWriter, title, message, email string, s
 	if resultMark == "failure" {
 		completionMarkup = `<svg class="cancel-mark" viewBox="0 0 72 72" aria-hidden="true"><circle class="cancel-ring" pathLength="1" cx="36" cy="36" r="25"/><path class="cancel-cross-first" pathLength="1" d="M26 26l20 20"/><path class="cancel-cross-second" pathLength="1" d="M46 26L26 46"/></svg>`
 	}
-	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>` + html.EscapeString(title) + `</title><style>` + browserPageStyles + `</style></head><body><main class="panel">` + browserBrandMarkup + `<h1>` + html.EscapeString(title) + `</h1>` + messageMarkup + form + completionMarkup + `</main></body></html>`))
+	_, _ = w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TRUSTCloud</title><style>` + browserPageStyles + `</style></head><body><main class="panel">` + browserBrandMarkup + `<h1>` + html.EscapeString(title) + `</h1>` + messageMarkup + form + completionMarkup + `</main></body></html>`))
 }
 
 func browserResultMarkForTitle(lowerTitle string) string {

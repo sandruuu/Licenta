@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultCertificateValidityDays   = 1
+	defaultCertificateValidityDays   = 30
 	defaultBrowserSessionTTL         = 5 * time.Minute
 	defaultEnrollmentCleanupInterval = time.Minute
 )

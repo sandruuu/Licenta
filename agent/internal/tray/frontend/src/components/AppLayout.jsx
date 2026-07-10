@@ -51,7 +51,7 @@ function AppLayout({
   const [activeView, setActiveView] = useState('security');
   const notificationIdsRef = useRef(new Set());
   const activeViewRef = useRef(activeView);
-  const openedStepUpURLRef = useRef('');
+  const openedStepUpPromptRef = useRef('');
 
   useEffect(() => {
     if (authenticated) {
@@ -60,7 +60,7 @@ function AppLayout({
     setNotifications([]);
     setHasUnreadNotifications(false);
     notificationIdsRef.current.clear();
-    openedStepUpURLRef.current = '';
+    openedStepUpPromptRef.current = '';
   }, [authenticated]);
 
   useEffect(() => {
@@ -72,17 +72,18 @@ function AppLayout({
 
   useEffect(() => {
     if (!stepUpURL) {
-      openedStepUpURLRef.current = '';
+      openedStepUpPromptRef.current = '';
       return;
     }
-    if (openedStepUpURLRef.current === stepUpURL) {
+    const stepUpPromptKey = `${stepUpURL}:${sessionMessageAt || ''}`;
+    if (openedStepUpPromptRef.current === stepUpPromptKey) {
       return;
     }
-    openedStepUpURLRef.current = stepUpURL;
+    openedStepUpPromptRef.current = stepUpPromptKey;
     if (stepUpURL.startsWith('https://') && window?.runtime?.BrowserOpenURL) {
       BrowserOpenURL(stepUpURL);
     }
-  }, [stepUpURL]);
+  }, [sessionMessageAt, stepUpURL]);
 
   useEffect(() => {
     if (!stepUpURL || !stepUpMessage) {
@@ -202,7 +203,6 @@ function enqueueNotification(
   }
   notificationIdsRef.current.add(notificationID);
   setNotifications((current) => [
-    ...current,
     {
       id: notificationID,
       title: notification.title,
@@ -210,6 +210,7 @@ function enqueueNotification(
       variant: notification.variant,
       createdAt: notificationTimestamp(notification.createdAt) || Date.now(),
     },
+    ...current,
   ]);
   if (activeViewRef.current !== 'notifications') {
     setHasUnreadNotifications(true);
@@ -311,6 +312,10 @@ function toastTone(variant = 'warning') {
 }
 
 function NotificationsView({ notifications = [] }) {
+  const sortedNotifications = [...notifications].sort(
+    (a, b) => notificationTimestamp(b.createdAt) - notificationTimestamp(a.createdAt),
+  );
+
   return (
     <section className="ml-[54px] flex h-full min-h-0 flex-col overflow-hidden bg-[#f9faf9] text-[#202427]">
       <header className="mx-8 shrink-0 border-b border-[#e3e4e5] py-5">
@@ -328,9 +333,9 @@ function NotificationsView({ notifications = [] }) {
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto px-8 pb-6 pt-4">
-        {notifications.length > 0 ? (
+        {sortedNotifications.length > 0 ? (
           <div className="flex flex-col gap-3">
-            {notifications.map((notification) => (
+            {sortedNotifications.map((notification) => (
               <NotificationCard key={notification.id} notification={notification} />
             ))}
           </div>

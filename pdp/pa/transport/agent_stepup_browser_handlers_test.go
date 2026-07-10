@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -227,6 +228,7 @@ func TestBrowserStepUpConfiguredTOTPMatchesAdminMFALayout(t *testing.T) {
 		`height:44px`,
 		`max-width:300px`,
 		"Verify",
+		`class="recovery-trigger"`,
 		"Back",
 		`href="/verify/` + challenge.ID + `"`,
 	} {
@@ -256,6 +258,24 @@ func TestBrowserStepUpConfiguredPasskeyCopy(t *testing.T) {
 	}
 	if strings.Contains(subtitle, "PDP") {
 		t.Fatalf("subtitle should not mention PDP: %q", subtitle)
+	}
+}
+
+func TestWebAuthnStepUpMethodIncludesRecoveryCodeOption(t *testing.T) {
+	body := renderWebAuthnMethodBody("challenge-1", stepUpPageMethod{
+		ID:         "webauthn",
+		Configured: true,
+	}, "csrf-token")
+	for _, want := range []string{
+		`id="webauthn-verify-button">Use passkey</button>`,
+		`class="recovery-trigger"`,
+		`name="method" value="recovery"`,
+		`name="target_method" value="webauthn"`,
+		"Use recovery code",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("configured passkey body missing %q: %s", want, body)
+		}
 	}
 }
 
@@ -442,6 +462,7 @@ func TestBrowserStepUpCompletedStatusUsesResourceRetryMessage(t *testing.T) {
 		"Verification complete",
 		stepUpResourceCompleteMessage,
 		`class="completion-mark"`,
+		`class="completion-check"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("completed status page missing %q: %s", want, body)
@@ -449,6 +470,139 @@ func TestBrowserStepUpCompletedStatusUsesResourceRetryMessage(t *testing.T) {
 	}
 	if strings.Contains(body, "go back to the TRUSTAgent app") {
 		t.Fatalf("completed step-up page should not use TrustAgent login message: %s", body)
+	}
+}
+
+func TestBrowserStepUpCompletedPageOffersRecoveryCodeRegeneration(t *testing.T) {
+	server, _ := newDeviceAPITestServer(t)
+	challenge := newStepUpBrowserChallenge(t, server, &models.User{
+		ID:             "user-stepup-completed-recovery",
+		Username:       "completed-recovery@example.test",
+		Email:          "completed-recovery@example.test",
+		MFAMethods:     []string{"totp"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, []string{"totp"})
+	if _, err := server.pa.Auth.Users.GenerateRecoveryCodes("user-stepup-completed-recovery"); err != nil {
+		t.Fatalf("generate recovery codes: %v", err)
+	}
+	if _, err := server.pa.StepUps.Complete(challenge.ID, "totp", time.Now().UTC()); err != nil {
+		t.Fatalf("complete step-up challenge: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?completed=1", nil)
+	rr := httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+
+	body := rr.Body.String()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rr.Code, body)
+	}
+	for _, want := range []string{
+		`id="regenerate-recovery-codes-button"`,
+		"Regenerate recovery codes",
+		`class="completion-check"`,
+		`data-csrf-token="`,
+		publicStepUpAssetPath,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("completed page missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "Save these recovery codes") {
+		t.Fatalf("completed page should not reveal existing recovery codes: %s", body)
+	}
+}
+
+func TestStepUpRecoveryCodesRegenerateRequiresCompletedChallenge(t *testing.T) {
+	server, _ := newDeviceAPITestServer(t)
+	challenge := newStepUpBrowserChallenge(t, server, &models.User{
+		ID:             "user-stepup-pending-recovery",
+		Username:       "pending-recovery@example.test",
+		Email:          "pending-recovery@example.test",
+		MFAMethods:     []string{"totp"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, []string{"totp"})
+
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID, nil)
+	rr := httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+	csrf := csrfCookie(t, rr)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/step-up/recovery-codes", strings.NewReader(`{"challenge_id":"`+challenge.ID+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf.Value)
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	server.handleStepUpRecoveryCodesRegenerate(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestStepUpRecoveryCodesRegenerateReplacesExistingCodes(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	userID := "user-stepup-regenerate-recovery"
+	challenge := newStepUpBrowserChallenge(t, server, &models.User{
+		ID:             userID,
+		Username:       "regenerate-recovery@example.test",
+		Email:          "regenerate-recovery@example.test",
+		MFAMethods:     []string{"totp"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, []string{"totp"})
+	oldCodes, err := server.pa.Auth.Users.GenerateRecoveryCodes(userID)
+	if err != nil {
+		t.Fatalf("generate recovery codes: %v", err)
+	}
+	if _, err := server.pa.StepUps.Complete(challenge.ID, "totp", time.Now().UTC()); err != nil {
+		t.Fatalf("complete step-up challenge: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?completed=1", nil)
+	rr := httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+	csrf := csrfCookie(t, rr)
+
+	req = httptest.NewRequest(http.MethodPost, "/api/step-up/recovery-codes", strings.NewReader(`{"challenge_id":"`+challenge.ID+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf.Value)
+	req.AddCookie(csrf)
+	rr = httptest.NewRecorder()
+	server.handleStepUpRecoveryCodesRegenerate(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rr.Code, rr.Body.String())
+	}
+	var response struct {
+		RecoveryCodes []string `json:"recovery_codes"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.RecoveryCodes) != 10 {
+		t.Fatalf("recovery code count = %d, want 10", len(response.RecoveryCodes))
+	}
+	activeCodes, err := dataStore.ListActiveMFARecoveryCodes(userID)
+	if err != nil {
+		t.Fatalf("list recovery codes: %v", err)
+	}
+	if len(activeCodes) != len(response.RecoveryCodes) {
+		t.Fatalf("active recovery codes = %d, want %d", len(activeCodes), len(response.RecoveryCodes))
+	}
+	if err := server.pa.Auth.Users.VerifyRecoveryCode(userID, oldCodes[0]); err == nil {
+		t.Fatal("old recovery code should be invalid after regeneration")
+	}
+	if err := server.pa.Auth.Users.VerifyRecoveryCode(userID, response.RecoveryCodes[0]); err != nil {
+		t.Fatalf("new recovery code should be valid: %v", err)
 	}
 }
 
@@ -502,7 +656,7 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 		t.Fatalf("status = %d, want 200 body=%s", rr.Code, rr.Body.String())
 	}
 	body := rr.Body.String()
-	if !strings.Contains(body, "Verification complete") || !strings.Contains(body, `class="completion-mark"`) {
+	if !strings.Contains(body, "Verification complete") || !strings.Contains(body, `class="completion-check"`) {
 		t.Fatalf("completion page missing success message: %s", rr.Body.String())
 	}
 	if !strings.Contains(body, stepUpResourceCompleteMessage) {
@@ -521,6 +675,120 @@ func TestBrowserStepUpTOTPSetupCompletesChallenge(t *testing.T) {
 	completed, ok := server.pa.StepUps.Get(challenge.ID)
 	if !ok || completed.Status != pa.StepUpStatusCompleted || completed.CompletedMethod != "totp" {
 		t.Fatalf("challenge not completed via TOTP: %+v ok=%v", completed, ok)
+	}
+	activeCodes, err := dataStore.ListActiveMFARecoveryCodes("user-stepup")
+	if err != nil {
+		t.Fatalf("list recovery codes: %v", err)
+	}
+	if len(activeCodes) != 10 {
+		t.Fatalf("active recovery codes = %d, want 10", len(activeCodes))
+	}
+}
+
+func TestBrowserStepUpTOTPSetupKeepsExistingRecoveryCodes(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	challenge := newStepUpBrowserChallenge(t, server, &models.User{
+		ID:             "user-stepup-existing-recovery",
+		Username:       "existing-recovery@example.test",
+		Email:          "existing-recovery@example.test",
+		PasswordHash:   testPasswordHash(t, "secret"),
+		MFAMethods:     []string{"webauthn"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}, []string{"totp"})
+	existingCodes, err := server.pa.Auth.Users.GenerateRecoveryCodes("user-stepup-existing-recovery")
+	if err != nil {
+		t.Fatalf("generate existing recovery codes: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
+	rr := httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+
+	csrf := csrfCookie(t, rr)
+	authCookie := completeStepUpReauth(t, server, challenge, csrf, "secret")
+
+	req = httptest.NewRequest(http.MethodGet, "/verify/"+challenge.ID+"?method=totp", nil)
+	req.AddCookie(csrf)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+
+	secret, ok := server.pa.StepUps.PendingTOTPSecret(challenge.ID)
+	if !ok || strings.TrimSpace(secret) == "" {
+		t.Fatalf("TOTP setup did not create pending challenge secret")
+	}
+	code, err := auth.GenerateTOTPCode(secret, time.Now())
+	if err != nil {
+		t.Fatalf("generate TOTP code: %v", err)
+	}
+
+	form := url.Values{}
+	form.Set("csrf_token", csrf.Value)
+	form.Set("method", "totp")
+	form.Set("totp_code", code)
+	req = httptest.NewRequest(http.MethodPost, "/verify/"+challenge.ID, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(csrf)
+	req.AddCookie(authCookie)
+	rr = httptest.NewRecorder()
+	server.handleBrowserStepUp(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "Save these recovery codes") {
+		t.Fatalf("second MFA enrollment should not regenerate recovery codes: %s", body)
+	}
+	user, ok := dataStore.GetUser("user-stepup-existing-recovery")
+	if !ok || !hasMFAMethod(user.MFAMethods, "totp") || !hasMFAMethod(user.MFAMethods, "webauthn") {
+		t.Fatalf("TOTP was not added next to existing MFA method: user=%+v ok=%v", user, ok)
+	}
+	activeCodes, err := dataStore.ListActiveMFARecoveryCodes("user-stepup-existing-recovery")
+	if err != nil {
+		t.Fatalf("list recovery codes: %v", err)
+	}
+	if len(activeCodes) != len(existingCodes) {
+		t.Fatalf("active recovery codes = %d, want %d", len(activeCodes), len(existingCodes))
+	}
+}
+
+func TestStepUpMFAEnrollmentRecoveryCodesAreAccountLevel(t *testing.T) {
+	server, dataStore := newDeviceAPITestServer(t)
+	dataStore.SaveUser(&models.User{
+		ID:             "user-account-level-recovery",
+		Username:       "account-level@example.test",
+		Email:          "account-level@example.test",
+		MFAMethods:     []string{"totp"},
+		Role:           "user",
+		OrganizationID: transportTestOrganizationID,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	})
+
+	firstCodes, err := server.recoveryCodesForStepUpMFAEnrollment("user-account-level-recovery")
+	if err != nil {
+		t.Fatalf("first recovery generation returned error: %v", err)
+	}
+	if len(firstCodes) != 10 {
+		t.Fatalf("first recovery code count = %d, want 10", len(firstCodes))
+	}
+	secondCodes, err := server.recoveryCodesForStepUpMFAEnrollment("user-account-level-recovery")
+	if err != nil {
+		t.Fatalf("second recovery generation returned error: %v", err)
+	}
+	if len(secondCodes) != 0 {
+		t.Fatalf("second recovery code count = %d, want 0", len(secondCodes))
+	}
+	activeCodes, err := dataStore.ListActiveMFARecoveryCodes("user-account-level-recovery")
+	if err != nil {
+		t.Fatalf("list recovery codes: %v", err)
+	}
+	if len(activeCodes) != len(firstCodes) {
+		t.Fatalf("active recovery codes = %d, want %d", len(activeCodes), len(firstCodes))
 	}
 }
 

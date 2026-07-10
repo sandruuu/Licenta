@@ -72,7 +72,7 @@ func (c *Config) ApplyDefaults() {
 
 	defaultInt(&c.Gateway.CertificateValidityDays, 7)
 	defaultDuration(&c.Gateway.EnrollmentTokenTTL, time.Hour)
-	defaultInt(&c.Enrollment.CertificateValidityDays, 1)
+	defaultInt(&c.Enrollment.CertificateValidityDays, 30)
 	defaultDuration(&c.Enrollment.BrowserSessionTTL, 5*time.Minute)
 
 	defaultString(&c.Geo.ProviderURL, "https://ipapi.co/{ip}/json/")

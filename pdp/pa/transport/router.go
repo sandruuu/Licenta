@@ -198,6 +198,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/auth/revoke-token", s.adminAuthMiddleware(http.HandlerFunc(s.handleRevokeToken)))
 
 	// WebAuthn / Passkey endpoints
+	s.mux.HandleFunc("/api/step-up/recovery-codes", s.handleStepUpRecoveryCodesRegenerate)
 	s.mux.HandleFunc("/api/step-up/webauthn/begin", s.handleStepUpWebAuthnBegin)
 	s.mux.HandleFunc("/api/step-up/webauthn/finish", s.handleStepUpWebAuthnFinish)
 	s.mux.HandleFunc("/api/step-up/webauthn/register/begin", s.handleStepUpWebAuthnRegisterBegin)

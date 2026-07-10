@@ -7,10 +7,11 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $PSCommandPath
-$agentRoot = Resolve-Path (Join-Path $scriptDir "..")
+$agentRoot = (Resolve-Path -LiteralPath (Join-Path $scriptDir "..")).ProviderPath
 if ($OutputDir.Trim() -eq "") {
     $OutputDir = Join-Path $agentRoot "build"
 }
+$OutputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDir)
 
 function Get-FirstAssetName([string]$AssetsDir, [string]$Filter) {
     if (-not (Test-Path -LiteralPath $AssetsDir)) {
@@ -217,6 +218,9 @@ $iscc = Find-InnoSetupCompiler
 if ($iscc.Trim() -ne "") {
     $installerScript = Join-Path $scriptDir "trust-agent-setup.iss"
     & $iscc "/DSourceDir=$OutputDir" "/O$OutputDir" "/FTrustAgent" $installerScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "Inno Setup compiler failed with exit code $LASTEXITCODE."
+    }
     Write-Host "Windows setup created at $(Join-Path $OutputDir 'TrustAgent.exe')"
 } else {
     Write-Host "Inno Setup compiler (ISCC.exe) was not found. Skipping TrustAgent.exe."

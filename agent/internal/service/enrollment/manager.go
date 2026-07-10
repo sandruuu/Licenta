@@ -473,6 +473,9 @@ func (manager *Manager) setEnrollmentEnrolled(record EnrollmentRecord) {
 }
 
 func (manager *Manager) Refresh(ctx context.Context) {
+	if manager.isEnrollmentInProgress() {
+		return
+	}
 	record, err := manager.store.Load(ctx)
 	if err != nil {
 		manager.logger.Warn("Failed to load enrollment state", "error", err)
@@ -499,8 +502,8 @@ func (manager *Manager) Refresh(ctx context.Context) {
 	manager.mu.RLock()
 	previous := manager.enrollment
 	manager.mu.RUnlock()
-	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled", "")
-	if previous.State != ipc.EnrollmentStateEnrolled || previous.DeviceID != record.DeviceID {
+	if manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled", "") &&
+		(previous.State != ipc.EnrollmentStateEnrolled || previous.DeviceID != record.DeviceID) {
 		manager.notifyEnrolled()
 	}
 }
@@ -545,6 +548,9 @@ func (manager *Manager) RenewCertificateIfNeeded(ctx context.Context) (bool, err
 	}
 	manager.renewalMu.Lock()
 	defer manager.renewalMu.Unlock()
+	if manager.isEnrollmentInProgress() {
+		return false, nil
+	}
 
 	record, err := manager.store.Load(ctx)
 	if err != nil {
@@ -586,8 +592,9 @@ func (manager *Manager) RenewCertificateIfNeeded(ctx context.Context) (bool, err
 		manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, record.DeviceID, "Device enrolled; certificate renewal failed", err.Error())
 		return false, err
 	}
-	manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, updated.DeviceID, "Device certificate renewed", "")
-	manager.notifyEnrolled()
+	if manager.setEnrollmentRuntime(ipc.EnrollmentStateEnrolled, updated.DeviceID, "Device certificate renewed", "") {
+		manager.notifyEnrolled()
+	}
 	return true, nil
 }
 
@@ -670,10 +677,20 @@ func (manager *Manager) renewCertificate(ctx context.Context, record EnrollmentR
 	return updated, nil
 }
 
-func (manager *Manager) setEnrollmentRuntime(state ipc.EnrollmentState, deviceID, message, lastError string) {
+func (manager *Manager) setEnrollmentRuntime(state ipc.EnrollmentState, deviceID, message, lastError string) bool {
 	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.enrollment.State == ipc.EnrollmentStateEnrolling {
+		return false
+	}
 	manager.enrollment = RuntimeState{State: state, DeviceID: strings.TrimSpace(deviceID), Message: strings.TrimSpace(message), LastError: strings.TrimSpace(lastError)}
-	manager.mu.Unlock()
+	return true
+}
+
+func (manager *Manager) isEnrollmentInProgress() bool {
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	return manager.enrollment.State == ipc.EnrollmentStateEnrolling
 }
 
 func (manager *Manager) notifyEnrolled() {

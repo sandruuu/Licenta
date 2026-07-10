@@ -46,11 +46,16 @@ const stepUpBrowserJS = `
         if (hidden) hidden.value = inputs.map((input) => input.value.replace(/\D/g, '').slice(0, 1)).join('');
       }
 
-      function focus(index) {
+      function focus(index, selectValue = true) {
         const target = inputs[index];
         if (!target) return;
         target.focus();
-        target.select();
+        if (selectValue) {
+          target.select();
+          return;
+        }
+        const cursor = target.value.length;
+        target.setSelectionRange(cursor, cursor);
       }
 
       function writeDigits(start, value) {
@@ -64,7 +69,12 @@ const stepUpBrowserJS = `
           inputs[start + offset].value = digits[offset];
         }
         sync();
-        focus(Math.min(start + digits.length, inputs.length - 1));
+        const nextIndex = start + digits.length;
+        if (nextIndex < inputs.length) {
+          focus(nextIndex);
+          return;
+        }
+        focus(inputs.length - 1, false);
       }
 
       inputs.forEach((input, index) => {
@@ -177,6 +187,7 @@ const stepUpBrowserJS = `
       '<div class="brand-icon"><svg viewBox="0 0 100 100" aria-hidden="true"><circle class="logo-ring" cx="50" cy="50" r="44" fill="none" stroke="currentColor" stroke-width="8"/><path class="logo-check" d="M30 52.5 44 66 71 34" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg></div>' +
       '<div class="brand-title">TrustCloud</div>' +
       '</div>' +
+      '<svg class="completion-mark" viewBox="0 0 72 72" aria-hidden="true"><path class="completion-ring" pathLength="1" d="M60.7 32.5A25 25 0 1 1 49.2 14.8"/><path class="completion-check" pathLength="1" d="M20 39l13 13 25-31"/></svg>' +
       '<div class="stepup-heading"><h1>Verification complete</h1><p class="stepup-copy">Save these recovery codes before closing this page. Each code can be used once if you lose access to your MFA method.</p></div>' +
       '<div class="recovery-codes">' + codes.map((code) => '<code>' + escapeHTML(code) + '</code>').join('') + '</div>' +
       '<p class="stepup-copy recovery-complete-copy">You can close this tab and try to access the resource again.</p>' +
@@ -299,6 +310,29 @@ const stepUpBrowserJS = `
     }
   }
 
+  async function regenerateRecoveryCodes() {
+    const button = document.getElementById('regenerate-recovery-codes-button');
+    if (!button || !requireActive()) return;
+    try {
+      button.disabled = true;
+      clearStatus();
+      const response = await fetch('/api/step-up/recovery-codes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: JSON.stringify({ challenge_id: challengeID }),
+      });
+      if (!response.ok) throw new Error('recovery code regeneration failed');
+      const result = await response.json().catch(() => ({}));
+      clearStatus();
+      if (showRecoveryCodes(result.recovery_codes)) return;
+      throw new Error('missing recovery codes');
+    } catch (_) {
+      if (markExpired()) return;
+      showError('Recovery codes could not be regenerated. Try again.');
+      if (button) button.disabled = false;
+    }
+  }
+
   setupOTPInputs();
   root.querySelectorAll('form').forEach((form) => {
     form.addEventListener('submit', requireActive);
@@ -312,6 +346,8 @@ const stepUpBrowserJS = `
   if (verifyButton) verifyButton.addEventListener('click', verifyWebAuthn);
   const registerButton = document.getElementById('webauthn-register-button');
   if (registerButton) registerButton.addEventListener('click', registerWebAuthn);
+  const regenerateButton = document.getElementById('regenerate-recovery-codes-button');
+  if (regenerateButton) regenerateButton.addEventListener('click', regenerateRecoveryCodes);
 })();
 `
 

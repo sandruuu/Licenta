@@ -114,7 +114,10 @@ func (s *Server) initDeviceCatalogGRPC() {
 	if s.gatewayControl == nil {
 		s.gatewayControl = NewGatewayControlRegistry(s.pa.Runtime)
 	}
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(s.deviceCatalogGRPCAuthInterceptor()))
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(s.endpointDeviceGRPCAuthInterceptor()),
+		grpc.StreamInterceptor(s.endpointDeviceGRPCStreamAuthInterceptor()),
+	)
 	grpcServer.RegisterService(&agentEnrollmentGRPCServiceDesc, &agentEnrollmentGRPCService{server: s})
 	grpcServer.RegisterService(&agentSessionGRPCServiceDesc, &agentSessionGRPCService{server: s})
 	grpcServer.RegisterService(&deviceCatalogGRPCServiceDesc, &deviceCatalogGRPCService{server: s})
@@ -127,28 +130,70 @@ func (s *Server) initDeviceCatalogGRPC() {
 	s.grpcHandler = grpcServer
 }
 
-func (s *Server) deviceCatalogGRPCAuthInterceptor() grpc.UnaryServerInterceptor {
+func (s *Server) endpointDeviceGRPCAuthInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		if info != nil && (isGatewayGRPCMethod(info.FullMethod) || isAgentEnrollmentGRPCMethod(info.FullMethod)) {
+		fullMethod := ""
+		if info != nil {
+			fullMethod = info.FullMethod
+		}
+		if shouldBypassEndpointDeviceGRPCAuth(fullMethod) {
 			return handler(ctx, req)
 		}
-		peerCert, ok := clientCertificateFromGRPCContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "client certificate required for device authentication")
+		authenticatedCtx, err := s.endpointDeviceGRPCContext(ctx)
+		if err != nil {
+			return nil, err
 		}
-		enrollment, statusCode, errorMessage := s.authenticateDeviceCertificate(peerCert)
-		if statusCode != 0 {
-			return nil, status.Error(grpcCodeForHTTPStatus(statusCode), errorMessage)
-		}
-		ctx = context.WithValue(ctx, deviceEnrollmentContextKey, enrollment)
-		return handler(ctx, req)
+		return handler(authenticatedCtx, req)
 	}
+}
+
+func (s *Server) endpointDeviceGRPCStreamAuthInterceptor() grpc.StreamServerInterceptor {
+	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		fullMethod := ""
+		if info != nil {
+			fullMethod = info.FullMethod
+		}
+		if shouldBypassEndpointDeviceGRPCAuth(fullMethod) {
+			return handler(srv, stream)
+		}
+		ctx, err := s.endpointDeviceGRPCContext(stream.Context())
+		if err != nil {
+			return err
+		}
+		return handler(srv, serverStreamWithContext{ServerStream: stream, ctx: ctx})
+	}
+}
+
+func shouldBypassEndpointDeviceGRPCAuth(fullMethod string) bool {
+	return isGatewayGRPCMethod(fullMethod) || isAgentEnrollmentGRPCMethod(fullMethod)
+}
+
+func (s *Server) endpointDeviceGRPCContext(ctx context.Context) (context.Context, error) {
+	peerCert, ok := clientCertificateFromGRPCContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "client certificate required for device authentication")
+	}
+	enrollment, statusCode, errorMessage := s.authenticateDeviceCertificate(peerCert)
+	if statusCode != 0 {
+		return nil, status.Error(grpcCodeForHTTPStatus(statusCode), errorMessage)
+	}
+	return context.WithValue(ctx, deviceEnrollmentContextKey, enrollment), nil
+}
+
+type serverStreamWithContext struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (stream serverStreamWithContext) Context() context.Context {
+	return stream.ctx
 }
 
 func isGatewayGRPCMethod(fullMethod string) bool {
 	fullMethod = strings.TrimSpace(fullMethod)
 	return strings.HasPrefix(fullMethod, "/"+gatewayEnrollmentGRPCServiceName+"/") ||
-		strings.HasPrefix(fullMethod, "/"+gatewayTrustGRPCServiceName+"/")
+		strings.HasPrefix(fullMethod, "/"+gatewayTrustGRPCServiceName+"/") ||
+		strings.HasPrefix(fullMethod, "/"+gatewayControlGRPCServiceName+"/")
 }
 
 func isAgentEnrollmentGRPCMethod(fullMethod string) bool {
