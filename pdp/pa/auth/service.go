@@ -17,8 +17,7 @@ import (
 	"pdp/util"
 )
 
-// Service coordinates identity and authentication services owned by the PA.
-// It combines UserManager, JWTManager, TOTP MFA, WebAuthn, and federation.
+// Service coordinates identity and authentication services.
 type Service struct {
 	Users      *UserManager
 	JWT        *JWTManager
@@ -95,7 +94,6 @@ func loadJWTSigningKey(cfg *config.Config, runtimeState *redisstate.Client) (*ec
 }
 
 // Login handles primary authentication with email and password.
-// MFA is deferred to resource-access step-up challenges.
 func (svc *Service) Login(req models.LoginRequest) (*models.LoginResponse, error) {
 	identifier := req.Identifier()
 	locked, until, err := svc.Runtime.IsLockedOut(identifier)
@@ -140,7 +138,6 @@ func (svc *Service) ValidateToken(tokenString string) (*CustomClaims, error) {
 }
 
 // ParseToken validates a JWT auth token without checking MFADone.
-// Used by the resource-access step-up flow to accept tokens before MFA completion.
 func (svc *Service) ParseToken(tokenString string) (*CustomClaims, error) {
 	return svc.JWT.ParseAuthTokenForAudience(tokenString, AgentTokenAudience)
 }

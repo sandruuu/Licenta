@@ -31,8 +31,6 @@ func initializeRuntimeState(ctx context.Context, cfg *config.Config) *redisstate
 }
 
 func initializePolicyAdministrator(cfg *config.Config, dataStore *store.Store, runtimeState *redisstate.Client, stopChan <-chan struct{}) *pa.PolicyAdministrator {
-	// The PDP embeds PA and PE in one process. PA owns orchestration and
-	// forwards normalized access context to the internal Policy Engine.
 	policyAdmin := pa.NewPolicyAdministrator(cfg, dataStore, runtimeState)
 
 	policyAdmin.Sessions.StartCleanupLoop(cfg.Runtime.SessionCleanupInterval, stopChan)
@@ -41,8 +39,6 @@ func initializePolicyAdministrator(cfg *config.Config, dataStore *store.Store, r
 }
 
 func startPolicyAdministratorTransport(ctx context.Context, cfg *config.Config, policyAdmin *pa.PolicyAdministrator, identity *pdpIdentityState) <-chan error {
-	// PA exposes the PDP control-plane surface over HTTPS/gRPC. PE stays
-	// internal and is reached only through PolicyAdministrator methods.
 	server, err := transport.NewServer(policyAdmin, cfg.ListenAddr, cfg.MTLSCA)
 	if err != nil {
 		log.Fatalf("Failed to initialize PA transport server: %v", err)

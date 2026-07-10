@@ -14,7 +14,6 @@ import (
 )
 
 // checkAuthRateLimit enforces per-IP rate limiting on authentication endpoints.
-// Returns true if the request should be rejected (rate limit exceeded).
 func (s *Server) checkAuthRateLimit(w http.ResponseWriter, r *http.Request) bool {
 	ip := clientIPFromRequest(r)
 	if ip == "" {

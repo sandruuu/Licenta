@@ -10,8 +10,6 @@ import (
 const gatewayIdentityTrustDomain = "gateway"
 
 // GatewayIdentityURI is the stable certificate identity used for gateway mTLS.
-// FQDN remains a network attribute; organization_id + gateway_id are the
-// authorization boundary and the gateway instance identity.
 func GatewayIdentityURI(organizationID, gatewayID string) string {
 	organizationID = strings.TrimSpace(organizationID)
 	gatewayID = strings.TrimSpace(gatewayID)
@@ -25,9 +23,7 @@ func GatewayIdentityURI(organizationID, gatewayID string) string {
 	)
 }
 
-// GatewayCertificateIdentity extracts organization_id and gateway_id from the
-// gateway URI SAN. It intentionally ignores CommonName because CN/FQDN is
-// mutable and ambiguous across organizations.
+// GatewayCertificateIdentity extracts organization_id and gateway_id from the gateway URI SAN.
 func GatewayCertificateIdentity(cert *x509.Certificate) (organizationID, gatewayID string, ok bool) {
 	if cert == nil {
 		return "", "", false

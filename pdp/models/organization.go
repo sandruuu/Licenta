@@ -25,7 +25,7 @@ type OrganizationMembership struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
-// IdentityProviderConfig defines an external OIDC provider trusted by an organization.
+// IdentityProviderConfig defines an external OIDC provider for an organization.
 type IdentityProviderConfig struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`

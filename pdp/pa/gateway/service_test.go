@@ -36,8 +36,6 @@ func TestServiceCreateListAndGetGatewayForAdmin(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("list length = %d, want 1", len(items))
 	}
-	// EnrollmentToken is intentionally zeroed in gatewayListItem for defense-in-depth.
-	// The plaintext token is only returned at creation time (CreateGatewayResult).
 	if items[0].EnrollmentToken != "" {
 		t.Fatalf("list enrollment token should be empty (sanitized), got %q", items[0].EnrollmentToken)
 	}

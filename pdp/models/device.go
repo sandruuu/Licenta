@@ -12,7 +12,7 @@ type DeviceHealthReport struct {
 	OrganizationID string        `json:"organization_id,omitempty"`
 }
 
-// DeviceDataReport is the normalized raw device data payload used by policies.
+// DeviceDataReport contains collected device data.
 type DeviceDataReport struct {
 	DeviceID       string        `json:"device_id"`
 	UserID         string        `json:"user_id,omitempty"`

@@ -12,9 +12,7 @@ type sessionScanner interface {
 	Scan(dest ...any) error
 }
 
-// ─────────────────────────────────────────────
 // Session operations
-// ─────────────────────────────────────────────
 
 func (s *Store) GetSession(id string) (*models.Session, bool) {
 	row := s.db.QueryRow(`SELECT id, user_id, username, device_id, source_ip, resource,

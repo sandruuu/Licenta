@@ -12,9 +12,7 @@ import (
 	"pdp/util"
 )
 
-// ─────────────────────────────────────────────
 // Admin endpoints
-// ─────────────────────────────────────────────
 
 func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

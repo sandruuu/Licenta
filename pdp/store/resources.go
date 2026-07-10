@@ -6,9 +6,7 @@ import (
 	"pdp/models"
 )
 
-// ─────────────────────────────────────────────
 // Resource operations
-// ─────────────────────────────────────────────
 
 func (s *Store) GetResource(id string) (*models.Resource, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, type, host, external_port, internal_port, external_url, enabled,

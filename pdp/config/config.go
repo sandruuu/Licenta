@@ -156,9 +156,7 @@ func (c *Config) PublicConfig() PublicDashboardConfig {
 	return c.Public
 }
 
-// CertificateDNSNames returns the complete, de-duplicated SAN set that the PDP
-// server certificate must cover. PDPFQDN is always included first because it is
-// the certificate common name used during self-enrollment.
+// CertificateDNSNames returns the complete, de-duplicated SAN set for the PDP server certificate.
 func (c *Config) CertificateDNSNames() []string {
 	if c == nil {
 		return nil

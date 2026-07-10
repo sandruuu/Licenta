@@ -92,8 +92,7 @@ type scimFilter struct {
 	Value     string
 }
 
-// handleSCIM implements a deliberately small inbound SCIM surface for IdP
-// provisioning: users, groups, and group memberships.
+// handleSCIM handles inbound SCIM provisioning.
 func (s *Server) handleSCIM(w http.ResponseWriter, r *http.Request) {
 	segments := splitSCIMPath(r.URL.Path)
 	if len(segments) < 2 {

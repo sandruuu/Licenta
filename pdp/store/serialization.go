@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// ─────────────────────────────────────────────
 // Time / JSON helpers
-// ─────────────────────────────────────────────
 
 func fmtTime(t time.Time) string {
 	if t.IsZero() {

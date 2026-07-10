@@ -23,8 +23,6 @@ import (
 )
 
 // FederationProvider handles external OIDC IdP interactions.
-// It caches OIDC discovery metadata per issuer and provides
-// methods to generate authorization URLs and exchange codes.
 type FederationProvider struct {
 	state               FederationCacheStore
 	defaultScopes       string
@@ -468,8 +466,7 @@ func ecPublicKeyFromJWK(key JWK) (*ecdsa.PublicKey, error) {
 	return &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(xBytes), Y: new(big.Int).SetBytes(yBytes)}, nil
 }
 
-// MapExternalClaims extracts identity claims from an already trusted external
-// id_token. Browser callback paths should use ValidateAndMapExternalClaims.
+// MapExternalClaims extracts identity claims from an external id_token.
 func (fp *FederationProvider) MapExternalClaims(idToken string, claimMapping map[string]string) (*FederatedClaims, error) {
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
 	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
@@ -513,7 +510,6 @@ func (fp *FederationProvider) mapExternalMapClaims(mapClaims jwt.MapClaims, clai
 		claims.Username = claims.Subject
 	}
 
-	// Map email
 	if key, ok := mapping["email"]; ok {
 		if v, ok := mapClaims[key].(string); ok {
 			claims.Email = v
@@ -541,8 +537,7 @@ func copyClaimMapping(source map[string]string) map[string]string {
 	return mapping
 }
 
-// extractGroups extracts group names from a JWT claim value. Handles both
-// []interface{} (JSON array) and string (comma-separated) formats.
+// extractGroups extracts group names from a JWT claim value.
 func extractGroups(mapClaims jwt.MapClaims, key string) []string {
 	raw, ok := mapClaims[key]
 	if !ok || raw == nil {
@@ -575,9 +570,7 @@ func extractGroups(mapClaims jwt.MapClaims, key string) []string {
 	}
 }
 
-// MapGroupsToRole applies a list of GroupRoleRules to external group names
-// and returns the highest-priority internal role. Priority order:
-// admin > operator > auditor > user. If no rule matches, "user" is returned.
+// MapGroupsToRole maps external group names to the highest-priority internal role.
 func MapGroupsToRole(groups []string, mapping []models.GroupRoleRule) string {
 	if len(groups) == 0 || len(mapping) == 0 {
 		return "user"

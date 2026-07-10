@@ -109,14 +109,10 @@ func ShortFingerprint(value string) string {
 	return value[:16]
 }
 
-// ValidateKeyProof verifies a TPM-signed key proof (N3 fix). The proof is
-// an ECDSA signature over a deterministic challenge built from device_id and
-// public_key_fingerprint. The signature is verified against the public key
-// extracted from the CSR, so the fingerprint cannot be spoofed.
+// ValidateKeyProof verifies a TPM-signed key proof against the CSR public key.
 func ValidateKeyProof(csr *x509.CertificateRequest, deviceID, fingerprint, keyProof string) error {
 	keyProof = strings.TrimSpace(keyProof)
 	if keyProof == "" {
-		// Key proof is optional: enrollment proceeds without it but logs a warning.
 		return nil
 	}
 	pub, ok := csr.PublicKey.(*ecdsa.PublicKey)

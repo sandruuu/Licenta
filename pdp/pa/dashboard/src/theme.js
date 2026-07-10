@@ -19,9 +19,7 @@ export function applyTheme() {
 export function initTheme() {
   try {
     localStorage.setItem(THEME_KEY, LIGHT_THEME);
-  } catch {
-    // The dashboard still renders light if storage is unavailable.
-  }
+  } catch {}
   return applyTheme();
 }
 
@@ -29,8 +27,6 @@ export function saveTheme() {
   const nextTheme = applyTheme();
   try {
     localStorage.setItem(THEME_KEY, nextTheme);
-  } catch {
-    // Session-level theme still works if storage is unavailable.
-  }
+  } catch {}
   return nextTheme;
 }

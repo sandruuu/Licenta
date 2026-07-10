@@ -145,9 +145,7 @@ func loadCertPool(path string) (*x509.CertPool, error) {
 
 // registerRoutes sets up all API endpoints
 func (s *Server) registerRoutes() {
-	// ─────────────────────────────────────────────
 	// Public endpoints (no auth required)
-	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/api/auth/login", s.handleLogin)
 	s.mux.HandleFunc("/api/auth/password/change-initial", s.handleInitialPasswordChange)
 	s.mux.HandleFunc("/api/auth/mfa/verify", s.handleMFAVerify)
@@ -165,36 +163,19 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/ca/cert", s.handleCACert)                   // Public: returns CA certificate PEM
 	s.mux.HandleFunc("/api/cert-fingerprint", s.handleCertFingerprint) // Public: returns server TLS cert SHA-256 fingerprint
 
-	// ─────────────────────────────────────────────
 	// Public agent identity flow endpoints
-	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/auth/login", s.handleWebLoginPage) // Serve React access login page
 	s.mux.HandleFunc(publicEnrollPathPrefix, s.handleBrowserEnroll)
 	s.mux.HandleFunc(publicSignInPathPrefix, s.handleBrowserAgentSession)
 	s.mux.HandleFunc(publicStepUpAssetPath, s.handleStepUpBrowserAsset)
 	s.mux.HandleFunc(publicStepUpPathPrefix, s.handleBrowserStepUp)
 
-	// ─────────────────────────────────────────────
-	// External IAM browser callback
-	// ─────────────────────────────────────────────
-	s.mux.HandleFunc("/auth/federated/callback", s.handleFederatedCallback) // External IAM callback
+	s.mux.HandleFunc("/auth/federated/callback", s.handleFederatedCallback)
 
 	// SCIM inbound provisioning endpoints (Bearer token per organization IdP)
 	s.mux.HandleFunc("/scim/v2/", s.handleSCIM)
 
-	// ─────────────────────────────────────────────
-	// ─────────────────────────────────────────────
-
-	// ─────────────────────────────────────────────
-	// ─────────────────────────────────────────────
-
-	// ─────────────────────────────────────────────
-	// Gateway endpoints (strict mTLS + enrolled gateway identity)
-	// ─────────────────────────────────────────────
-
-	// ─────────────────────────────────────────────
 	// Authenticated user endpoints (JWT auth)
-	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/auth/revoke-token", s.adminAuthMiddleware(http.HandlerFunc(s.handleRevokeToken)))
 
 	// WebAuthn / Passkey endpoints
@@ -204,9 +185,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/step-up/webauthn/register/begin", s.handleStepUpWebAuthnRegisterBegin)
 	s.mux.HandleFunc("/api/step-up/webauthn/register/finish", s.handleStepUpWebAuthnRegisterFinish)
 
-	// ─────────────────────────────────────────────
 	// Admin endpoints (JWT auth + admin role)
-	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/session", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminSession)))
 	s.mux.Handle("/api/admin/account", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccount)))
 	s.mux.Handle("/api/admin/account/password", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminAccountPassword)))
@@ -222,16 +201,12 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/directory/users", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDirectoryUsers)))
 	s.mux.Handle("/api/admin/directory/groups", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDirectoryGroups)))
 
-	// ─────────────────────────────────────────────
 	// Device enrollment lifecycle endpoints
-	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/enroll/renew", s.requireClientCert(s.deviceAuthMiddleware(http.HandlerFunc(s.handleCertRenewal)))) // Device renews short-lived cert (mTLS identity)
 	s.mux.Handle("/api/admin/enrollments", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminEnrollments)))             // List enrollments
 	s.mux.Handle("/api/admin/enrollments/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminEnrollmentAction)))       // Approve/revoke
 
-	// ─────────────────────────────────────────────
 	// PDP Admin endpoints (resources, dashboard)
-	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/resources", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminResources)))
 	s.mux.Handle("/api/admin/resources/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminResourceByID)))
 	s.mux.Handle("/api/admin/policies", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminPolicies)))
@@ -242,23 +217,17 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("/api/admin/device-data/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminDeviceDataByID)))
 	s.mux.Handle("/api/admin/dashboard", s.adminAuthMiddleware(http.HandlerFunc(s.handleDashboardStats)))
 
-	// ─────────────────────────────────────────────
 	// Gateway enrollment & lifecycle endpoints
-	// ─────────────────────────────────────────────
 	// Admin gateway management
 	s.mux.Handle("/api/admin/gateways", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminGateways)))
 	s.mux.Handle("/api/admin/gateways/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminGatewayByID)))
 
-	// ─────────────────────────────────────────────
 	// Admin Identity Provider management (per Organization)
-	// ─────────────────────────────────────────────
 	s.mux.Handle("/api/admin/organizations/idps/discover", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdPDiscover)))
 	s.mux.Handle("/api/admin/organizations/idps", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviders)))
 	s.mux.Handle("/api/admin/organizations/idps/", s.adminAuthMiddleware(http.HandlerFunc(s.handleAdminIdentityProviderByID)))
 
-	// ─────────────────────────────────────────────
 	// Dashboard SPA (serve React build)
-	// ─────────────────────────────────────────────
 	s.mux.HandleFunc("/", s.handleDashboardSPA)
 }
 

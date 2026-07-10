@@ -8,9 +8,7 @@ import (
 	"pdp/models"
 )
 
-// ─────────────────────────────────────────────
 // Policy Rule operations
-// ─────────────────────────────────────────────
 
 func (s *Store) GetPolicyRule(id string) (*models.PolicyRule, bool) {
 	row := s.db.QueryRow(`SELECT id, name, description, enabled, conditions_json,

@@ -9,9 +9,7 @@ import (
 	"pdp/util"
 )
 
-// ─────────────────────────────────────────────
 // Organization operations
-// ─────────────────────────────────────────────
 
 func (s *Store) SaveOrganization(t *models.Organization) {
 	t.Domain = normalizeDomain(t.Domain)
@@ -80,9 +78,7 @@ func (s *Store) DeleteOrganization(id string) bool {
 	return n > 0
 }
 
-// ─────────────────────────────────────────────
 // Identity Provider Config operations
-// ─────────────────────────────────────────────
 
 // FindOrganizationByDomain searches an organization by primary domain or domain aliases.
 func (s *Store) FindOrganizationByDomain(domain string) (*models.Organization, bool) {
@@ -172,8 +168,7 @@ func (s *Store) ListIdentityProviderConfigsForOrganization(organizationID string
 	return s.scanIdentityProviderConfigs(rows)
 }
 
-// FindIdentityProviderByDomain searches for an IdP whose domains list contains
-// the given email domain. Used by Home Realm Discovery (HRD).
+// FindIdentityProviderByDomain searches for an IdP whose domains list contains the given email domain.
 func (s *Store) FindIdentityProviderByDomain(domain string) (*models.IdentityProviderConfig, bool) {
 	domain = normalizeDomain(domain)
 	if domain == "" {
@@ -226,8 +221,7 @@ func normalizeDomainAliases(primary string, aliases []string) []string {
 	return normalized
 }
 
-// GetDefaultIdentityProviderForOrganization returns the default IdP for an organization,
-// by looking up the organization's DefaultIdPID field. Returns nil if not set.
+// GetDefaultIdentityProviderForOrganization returns the default IdP for an organization.
 func (s *Store) GetDefaultIdentityProviderForOrganization(organizationID string) (*models.IdentityProviderConfig, bool) {
 	organization, found := s.GetOrganization(organizationID)
 	if !found || organization.DefaultIdPID == "" {

@@ -42,8 +42,7 @@ const (
 	StepUpStrengthApprovedHardwareKey = "approved_hardware_key"
 )
 
-// NormalizePolicyAction accepts only the canonical policy action values used by
-// the access decision contract.
+// NormalizePolicyAction normalizes policy action values.
 func NormalizePolicyAction(action string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(action)) {
 	case DecisionAllow:

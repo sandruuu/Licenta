@@ -8,9 +8,7 @@ import (
 	"pdp/models"
 )
 
-// ─────────────────────────────────────────────
 // Device Enrollment
-// ─────────────────────────────────────────────
 
 // SaveDeviceEnrollment creates or updates a device enrollment record
 func (s *Store) SaveDeviceEnrollment(e *models.DeviceEnrollment) {
@@ -103,9 +101,7 @@ func (s *Store) scanEnrollment(row *sql.Row) (*models.DeviceEnrollment, bool) {
 	return e, true
 }
 
-// ─────────────────────────────────────────────
 // Revoked certificate serial tracking
-// ─────────────────────────────────────────────
 
 // RevokeCertSerial records a revoked certificate serial for gateway cache sync
 func (s *Store) RevokeCertSerial(serial, deviceID string, expiresOn time.Time) {
@@ -139,9 +135,7 @@ func (s *Store) GetRevokedSerials() []string {
 	return serials
 }
 
-// ─────────────────────────────────────────────
 // Device-User Binding
-// ─────────────────────────────────────────────
 
 // SaveDeviceUser creates or updates a device-user binding
 func (s *Store) SaveDeviceUser(du *models.DeviceUser) {

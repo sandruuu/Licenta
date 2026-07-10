@@ -2,9 +2,7 @@ package models
 
 import "time"
 
-// DirectoryUser is a user mirrored from an external directory provider
-// through SCIM. It is separate from User, which represents an authenticated
-// account inside the PA.
+// DirectoryUser is a user mirrored from an external directory provider through SCIM.
 type DirectoryUser struct {
 	ID             string            `json:"id"`
 	OrganizationID string            `json:"organization_id"`

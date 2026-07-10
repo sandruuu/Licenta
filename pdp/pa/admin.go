@@ -20,10 +20,7 @@ import (
 	"strings"
 )
 
-// PolicyAdministrator (PA) is the central coordinator that ties together
-// authentication, Policy Engine (PE), session management, Gateway control, and
-// audit logging. It orchestrates workflows and delegates access decisions to PE
-// through a normalized context.
+// PolicyAdministrator coordinates PA services.
 type PolicyAdministrator struct {
 	Auth       *auth.Service
 	Engine     *evaluation.Engine

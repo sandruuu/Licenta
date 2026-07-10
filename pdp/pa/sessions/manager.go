@@ -82,7 +82,6 @@ func (sm *SessionManager) CreateSession(decision *models.AccessDecision, req mod
 		return nil, fmt.Errorf("save session: %w", err)
 	}
 
-	// Record device-user binding (user role — this user accessed via this device)
 	sm.saveDeviceUserBinding(req, now)
 
 	log.Printf("[PA] Session created: %s (user=%s, resource=%s, expires=%s)",
@@ -91,9 +90,7 @@ func (sm *SessionManager) CreateSession(decision *models.AccessDecision, req mod
 	return session, nil
 }
 
-// CreateOrRenewSession reuses the active PA resource session for the same
-// user/device/resource tuple. When the session is close to expiry, it extends
-// the lifetime instead of creating a second session for another TCP flow.
+// CreateOrRenewSession reuses an active PA resource session for the same access tuple.
 func (sm *SessionManager) CreateOrRenewSession(decision *models.AccessDecision, req models.AccessRequest, renewBefore time.Duration) (*models.Session, bool, error) {
 	if sm == nil || sm.store == nil {
 		return nil, false, fmt.Errorf("session manager is not available")
@@ -292,9 +289,7 @@ func (sm *SessionManager) RevokeSession(sessionID string) error {
 	return nil
 }
 
-// RevokeSessionsMatching terminates every active session accepted by the
-// predicate. All revocations pass through the delete sink so Gateway-side
-// provisioned sessions and active relays are cut consistently.
+// RevokeSessionsMatching terminates every active session accepted by the predicate.
 func (sm *SessionManager) RevokeSessionsMatching(reason string, match func(*models.Session) bool) int {
 	if sm == nil || sm.store == nil || match == nil {
 		return 0
@@ -320,9 +315,7 @@ func (sm *SessionManager) RevokeSessionsMatching(reason string, match func(*mode
 	return revoked
 }
 
-// RevokeSessionsForChangedSourceIP terminates active resource sessions for the
-// same subject and resource when a new authorization request arrives from a
-// different source IP.
+// RevokeSessionsForChangedSourceIP terminates active sessions for a changed source IP.
 func (sm *SessionManager) RevokeSessionsForChangedSourceIP(req models.AccessRequest) int {
 	sourceIP := strings.TrimSpace(req.SourceIP)
 	if sm == nil || sm.store == nil || sourceIP == "" {
@@ -345,9 +338,7 @@ func (sm *SessionManager) RevokeSessionsForChangedSourceIP(req models.AccessRequ
 	})
 }
 
-// RevokeSessionsForDeviceUser terminates all active resource sessions owned by
-// a user on a specific enrolled device. Organization is optional but used when present
-// to avoid crossing organization boundaries during Agent logout.
+// RevokeSessionsForDeviceUser terminates active resource sessions for a device user.
 func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, organizationID, reason string) int {
 	if sm == nil || sm.store == nil {
 		return 0
@@ -384,8 +375,7 @@ func (sm *SessionManager) RevokeSessionsForDeviceUser(userID, deviceID, organiza
 	return revoked
 }
 
-// RevokeSessionsForDevice terminates all active resource sessions issued to a
-// device. Organization is optional and narrows the revocation to one organization.
+// RevokeSessionsForDevice terminates active resource sessions for a device.
 func (sm *SessionManager) RevokeSessionsForDevice(deviceID, organizationID, reason string) int {
 	deviceID = strings.TrimSpace(deviceID)
 	organizationID = strings.TrimSpace(organizationID)
@@ -400,8 +390,7 @@ func (sm *SessionManager) RevokeSessionsForDevice(deviceID, organizationID, reas
 	})
 }
 
-// RevokeSessionsForResource terminates all active sessions for a protected
-// resource. Organization is optional and narrows the revocation to one organization.
+// RevokeSessionsForResource terminates active sessions for a protected resource.
 func (sm *SessionManager) RevokeSessionsForResource(resourceID, organizationID, reason string) int {
 	resourceID = strings.TrimSpace(resourceID)
 	organizationID = strings.TrimSpace(organizationID)
@@ -416,8 +405,7 @@ func (sm *SessionManager) RevokeSessionsForResource(resourceID, organizationID, 
 	})
 }
 
-// RevokeSessionsForGateway terminates all active sessions provisioned through a
-// gateway. Organization is optional and narrows the revocation to one organization.
+// RevokeSessionsForGateway terminates active sessions provisioned through a gateway.
 func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, organizationID, reason string) int {
 	gatewayID = strings.TrimSpace(gatewayID)
 	organizationID = strings.TrimSpace(organizationID)
@@ -432,8 +420,7 @@ func (sm *SessionManager) RevokeSessionsForGateway(gatewayID, organizationID, re
 	})
 }
 
-// RevokeSessionsForOrganization terminates all active sessions in an organization
-// when a policy change cannot be narrowed to a resource, device, user, or gateway.
+// RevokeSessionsForOrganization terminates active sessions in an organization.
 func (sm *SessionManager) RevokeSessionsForOrganization(organizationID, reason string) int {
 	organizationID = strings.TrimSpace(organizationID)
 	if organizationID == "" {

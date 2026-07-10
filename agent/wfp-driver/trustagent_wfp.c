@@ -609,12 +609,6 @@ static NTSTATUS TrustAgentQueryOriginalTarget(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /*
-     * Production step:
-     * The classify path must persist the original destination for each redirected flow.
-     * This IOCTL looks up that flow using the accepted proxy connection tuple and returns
-     * the original synthetic destination to the Go proxy.
-     */
     RtlZeroMemory(response, sizeof(*response));
     response->Magic = TRUSTAGENT_WFP_MAGIC;
     response->Version = TRUSTAGENT_WFP_VERSION;

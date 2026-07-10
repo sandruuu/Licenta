@@ -57,7 +57,6 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Wrap response writer to capture status code
 		wrapped := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(wrapped, r)
 
@@ -133,7 +132,7 @@ func isAllowedPDPOrigin(origin string, extraOrigins []string) bool {
 	return false
 }
 
-// requireClientCert enforces strict mTLS for gateway/device endpoints.
+// requireClientCert enforces mTLS for gateway/device endpoints.
 func (s *Server) requireClientCert(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.mtlsCAPool == nil {
@@ -236,7 +235,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Extract Bearer token
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
@@ -245,7 +243,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Admin API tokens must be issued after the dashboard MFA step.
 		claims, err := s.pa.Auth.ValidateToken(parts[1])
 		if err != nil {
 			log.Printf("[AUTH] Token validation failed: %v", err)
@@ -255,7 +252,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check token revocation
 		if claims.ID != "" && s.pa.Store.IsTokenRevoked(claims.ID) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "token has been revoked",
@@ -300,7 +296,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check admin role for admin endpoints
 		if strings.HasPrefix(r.URL.Path, "/api/admin") && claims.Role != "platform_admin" {
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "platform administrator access required",
@@ -308,7 +303,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Store claims in request context via headers (lightweight approach)
 		r.Header.Set("X-User-ID", claims.UserID)
 		r.Header.Set("X-Username", claims.Username)
 		r.Header.Set("X-User-Role", claims.Role)
@@ -319,7 +313,6 @@ func (s *Server) adminAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// statusResponseWriter wraps http.ResponseWriter to capture the status code
 type statusResponseWriter struct {
 	http.ResponseWriter
 	statusCode int

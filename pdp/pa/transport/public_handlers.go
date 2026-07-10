@@ -9,12 +9,9 @@ import (
 	"pdp/certs"
 )
 
-// ─────────────────────────────────────────────
 // Public trust and health endpoints.
-// ─────────────────────────────────────────────
 
 // handleCACert returns the active issuer CA certificate (public info, no auth needed).
-// Gateways use this to validate certificates issued via the PDP signer path.
 func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -29,8 +26,7 @@ func (s *Server) handleCACert(w http.ResponseWriter, r *http.Request) {
 	w.Write(caPEM)
 }
 
-// handleCertFingerprint returns the SHA-256 fingerprint of the PDP server's TLS certificate.
-// Operators can use this value to configure pdp_cert_sha256 in gateway/connect/health configs.
+// handleCertFingerprint returns the PDP server TLS certificate fingerprint.
 func (s *Server) handleCertFingerprint(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})

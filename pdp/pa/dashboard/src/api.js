@@ -1,4 +1,3 @@
-// API client for the TrustCloud/PA backend
 const API_BASE = '/api';
 const LEGACY_AUTH_STORAGE_KEYS = ['admin_token', 'admin_refresh_token', 'admin_session_id'];
 
@@ -7,9 +6,7 @@ let accessToken = '';
 function clearLegacyStoredAuth() {
   try {
     LEGACY_AUTH_STORAGE_KEYS.forEach((key) => window.localStorage?.removeItem(key));
-  } catch {
-    // Ignore storage failures. Auth state is no longer stored in web storage.
-  }
+  } catch {}
 }
 
 clearLegacyStoredAuth();
@@ -109,7 +106,6 @@ async function readJSONResponse(res, path) {
   return json;
 }
 
-// Generic fetch wrapper with auth headers, error handling, token refresh, and response unwrapping
 async function apiFetch(path, options = {}) {
   const {
     redirectOnUnauthorized = true,
@@ -130,9 +126,7 @@ async function apiFetch(path, options = {}) {
     try {
       await refreshAdminSession();
       res = await run();
-    } catch {
-      // Fall through to the normal unauthorized handling below.
-    }
+    } catch {}
   }
 
   if (res.status === 401) {
@@ -174,7 +168,6 @@ export async function deleteOrganization(id) {
   });
 }
 
-// ─── Auth ───────────────────────────────────
 
 export async function login(email, password, purpose = '') {
   const body = { email, password };
@@ -325,7 +318,6 @@ export async function validateAdminSession() {
   }
 }
 
-// ─── Dashboard ──────────────────────────────
 
 export async function getAdminAccount() {
   return apiFetch('/admin/account');
@@ -395,7 +387,6 @@ export async function revokeEnrollment(id) {
   });
 }
 
-// ─── Resources ──────────────────────────────
 
 export async function getResources() {
   return apiFetch('/admin/resources');
@@ -424,8 +415,6 @@ export async function deleteResource(id) {
     method: 'DELETE',
   });
 }
-
-// Access policies use Duo-style assignment layers: organization, group, resource, and resource_group.
 
 export async function getPolicies() {
   return apiFetch('/admin/policies');
@@ -479,7 +468,6 @@ export async function deletePolicyAssignment(id) {
   });
 }
 
-// ─── Gateways ───────────────────────────────
 
 export async function getGateways() {
   return apiFetch('/admin/gateways');
@@ -521,8 +509,6 @@ export async function revokeGateway(id) {
   });
 }
 
-// Directory principals provisioned by organization IdPs through SCIM.
-
 export async function getDirectoryUsers(organizationId = '', idpId = '') {
   const params = new URLSearchParams();
   if (organizationId) params.set('organization_id', organizationId);
@@ -539,7 +525,6 @@ export async function getDirectoryGroups(organizationId = '', idpId = '') {
   return apiFetch(`/admin/directory/groups${query ? `?${query}` : ''}`);
 }
 
-// ─── Sessions ───────────────────────────────
 
 export async function getSessions() {
   return apiFetch('/admin/sessions');
@@ -551,13 +536,10 @@ export async function revokeSession(id) {
   });
 }
 
-// ─── Audit ──────────────────────────────────
 
 export async function getAuditLog(limit = 100) {
   return apiFetch(`/admin/audit?limit=${limit}`);
 }
-
-// Identity Providers (per Organization)
 
 export async function getIdPs(organizationId) {
   return apiFetch(`/admin/organizations/idps?organization_id=${encodeURIComponent(organizationId)}`);

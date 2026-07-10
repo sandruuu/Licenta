@@ -19,9 +19,7 @@ func (s *Store) RevokeToken(jti string, expiresAt time.Time) {
 	}
 }
 
-// ConsumeTokenOnce records a one-time token JTI and returns false when the JTI
-// has already been consumed or revoked. The primary key makes this atomic for
-// concurrent EST enrollment attempts using the same bearer token.
+// ConsumeTokenOnce records a one-time token JTI.
 func (s *Store) ConsumeTokenOnce(jti string, expiresAt time.Time) bool {
 	jti = strings.TrimSpace(jti)
 	if jti == "" {

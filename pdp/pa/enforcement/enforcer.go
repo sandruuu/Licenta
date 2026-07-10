@@ -11,8 +11,7 @@ import (
 	"pdp/pa/events"
 )
 
-// Service consumes PA state-change events and turns them into continuous
-// enforcement actions against already-issued resource sessions.
+// Service handles PA state-change events.
 type Service struct {
 	pa     *paadmin.PolicyAdministrator
 	broker *events.Broker
@@ -49,8 +48,7 @@ func (service *Service) Start(ctx context.Context) {
 	}()
 }
 
-// HandleEvent is exported for deterministic tests; Start uses the same path for
-// asynchronous broker delivery in production.
+// HandleEvent applies one event.
 func (service *Service) HandleEvent(evt events.Event) int {
 	if service == nil || service.pa == nil || service.pa.Sessions == nil {
 		return 0

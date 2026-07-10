@@ -13,14 +13,8 @@ import (
 	"pdp/util"
 )
 
-// ──────────────────────────────────────────────────────────────────────
 // Admin Identity Provider Config endpoints (per Organization)
-// ──────────────────────────────────────────────────────────────────────
 
-// handleAdminIdentityProviders handles GET/POST /api/admin/organizations/idps
-// Query param: organization_id (required).
-// GET  — list IdP configs for an organization
-// POST — create a new IdP config
 const scimTokenValidity = 90 * 24 * time.Hour
 
 func newSCIMTokenExpiresAt(now time.Time) time.Time {
@@ -55,6 +49,7 @@ func (s *Server) logSCIMTokenAudit(r *http.Request, eventType, idpID, decision, 
 	s.pa.Audit.LogEvent(eventType, userID, username, sourceIP, idpID, decision, details, success)
 }
 
+// handleAdminIdentityProviders handles GET/POST /api/admin/organizations/idps.
 func (s *Server) handleAdminIdentityProviders(w http.ResponseWriter, r *http.Request) {
 	organizationID := organizationIDFromQuery(r)
 	if organizationID == "" {
@@ -399,7 +394,7 @@ func (s *Server) sanitizeIdPConfigForOrganization(cfg *models.IdentityProviderCo
 	return safe
 }
 
-// sanitizeIdPConfig returns a safe copy of an IdentityProviderConfig without secrets.
+// sanitizeIdPConfig returns public IdP configuration.
 func sanitizeIdPConfig(cfg *models.IdentityProviderConfig) map[string]interface{} {
 	if cfg == nil {
 		return nil

@@ -11,9 +11,7 @@ import (
 	"pdp/models"
 )
 
-// ─────────────────────────────────────────────
 // Gateway operations
-// ─────────────────────────────────────────────
 
 func (s *Store) SaveGateway(gw *models.Gateway) error {
 	resources := gw.AssignedResources
@@ -95,10 +93,7 @@ func (s *Store) GetGatewayByTokenHash(tokenHash string) (*models.Gateway, bool) 
 	return s.scanGateway(row)
 }
 
-// ConsumeGatewayEnrollmentToken atomically consumes a pending gateway
-// enrollment token. The service performs semantic validation before this call;
-// the conditional update prevents concurrent replay from minting multiple
-// certificates with the same token.
+// ConsumeGatewayEnrollmentToken consumes a pending gateway enrollment token.
 func (s *Store) ConsumeGatewayEnrollmentToken(gatewayID, token string, now time.Time) bool {
 	gatewayID = strings.TrimSpace(gatewayID)
 	token = strings.TrimSpace(token)

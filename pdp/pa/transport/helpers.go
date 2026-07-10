@@ -16,9 +16,7 @@ import (
 	"pdp/util"
 )
 
-// ─────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────
 
 func (s *Server) caepPayload(eventType string, fields map[string]string) map[string]string {
 	now := time.Now().UTC()

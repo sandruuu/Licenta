@@ -11,9 +11,7 @@ import (
 	pagateway "pdp/pa/gateway"
 )
 
-// ═══════════════════════════════════════════════════════════════════════
 // Gateway Enrollment & Management
-// ═══════════════════════════════════════════════════════════════════════
 
 func gatewayClientMessage(err error) string {
 	message := err.Error()
@@ -107,7 +105,6 @@ func (s *Server) handleAdminGatewayByID(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Handle action suffixes like /api/admin/gateways/{id}/regenerate-token
 	parts := strings.SplitN(id, "/", 2)
 	id = parts[0]
 	action := ""

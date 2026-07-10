@@ -28,12 +28,7 @@ func transitKeyName(cfg VaultConfig) (string, error) {
 	return name, nil
 }
 
-// TransitEncryptKey encrypts a PEM-encoded private key using Vault Transit
-// and returns the ciphertext to be stored on disk.
-//
-// Vault Transit key must be pre-created:
-//
-//	vault write -f transit/keys/<transit-key-name>
+// TransitEncryptKey encrypts a PEM-encoded private key using Vault Transit.
 func TransitEncryptKey(ctx context.Context, cfg VaultConfig, keyPEM []byte) ([]byte, error) {
 	client, err := NewVaultClient(cfg)
 	if err != nil {
@@ -44,7 +39,6 @@ func TransitEncryptKey(ctx context.Context, cfg VaultConfig, keyPEM []byte) ([]b
 		return nil, err
 	}
 
-	// Encode plaintext as base64 (Vault Transit requirement)
 	plaintextB64 := base64.StdEncoding.EncodeToString(keyPEM)
 	reqBody := map[string]interface{}{
 		"plaintext": plaintextB64,
@@ -171,14 +165,12 @@ func TransitDecryptKey(ctx context.Context, cfg VaultConfig, ciphertext []byte) 
 	return keyPEM, nil
 }
 
-// RestoreOrCreateKey restores the PDP private key from the local
-// Transit-encrypted file, or generates and encrypts a new key if none exists.
+// RestoreOrCreateKey restores or creates the PDP private key.
 func RestoreOrCreateKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath string) (*ecdsa.PrivateKey, error) {
 	return RestoreOrCreateNamedKey(ctx, cfg, encryptedKeyPath, "PDP")
 }
 
-// RestoreOrCreateNamedKey restores an ECDSA private key from the local
-// Transit-encrypted file, or generates and encrypts a new key if none exists.
+// RestoreOrCreateNamedKey restores or creates a named ECDSA private key.
 func RestoreOrCreateNamedKey(ctx context.Context, cfg VaultConfig, encryptedKeyPath, keyLabel string) (*ecdsa.PrivateKey, error) {
 	label := strings.TrimSpace(keyLabel)
 	if label == "" {

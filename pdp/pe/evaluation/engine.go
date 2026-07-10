@@ -8,9 +8,7 @@ import (
 	"pdp/models"
 )
 
-// AccessContext is the normalized, side-effect-free input evaluated by PE.
-// PA is responsible for loading rules, user attributes, risk signals, and
-// device data before calling the engine.
+// AccessContext is evaluated by PE.
 type AccessContext struct {
 	Request               models.AccessRequest
 	Rules                 []*models.PolicyRule
@@ -34,18 +32,14 @@ type AccessContext struct {
 	IsUserBaselineAnomaly bool
 }
 
-// Engine is the Policy Engine. It evaluates normalized access context and
-// returns a deterministic decision without creating sessions, provisioning
-// Gateways, signing certificates, or writing audit records.
+// Engine is the Policy Engine.
 type Engine struct{}
 
 func NewEngine() *Engine {
 	return &Engine{}
 }
 
-// Evaluate processes a normalized access context against enabled policy rules.
-// Rules are evaluated in deterministic policy-layer order by PA/store before
-// they reach PE.
+// Evaluate applies enabled policy rules.
 func (e *Engine) Evaluate(ctx AccessContext) *models.AccessDecision {
 	req := ctx.Request
 	now := ctx.Now

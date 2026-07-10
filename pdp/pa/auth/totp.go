@@ -14,25 +14,11 @@ import (
 	"github.com/skip2/go-qrcode"
 )
 
-// TOTP implements the Time-based One-Time Password algorithm (RFC 6238)
-// using the widely supported HMAC-SHA1 default with 30-second time steps and
-// 6-digit codes.
-//
-// This is compatible with Google Authenticator, Microsoft Authenticator,
-// FreeOTP, and other standard TOTP applications.
-
 const (
-	// TOTPDigits is the number of digits in the generated code
-	TOTPDigits = 6
-
-	// TOTPPeriod is the time step in seconds
-	TOTPPeriod = 30
-
-	// TOTPSecretLength is the length of the secret key in bytes (before base32 encoding)
+	TOTPDigits       = 6
+	TOTPPeriod       = 30
 	TOTPSecretLength = 20
-
-	// TOTPSkew allows codes from adjacent time steps (±1) to compensate for clock drift
-	TOTPSkew = 1
+	TOTPSkew         = 1
 
 	totpModulus = 1000000
 )
@@ -103,8 +89,7 @@ func validTOTPCodeForCounter(key []byte, code string, counter uint64) bool {
 	return hmac.Equal([]byte(expected), []byte(code))
 }
 
-// BuildTOTPURI constructs an otpauth:// URI for QR code generation
-// This URI can be scanned by authenticator apps to enroll the secret
+// BuildTOTPURI constructs an otpauth:// URI for QR code generation.
 func BuildTOTPURI(secret, issuer, accountName string) string {
 	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=%d&period=%d",
 		urlEncode(issuer),
@@ -151,7 +136,7 @@ func decodeSecret(secret string) ([]byte, error) {
 	return base32.StdEncoding.DecodeString(secret)
 }
 
-// urlEncode performs simple percent-encoding for URI components
+// urlEncode percent-encodes URI components.
 func urlEncode(s string) string {
 	var result strings.Builder
 	for _, c := range s {

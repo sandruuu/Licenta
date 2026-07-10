@@ -11,8 +11,7 @@ import (
 	"strings"
 )
 
-// EnsureCAPEMCompatible prevents accidental PKI CA rotation from silently
-// invalidating already enrolled devices and gateways.
+// EnsureCAPEMCompatible checks that the stored CA matches the active CA.
 func EnsureCAPEMCompatible(existingCAPath string, currentCAPEM []byte) error {
 	path := strings.TrimSpace(existingCAPath)
 	if path == "" {

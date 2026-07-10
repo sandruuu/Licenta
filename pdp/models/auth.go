@@ -61,8 +61,7 @@ type MFARecoveryRequest struct {
 	RecoveryCode string `json:"recovery_code"`
 }
 
-// InitialPasswordChangeRequest completes the forced password change step for a
-// local administrator provisioned with a temporary password.
+// InitialPasswordChangeRequest completes the required password change step.
 type InitialPasswordChangeRequest struct {
 	ChallengeID     string `json:"challenge_id"`
 	NewPassword     string `json:"new_password"`

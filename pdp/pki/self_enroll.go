@@ -18,20 +18,14 @@ import (
 	"time"
 )
 
-// SelfEnrollResult holds the TLS certificate and CA PEM obtained via
-// direct Vault PKI enrollment at PDP startup.
+// SelfEnrollResult holds the TLS certificate and CA PEM.
 type SelfEnrollResult struct {
 	Certificate *tls.Certificate
 	CAPEM       []byte
 	ExpiresAt   time.Time
 }
 
-// SelfEnroll connects directly to Vault PKI, creates a CSR for the configured FQDN
-// using the provided ECDSA key (or generates a new one if nil), signs it via the
-// PDP PKI role, and returns a tls.Certificate ready for use as the server's TLS identity.
-//
-// This replaces static TLS material with a Vault-issued certificate and a
-// Transit-protected private key.
+// SelfEnroll obtains a Vault-issued TLS certificate for the PDP server identity.
 func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, dnsNames []string, existingKey *ecdsa.PrivateKey) (*SelfEnrollResult, error) {
 	if strings.TrimSpace(pdpFQDN) == "" {
 		return nil, fmt.Errorf("pdp_fqdn is required for self-enrollment")
@@ -41,7 +35,6 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, d
 		return nil, fmt.Errorf("pki_role_pdp is required for self-enrollment")
 	}
 
-	// 1. Use existing key or generate new ECDSA P-256 keypair
 	key := existingKey
 	if key == nil {
 		var err error
@@ -120,8 +113,7 @@ func SelfEnroll(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, d
 	}, nil
 }
 
-// SelfEnrollLoop periodically checks certificate expiration and renews
-// before expiry. dataDir is the PDP's data directory for persisting certs.
+// SelfEnrollLoop renews the PDP certificate when needed.
 func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP string, dnsNames []string, key *ecdsa.PrivateKey, certPath, caPath, dataDir string, renewThreshold, checkInterval time.Duration, onRenew func(*tls.Certificate)) {
 	if checkInterval <= 0 {
 		checkInterval = 6 * time.Hour
@@ -156,7 +148,6 @@ func SelfEnrollLoop(ctx context.Context, cfg VaultConfig, pdpFQDN, rolePDP strin
 }
 
 // SaveEnrolledCert persists the enrolled certificate and CA to disk.
-// The private key is stored separately as Vault Transit encrypted ciphertext.
 func SaveEnrolledCert(result *SelfEnrollResult, certPath, caPath, dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return err
@@ -230,8 +221,6 @@ func CertificateNeedsRenewal(certPath string, threshold time.Duration) bool {
 	return shouldRenew(certPath, threshold)
 }
 
-// shouldRenew checks whether the certificate at certPath is within
-// the renewal threshold of its NotAfter.
 func shouldRenew(certPath string, threshold time.Duration) bool {
 	cert, err := loadLeafCertificate(certPath)
 	if err != nil {

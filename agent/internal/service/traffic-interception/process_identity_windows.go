@@ -126,7 +126,5 @@ func fileSHA256(path string) (string, error) {
 }
 
 func fileSigner(_ string) string {
-	// Signature validation is intentionally left for a dedicated Authenticode
-	// verifier. PID/path/hash are collected synchronously on the flow path.
 	return ""
 }

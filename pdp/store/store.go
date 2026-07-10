@@ -14,8 +14,6 @@ type Store struct {
 	dataDir     string
 	databaseURL string
 
-	// auditMu serializes audit_log inserts so the hash chain is deterministic
-	// under concurrent callers.
 	auditMu sync.Mutex
 }
 

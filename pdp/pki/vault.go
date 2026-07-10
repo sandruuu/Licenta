@@ -27,7 +27,7 @@ type VaultConfig struct {
 	Timeout        time.Duration
 }
 
-// VaultClient is a minimal Vault PKI API client used by the PDP signer layer.
+// VaultClient is a Vault PKI API client.
 type VaultClient struct {
 	baseURL string
 	token   string
@@ -95,8 +95,6 @@ func (v *VaultClient) SignCSR(csrPEM []byte, role, ttl string) ([]byte, error) {
 }
 
 // SignCSRVerbatim signs a PEM CSR while preserving the CSR subject exactly.
-// This is useful for endpoint identities whose common name is a device ID,
-// not a DNS hostname.
 func (v *VaultClient) SignCSRVerbatim(csrPEM []byte, role, ttl string) ([]byte, error) {
 	return v.signCSR(csrPEM, role, ttl, "sign-verbatim", SignCSROptions{})
 }
@@ -108,8 +106,7 @@ type SignCSROptions struct {
 	URISANs    []string
 }
 
-// SignCSRWithOptions signs a CSR while forcing the certificate identity fields
-// from PA-controlled state instead of trusting SANs requested by the CSR.
+// SignCSRWithOptions signs a CSR with certificate identity fields from PA state.
 func (v *VaultClient) SignCSRWithOptions(csrPEM []byte, role, ttl string, options SignCSROptions) ([]byte, error) {
 	return v.signCSR(csrPEM, role, ttl, "sign", options)
 }
@@ -296,9 +293,7 @@ func (v *VaultClient) GetCAPEM() ([]byte, error) {
 	return []byte(cert), nil
 }
 
-// RevokeCertificate revokes a previously issued certificate in Vault PKI.
-// It prefers revocation by PEM certificate. If PEM is unavailable, it falls
-// back to serial-based revocation.
+// RevokeCertificate revokes an issued certificate in Vault PKI.
 func (v *VaultClient) RevokeCertificate(serial string, certPEM []byte) error {
 	reqBody := map[string]string{}
 
@@ -359,7 +354,6 @@ func normalizeVaultSerial(serial string) (string, error) {
 		return "", fmt.Errorf("serial number is required for revocation")
 	}
 
-	// Vault already accepts colon-separated hex serials.
 	if strings.Contains(trimmed, ":") {
 		return trimmed, nil
 	}

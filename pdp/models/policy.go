@@ -17,7 +17,7 @@ type PolicyRule struct {
 	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
-// PolicyAssignment attaches a reusable policy rule to a Duo-style access layer.
+// PolicyAssignment attaches a reusable policy rule to an access layer.
 // Supported levels are organization, group, resource, and resource_group.
 type PolicyAssignment struct {
 	ID             string `json:"id"`
@@ -76,21 +76,19 @@ type RiskPolicyConditions struct {
 	Signals []string `json:"signals,omitempty"`
 }
 
-// RiskBasedAuthPolicyConditions enables adaptive MFA based on internal risk
-// detectors such as new locations, unrealistic travel, and user baseline
-// anomalies.
+// RiskBasedAuthPolicyConditions enables adaptive MFA based on internal risk signals.
 type RiskBasedAuthPolicyConditions struct {
 	RequireMFAOnRisk bool     `json:"require_mfa_on_risk,omitempty"`
 	Signals          []string `json:"signals,omitempty"`
 	MatchMode        string   `json:"match_mode,omitempty"`
 }
 
-// UserPolicyConditions captures Duo-style user enrollment behavior.
+// UserPolicyConditions captures user enrollment behavior.
 type UserPolicyConditions struct {
 	NewUserPolicy string `json:"new_user_policy,omitempty"`
 }
 
-// UserLocationPolicyConditions captures Duo-style country rules for access
+// UserLocationPolicyConditions captures country rules for access
 // device geolocation.
 type UserLocationPolicyConditions struct {
 	Rules                 []UserLocationRule `json:"rules,omitempty"`
@@ -116,8 +114,7 @@ type NetworkPolicyConditions struct {
 	AllowAllNetworks                  bool     `json:"allow_all_networks,omitempty"`
 }
 
-// AuthenticationPolicyConditions defines Duo-style authentication behavior and
-// the MFA methods available when step-up is required.
+// AuthenticationPolicyConditions defines authentication behavior.
 type AuthenticationPolicyConditions struct {
 	Policy        string   `json:"policy,omitempty"`
 	StepUpMethods []string `json:"step_up_methods,omitempty"`
@@ -130,8 +127,7 @@ type DevicePosturePolicyConditions struct {
 	StaleDataAction string   `json:"stale_data_action,omitempty"`
 }
 
-// SessionPolicyControls are evaluated/applied by the access workflow when a
-// matching rule creates or renews an access session.
+// SessionPolicyControls defines access session limits.
 type SessionPolicyControls struct {
 	MaxAgeSeconds          int  `json:"max_age_seconds,omitempty"`
 	RevalidateEverySeconds int  `json:"revalidate_every_seconds,omitempty"`
@@ -139,8 +135,6 @@ type SessionPolicyControls struct {
 }
 
 // AccessConditions are the contextual conditions that can trigger a policy.
-// Keep this intentionally small so policy authors only configure the access
-// contexts supported by the product.
 type AccessConditions struct {
 	Location LocationAccessConditions `json:"location,omitempty"`
 }

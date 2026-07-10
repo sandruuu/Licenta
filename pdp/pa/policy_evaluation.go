@@ -10,8 +10,7 @@ import (
 
 const newDeviceWindow = 24 * time.Hour
 
-// EvaluateAccess is the PA-to-PE boundary. PA gathers operational state and
-// passes a normalized, side-effect-free context into the Policy Engine.
+// EvaluateAccess evaluates an access request against policy state.
 func (pa *PolicyAdministrator) EvaluateAccess(req models.AccessRequest) *models.AccessDecision {
 	return pa.EvaluateAccessWithAuth(req, models.AuthContext{})
 }

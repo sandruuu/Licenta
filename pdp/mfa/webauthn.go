@@ -15,9 +15,7 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// ─────────────────────────────────────────────
 // WebAuthn User Adapter
-// ─────────────────────────────────────────────
 
 // WebAuthnUser implements the webauthn.User interface by wrapping a
 // models.User together with the stored WebAuthn credentials.
@@ -42,18 +40,14 @@ func (u *WebAuthnUser) WebAuthnCredentials() []webauthn.Credential {
 	return u.Credentials
 }
 
-// ─────────────────────────────────────────────
 // Challenge storage (Redis-backed, short TTL)
-// ─────────────────────────────────────────────
 
 type challengeSession struct {
 	Data      *webauthn.SessionData
 	CreatedAt time.Time
 }
 
-// ─────────────────────────────────────────────
 // WebAuthn Provider
-// ─────────────────────────────────────────────
 
 // WebAuthnProvider wraps the go-webauthn library and manages challenge
 // sessions for registration and authentication ceremonies.
@@ -121,9 +115,7 @@ func NewWebAuthnProvider(cfg *config.Config, state RuntimeStateStore) *WebAuthnP
 	return p
 }
 
-// ─────────────────────────────────────────────
 // Registration Ceremony
-// ─────────────────────────────────────────────
 
 // BeginRegistration starts the WebAuthn credential registration ceremony.
 // Returns the options JSON to send to the browser (navigator.credentials.create).
@@ -156,8 +148,6 @@ func passkeyAuthenticatorSelection() protocol.AuthenticatorSelection {
 }
 
 // FinishRegistration completes the registration ceremony.
-// The request must be the raw HTTP request forwarding the browser's response.
-// Returns the new Credential to be persisted.
 func (p *WebAuthnProvider) FinishRegistration(user *models.User, existingCreds []webauthn.Credential, contextID string, r *http.Request) (*webauthn.Credential, error) {
 	session, ok := p.loadSession(user.ID, "register", contextID)
 	if !ok {
@@ -176,9 +166,7 @@ func (p *WebAuthnProvider) FinishRegistration(user *models.User, existingCreds [
 	return cred, nil
 }
 
-// ─────────────────────────────────────────────
 // Authentication Ceremony
-// ─────────────────────────────────────────────
 
 // BeginAuthentication starts the WebAuthn authentication ceremony.
 // Returns the assertion options JSON to send to the browser (navigator.credentials.get).
@@ -225,9 +213,7 @@ func (p *WebAuthnProvider) FinishAuthentication(user *models.User, creds []webau
 	return cred, nil
 }
 
-// ─────────────────────────────────────────────
 // Session Management
-// ─────────────────────────────────────────────
 
 func sessionKey(userID, ceremony, contextID string) string {
 	return userID + ":" + ceremony + ":" + strings.TrimSpace(contextID)

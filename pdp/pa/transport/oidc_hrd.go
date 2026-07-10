@@ -9,9 +9,7 @@ import (
 	"pdp/models"
 )
 
-// resolveIdentityProvider determines which organization IdP should authenticate
-// the user. Priority: explicit idp_id, login_hint domain, then explicit
-// organization_id.
+// resolveIdentityProvider selects the organization IdP for browser authentication.
 func (s *Server) resolveIdentityProvider(r *http.Request, clientID string) (*models.IdentityProviderConfig, *models.Organization, error) {
 	_ = clientID
 	queryOrganizationID := strings.TrimSpace(r.URL.Query().Get("organization_id"))
@@ -115,8 +113,6 @@ func organizationMatchesDomain(organization *models.Organization, domain string)
 }
 
 // extractDomainFromHint extracts the email domain from a login hint string.
-// For "user@company.com" returns "company.com". For plain domain strings,
-// returns the string as-is.
 func extractDomainFromHint(hint string) string {
 	if idx := strings.LastIndex(hint, "@"); idx >= 0 && idx < len(hint)-1 {
 		return strings.ToLower(strings.TrimSpace(hint[idx+1:]))

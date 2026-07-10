@@ -138,10 +138,6 @@ func GenerateJWTSigningKey() (*ecdsa.PrivateKey, error) {
 }
 
 // GenerateAuthToken creates a PA API authentication JWT.
-// mfaDone indicates whether MFA has been completed — at login time this is false;
-// after a successful MFA step-up verification it is set to true.
-// The nonce parameter is optional — when non-empty, it is included in the token for OIDC
-// replay protection per OIDC Core 1.0 §3.1.2.1.
 func (j *JWTManager) GenerateAuthToken(userID, username, role, deviceID, nonce string, mfaDone bool) (string, error) {
 	return j.GenerateAuthTokenWithPurpose(userID, username, role, deviceID, nonce, mfaDone, "")
 }
@@ -268,9 +264,7 @@ func (j *JWTManager) GenerateAgentSessionToken(req AgentSessionTokenRequest) (st
 	return signed, expiresAt, nil
 }
 
-// GenerateEnrollmentToken mints a short-lived, device-bound bearer token for
-// EST simpleenroll. It is intentionally separate from resource-access tokens
-// so enrollment credentials cannot be replayed against the PA API audience.
+// GenerateEnrollmentToken mints a short-lived, device-bound bearer token for EST simpleenroll.
 func (j *JWTManager) GenerateEnrollmentToken(userID, username, role, deviceID, nonce string) (string, time.Duration, error) {
 	return j.GenerateEnrollmentTokenForUserSID(userID, username, role, deviceID, nonce, "")
 }
@@ -337,8 +331,7 @@ func (j *JWTManager) ParseAuthTokenForAudience(tokenString, expectedAudience str
 	return nil, fmt.Errorf("token audience mismatch: expected %q, got %v", expectedAudience, []string(claims.Audience))
 }
 
-// ParseEnrollmentToken validates the dedicated EST enrollment audience and
-// purpose. Replay protection is enforced by the API/store layer after parsing.
+// ParseEnrollmentToken validates the dedicated EST enrollment token.
 func (j *JWTManager) ParseEnrollmentToken(tokenString string) (*CustomClaims, error) {
 	claims, err := j.ParseAuthTokenForAudience(tokenString, EnrollmentTokenAudience)
 	if err != nil {
@@ -359,9 +352,7 @@ func (j *JWTManager) ParseEnrollmentToken(tokenString string) (*CustomClaims, er
 	return claims, nil
 }
 
-// ParseAuthToken validates the JWT signature and expiry but does NOT check
-// audience or MFADone.
-// Use this for endpoints that must inspect freshly issued tokens before full API auth.
+// ParseAuthToken validates the JWT signature and expiry.
 func (j *JWTManager) ParseAuthToken(tokenString string) (*CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		if token.Method != jwt.SigningMethodES256 {
@@ -383,7 +374,6 @@ func (j *JWTManager) ParseAuthToken(tokenString string) (*CustomClaims, error) {
 }
 
 // ValidateAuthToken validates a full authentication JWT and requires MFADone=true.
-// Used by the auth middleware for normal API access.
 func (j *JWTManager) ValidateAuthToken(tokenString string) (*CustomClaims, error) {
 	claims, err := j.ParseAuthTokenForAudience(tokenString, AgentTokenAudience)
 	if err != nil {

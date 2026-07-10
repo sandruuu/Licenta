@@ -16,9 +16,7 @@ import (
 	paresources "pdp/pa/resources"
 )
 
-// ─────────────────────────────────────────────
 // PDP Resource management handlers
-// ─────────────────────────────────────────────
 
 func writeResourceAdminError(w http.ResponseWriter, err error) {
 	switch {
@@ -110,7 +108,6 @@ func (s *Server) handleAdminResourceByID(w http.ResponseWriter, r *http.Request)
 		if !s.requireOrganizationAccess(w, r, existing.OrganizationID) {
 			return
 		}
-		// Decode into a map to detect which fields were actually sent (PATCH semantics)
 		var fields map[string]json.RawMessage
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&fields); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -198,9 +195,7 @@ func (s *Server) handleAdminDeviceDataByID(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, report)
 }
 
-// ─────────────────────────────────────────────
 // Dashboard stats endpoint
-// ─────────────────────────────────────────────
 
 func (s *Server) filterActiveEndpointDeviceData(reports []*models.DeviceDataReport) []*models.DeviceDataReport {
 	filtered := make([]*models.DeviceDataReport, 0, len(reports))
@@ -286,9 +281,7 @@ func deviceDataIsHealthy(report *models.DeviceDataReport) bool {
 	return true
 }
 
-// ─────────────────────────────────────────────
 // Dashboard SPA handler
-// ─────────────────────────────────────────────
 
 func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	if isReservedServerPath(r.URL.Path) {
@@ -307,7 +300,6 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 		filePath = "index.html"
 	}
 
-	// Prevent path traversal: clean the path and verify it stays within distDir
 	cleanedPath := filepath.Clean(filePath)
 	if strings.Contains(cleanedPath, "..") || filepath.IsAbs(cleanedPath) {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -316,7 +308,6 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 
 	fullPath := filepath.Join(distDir, cleanedPath)
 
-	// Double-check: resolved path must be within distDir
 	absDistDir, _ := filepath.Abs(distDir)
 	absFullPath, _ := filepath.Abs(fullPath)
 	if !strings.HasPrefix(absFullPath, absDistDir+string(filepath.Separator)) && absFullPath != absDistDir {
@@ -325,7 +316,6 @@ func (s *Server) handleDashboardSPA(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		// Serve index.html for client-side routing.
 		fullPath = filepath.Join(distDir, "index.html")
 	}
 

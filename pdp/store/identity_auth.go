@@ -20,18 +20,14 @@ func (s *Store) GetUserByExternalSubjectForOrganization(externalSubject, authSou
 	return s.scanUser(row)
 }
 
-// ─────────────────────────────────────────────
 // Login Locations (geo-velocity tracking)
-// ─────────────────────────────────────────────
 
 // SaveLoginLocation stores a geolocation record for a user login event.
-// Keeps at most 50 records per user; surplus entries are pruned automatically.
 func (s *Store) SaveLoginLocation(userID, sourceIP string, lat, lon float64, city, country string) error {
 	return s.SaveLoginLocationAt(userID, sourceIP, lat, lon, city, country, time.Now().UTC())
 }
 
 // SaveLoginLocationAt stores a geolocation record at a specific timestamp.
-// It is primarily useful for deterministic baseline and geo-velocity tests.
 func (s *Store) SaveLoginLocationAt(userID, sourceIP string, lat, lon float64, city, country string, timestamp time.Time) error {
 	if timestamp.IsZero() {
 		timestamp = time.Now().UTC()
@@ -45,7 +41,6 @@ func (s *Store) SaveLoginLocationAt(userID, sourceIP string, lat, lon float64, c
 		return err
 	}
 
-	// Keep the 50 most recent entries per user.
 	s.db.Exec(
 		`DELETE FROM login_locations WHERE user_id = ? AND id NOT IN (
 			SELECT id FROM login_locations WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50
@@ -55,7 +50,7 @@ func (s *Store) SaveLoginLocationAt(userID, sourceIP string, lat, lon float64, c
 }
 
 // GetLastLoginLocation returns the most recent login location for a user.
-// Returns nil if no previous location exists.
+// Returns nil if no location exists.
 func (s *Store) GetLastLoginLocation(userID string) (*models.LoginLocation, error) {
 	row := s.db.QueryRow(
 		`SELECT user_id, source_ip, latitude, longitude, city, country, timestamp
@@ -96,9 +91,7 @@ func (s *Store) GetRecentLoginLocations(userID string, limit int) ([]*models.Log
 	return locs, nil
 }
 
-// ─────────────────────────────────────────────
 // WebAuthn Credentials
-// ─────────────────────────────────────────────
 
 // SaveWebAuthnCredential persists a new WebAuthn credential for a user.
 func (s *Store) SaveWebAuthnCredential(cred *models.WebAuthnCredential) error {
@@ -176,8 +169,7 @@ func (s *Store) GetUserDevices(userID string) []string {
 	return devices
 }
 
-// GetDeviceUserBinding returns the earliest known binding between a user and a
-// device. The first binding timestamp decides whether a device is still new.
+// GetDeviceUserBinding returns the earliest known binding between a user and a device.
 func (s *Store) GetDeviceUserBinding(userID, deviceID string) (*models.DeviceUser, bool) {
 	row := s.db.QueryRow(
 		`SELECT device_id, user_id, username, role, bound_at

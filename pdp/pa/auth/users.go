@@ -25,8 +25,7 @@ const (
 	passwordMaxLength    = 256
 )
 
-// PasswordPolicyError describes a password rejected by the local password
-// policy and carries the rules that should be shown in the UI.
+// PasswordPolicyError describes a local password policy rejection.
 type PasswordPolicyError struct {
 	Message      string
 	Requirements []string
@@ -96,8 +95,7 @@ func (um *UserManager) AuthenticateByEmail(email, password string) (*models.User
 	return um.authenticateUser(user, exists, password)
 }
 
-// CompleteRequiredPasswordChange replaces the temporary password for a local
-// administrator that must change it before accessing the dashboard.
+// CompleteRequiredPasswordChange replaces an administrator password after first login.
 func (um *UserManager) CompleteRequiredPasswordChange(userID, newPassword string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -284,8 +282,7 @@ func userPasswordBlocklistValues(user *models.User) []string {
 	return values
 }
 
-// EnrollMFA generates a TOTP secret for direct admin MFA enrollment. Browser
-// step-up keeps pending enrollment secrets in the step-up challenge instead.
+// EnrollMFA generates a TOTP secret for direct admin MFA enrollment.
 func (um *UserManager) EnrollMFA(userID, issuer string) (*models.MFAEnrollResponse, error) {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -341,7 +338,7 @@ func (um *UserManager) ActivateMFA(userID, code string) error {
 	return um.activateTOTPForUser(user, secret, code)
 }
 
-// ActivateTOTPSecret verifies and stores a freshly generated TOTP secret.
+// ActivateTOTPSecret verifies and stores a new TOTP secret.
 func (um *UserManager) ActivateTOTPSecret(userID, secret, code string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -382,8 +379,7 @@ func (um *UserManager) VerifyMFA(userID, code string) error {
 	return nil
 }
 
-// GenerateRecoveryCodes replaces the user's existing MFA recovery codes and
-// returns the plaintext values so they can be shown once.
+// GenerateRecoveryCodes replaces the user's existing MFA recovery codes.
 func (um *UserManager) GenerateRecoveryCodes(userID string) ([]string, error) {
 	user, exists := um.store.GetUser(userID)
 	if !exists {
@@ -458,8 +454,7 @@ func (um *UserManager) VerifyRecoveryCode(userID, code string) error {
 	return fmt.Errorf("invalid recovery code")
 }
 
-// ResetMFAMethodForRecovery clears one MFA method after a recovery code was
-// accepted, so the user must enroll that method again before access continues.
+// ResetMFAMethodForRecovery clears one MFA method after a recovery code is accepted.
 func (um *UserManager) ResetMFAMethodForRecovery(userID, method string) error {
 	user, exists := um.store.GetUser(userID)
 	if !exists {

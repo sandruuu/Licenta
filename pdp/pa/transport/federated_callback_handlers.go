@@ -10,9 +10,7 @@ func (s *Server) federatedCallbackURL() string {
 	return s.appConfig().Public.FederatedCallbackURL
 }
 
-// handleFederatedCallback receives the authorization code from the external IAM
-// after browser authentication. The code is consumed by the active browser flow:
-// device enrollment, agent user login, or step-up reauthentication.
+// handleFederatedCallback receives the authorization code from the external IAM.
 func (s *Server) handleFederatedCallback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

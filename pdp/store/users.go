@@ -8,9 +8,7 @@ import (
 	"pdp/models"
 )
 
-// ─────────────────────────────────────────────
 // User operations
-// ─────────────────────────────────────────────
 
 const userSelectColumns = `id, username, email, password_hash, password_change_required, password_changed_at, totp_secret, mfa_methods_json,
 		last_totp_counter, role, disabled, organization_id, external_subject, auth_source, created_at, updated_at, last_login_at`
@@ -127,6 +125,4 @@ func (s *Store) DeleteUser(id string) {
 	s.db.Exec("DELETE FROM users WHERE id = ?", id)
 }
 
-// ─────────────────────────────────────────────
 // Login attempt tracking
-// ─────────────────────────────────────────────

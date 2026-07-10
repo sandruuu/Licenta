@@ -45,10 +45,7 @@ type geoCache struct {
 	ExpiresAt time.Time   `json:"expires_at"`
 }
 
-// GeoLocator resolves IP addresses to geographical coordinates using the
-// ipapi.co free tier (HTTPS, 1000 req/day). Results are cached in Redis
-// with a 1-hour TTL. All failures are graceful — callers get a zero-value
-// GeoLocation and a nil error so that geolocation never blocks access.
+// GeoLocator resolves IP addresses to geographical coordinates.
 type GeoLocator struct {
 	store                    *store.Store
 	runtime                  RuntimeStateStore
@@ -384,44 +381,28 @@ type AccessLocationContext struct {
 	GeoVelocityResult
 }
 
-// CheckImpossibleTravel compares the given IP's location against the user's
-// most recent login location. It returns an impossible-travel result.
-//
-// Thresholds:
-//   - < 500 km/h: normal (commercial aviation)
-//   - 500–900 km/h: suspicious (VPN hop / fast jet)
-//   - > 900 km/h: impossible travel
-//
-// Edge cases handled gracefully:
-//   - First login (no history) → no flag
-//   - Private IP → no flag
-//   - Same city (distance ≈ 0) → no flag
-//   - Geolocation failure → no flag
+// CheckImpossibleTravel compares the current request location with the user's last login location.
 func (g *GeoLocator) CheckImpossibleTravel(userID, sourceIP string) GeoVelocityResult {
 	empty := GeoVelocityResult{}
 
-	// Geolocate current IP
 	currentLoc, _ := g.Locate(sourceIP)
 	if currentLoc.Latitude == 0 && currentLoc.Longitude == 0 {
-		return empty // can't geolocate → skip
+		return empty
 	}
 
-	// Get previous location from DB
 	prev, err := g.store.GetLastLoginLocation(userID)
 	if err != nil || prev == nil {
-		return empty // first login or error → skip
+		return empty
 	}
 
-	// Calculate distance (Haversine)
 	dist := haversineKm(prev.Latitude, prev.Longitude, currentLoc.Latitude, currentLoc.Longitude)
 	if dist < g.sameAreaDistanceKM {
-		return empty // same metro area → no flag
+		return empty
 	}
 
-	// Calculate time delta
 	timeDelta := time.Since(prev.Timestamp).Hours()
 	if timeDelta <= 0 {
-		timeDelta = 0.001 // avoid divide-by-zero
+		timeDelta = 0.001
 	}
 
 	speed := dist / timeDelta
@@ -548,11 +529,11 @@ func (g *GeoLocator) populateUserBaseline(ctx *AccessLocationContext, recent []*
 	}
 }
 
-// SaveCurrentLocation stores the current login location for future travel checks.
+// SaveCurrentLocation stores the current login location.
 func (g *GeoLocator) SaveCurrentLocation(userID, sourceIP string) {
 	loc, _ := g.Locate(sourceIP)
 	if loc.Latitude == 0 && loc.Longitude == 0 {
-		return // can't geolocate → don't save
+		return
 	}
 	if err := g.store.SaveLoginLocation(userID, sourceIP, loc.Latitude, loc.Longitude, loc.City, loc.Country); err != nil {
 		log.Printf("[GEO] Failed to save login location: %v", err)
