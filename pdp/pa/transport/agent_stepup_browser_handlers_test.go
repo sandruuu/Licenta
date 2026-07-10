@@ -1013,6 +1013,8 @@ func TestStepUpWebAuthnClientMessagesAreGenericAlerts(t *testing.T) {
 		"scheduleExpiry();",
 		"setControlsDisabled(true);",
 		"clearStatus();",
+		"clearStepUpAlerts();",
+		".recovery-trigger",
 	} {
 		if !strings.Contains(stepUpBrowserJS, want) {
 			t.Fatalf("step-up browser JS missing %q", want)

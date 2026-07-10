@@ -174,6 +174,11 @@ const stepUpBrowserJS = `
     if (status) status.innerHTML = '';
   }
 
+  function clearStepUpAlerts() {
+    root.querySelectorAll('.stepup-message-slot > .page-alert').forEach((alert) => alert.remove());
+    clearStatus();
+  }
+
   function showError(message) {
     const status = statusNode();
     status.innerHTML = '<div class="page-alert stepup-alert" role="alert">' + alertIcon + '<span>' + escapeHTML(message) + '</span></div>';
@@ -339,6 +344,12 @@ const stepUpBrowserJS = `
   });
   root.querySelectorAll('a.method-link,a.button-link').forEach((link) => {
     link.addEventListener('click', requireActive);
+  });
+  root.querySelectorAll('.recovery-trigger').forEach((trigger) => {
+    trigger.addEventListener('click', () => {
+      if (markExpired()) return;
+      clearStepUpAlerts();
+    });
   });
   scheduleExpiry();
 
