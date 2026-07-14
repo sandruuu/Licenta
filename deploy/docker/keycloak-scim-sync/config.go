@@ -10,10 +10,7 @@ import (
 )
 
 const (
-	defaultKeycloakBaseURL = "http://keycloak:8080"
-	defaultKeycloakRealm   = "trustcloud-lab"
-	defaultPDPBaseURL      = "https://pdp:8443"
-	defaultPageSize        = 100
+	defaultPageSize = 100
 )
 
 type config struct {
@@ -39,12 +36,12 @@ type config struct {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		KeycloakBaseURL:     strings.TrimRight(env("KEYCLOAK_BASE_URL", defaultKeycloakBaseURL), "/"),
-		KeycloakRealm:       env("KEYCLOAK_REALM", defaultKeycloakRealm),
+		KeycloakBaseURL:     strings.TrimRight(strings.TrimSpace(os.Getenv("KEYCLOAK_BASE_URL")), "/"),
+		KeycloakRealm:       strings.TrimSpace(os.Getenv("KEYCLOAK_REALM")),
 		KeycloakClientID:    env("KEYCLOAK_CLIENT_ID", "admin-cli"),
-		KeycloakUsername:    env("KEYCLOAK_ADMIN_USERNAME", env("KEYCLOAK_ADMIN", "admin")),
-		KeycloakPassword:    env("KEYCLOAK_ADMIN_PASSWORD", "admin"),
-		PDPBaseURL:          strings.TrimRight(env("PDP_BASE_URL", defaultPDPBaseURL), "/"),
+		KeycloakUsername:    env("KEYCLOAK_ADMIN_USERNAME", strings.TrimSpace(os.Getenv("KEYCLOAK_ADMIN"))),
+		KeycloakPassword:    strings.TrimSpace(os.Getenv("KEYCLOAK_ADMIN_PASSWORD")),
+		PDPBaseURL:          strings.TrimRight(strings.TrimSpace(os.Getenv("PDP_BASE_URL")), "/"),
 		PDPOrganizationID:   strings.TrimSpace(os.Getenv("PDP_ORGANIZATION_ID")),
 		PDPSCIMToken:        strings.TrimSpace(os.Getenv("PDP_SCIM_TOKEN")),
 		PDPTLSSkipVerify:    envBool("PDP_TLS_SKIP_VERIFY", true),
@@ -65,7 +62,7 @@ func loadConfig() (config, error) {
 		}
 	}
 	cfg.PDPSCIMBaseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("PDP_SCIM_BASE_URL")), "/")
-	if cfg.PDPSCIMBaseURL == "" && cfg.PDPOrganizationID != "" {
+	if cfg.PDPSCIMBaseURL == "" && cfg.PDPBaseURL != "" && cfg.PDPOrganizationID != "" {
 		cfg.PDPSCIMBaseURL = fmt.Sprintf("%s/scim/v2/%s", cfg.PDPBaseURL, url.PathEscape(cfg.PDPOrganizationID))
 	}
 
@@ -83,7 +80,7 @@ func loadConfig() (config, error) {
 		missing = append(missing, "KEYCLOAK_CLIENT_SECRET or KEYCLOAK_ADMIN_USERNAME/KEYCLOAK_ADMIN_PASSWORD")
 	}
 	if cfg.PDPSCIMBaseURL == "" {
-		missing = append(missing, "PDP_ORGANIZATION_ID or PDP_SCIM_BASE_URL")
+		missing = append(missing, "PDP_SCIM_BASE_URL or PDP_BASE_URL/PDP_ORGANIZATION_ID")
 	}
 	if cfg.PDPSCIMToken == "" {
 		missing = append(missing, "PDP_SCIM_TOKEN")
