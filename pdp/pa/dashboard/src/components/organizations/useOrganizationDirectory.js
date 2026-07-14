@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createOrganization, deleteOrganization, getOrganizations, updateOrganization } from '../../api';
+import { createOrganization, getOrganizations, updateOrganization } from '../../api';
 
 function useOrganizationDirectory() {
   const [organizations, setOrganizations] = useState([]);
@@ -7,7 +7,6 @@ function useOrganizationDirectory() {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [reactivating, setReactivating] = useState(false);
 
@@ -61,19 +60,6 @@ function useOrganizationDirectory() {
     }
   };
 
-  const handleDelete = async (organization) => {
-    if (!organization?.id) return;
-    setDeleting(true);
-    try {
-      await deleteOrganization(organization.id);
-      load();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setDeleting(false);
-    }
-  };
-
   const handleRevoke = async (organization) => {
     if (!organization?.id) return;
     setRevoking(true);
@@ -115,7 +101,6 @@ function useOrganizationDirectory() {
     form,
     setForm,
     saving,
-    deleting,
     revoking,
     reactivating,
     load,
@@ -123,7 +108,6 @@ function useOrganizationDirectory() {
     openEdit,
     closeModal,
     handleSave,
-    handleDelete,
     handleRevoke,
     handleReactivate,
   };

@@ -1,0 +1,74 @@
+% Exact diagram from thesis_doc/components/images/diagrams/implementation_architecture.tex.
+% Only the icon paths are adjusted for the self-contained presentation folder.
+\definecolor{tcCoolSteel}{RGB}{160,166,168}
+\definecolor{tcAccent}{RGB}{44,97,100}
+\definecolor{tcGraphite}{RGB}{42,42,42}
+\definecolor{tcSurface}{RGB}{250,250,250}
+\definecolor{tcSurfaceCard}{RGB}{238,238,236}
+\definecolor{tcBorder}{RGB}{196,200,200}
+\begingroup
+\renewcommand{\tiny}{\fontsize{5}{6}\selectfont}
+\renewcommand{\scriptsize}{\fontsize{7}{8}\selectfont}
+\renewcommand{\footnotesize}{\fontsize{8}{10}\selectfont}
+\renewcommand{\small}{\fontsize{9}{11}\selectfont}
+\renewcommand{\normalsize}{\fontsize{10}{12}\selectfont}
+\renewcommand{\large}{\fontsize{12}{14}\selectfont}
+\renewcommand{\Large}{\fontsize{14.4}{18}\selectfont}
+\normalsize
+\begin{tikzpicture}[
+    pdpcontainer/.style={draw=tcAccent, rounded corners=5pt, line width=0.85pt, fill=tcSurface, minimum width=5.70cm, minimum height=3.88cm},
+    pdpinner/.style={draw=tcAccent, rounded corners=4pt, align=center, text width=4.30cm, minimum width=4.70cm, minimum height=0.82cm, fill=tcSurface, text=tcGraphite, line width=0.72pt},
+    support/.style={draw=tcAccent, rounded corners=4pt, align=center, text width=2.05cm, minimum width=2.40cm, minimum height=1.55cm, fill=tcSurface, text=tcGraphite, line width=0.72pt},
+    data/.style={draw=tcAccent, rounded corners=4pt, align=center, text width=1.45cm, minimum width=1.80cm, minimum height=1.95cm, fill=tcSurface, text=tcGraphite, line width=0.72pt},
+    pep/.style={draw=tcAccent, rounded corners=4pt, align=center, text width=2.55cm, minimum width=3.00cm, minimum height=1.95cm, fill=tcSurface, text=tcGraphite, line width=0.72pt},
+    arrow/.style={-{Stealth[length=2.2mm]}, line width=0.78pt, draw=tcAccent},
+    dataarrow/.style={-{Stealth[length=2.4mm]}, line width=0.95pt, draw=tcAccent},
+    controlbi/.style={<->, >=Stealth, line width=0.78pt, draw=tcAccent},
+    internalbi/.style={<->, >=Stealth, line width=0.60pt, draw=tcAccent, shorten <=1pt, shorten >=1pt},
+    label/.style={font=\small, text=tcGraphite}
+]
+
+\path[use as bounding box] (0.00,0.25) rectangle (14.00,8.08);
+
+% Plane separation
+\draw[densely dashed, line width=0.75pt, draw=tcCoolSteel] (0.80,3.55) -- (13.20,3.55);
+\node[anchor=west, label] at (0.95,3.88) {Planul de control};
+\node[anchor=west, label] at (0.95,3.22) {Planul de date};
+
+% Control plane
+\node[support] (db) at (2.00,7.08) {\includegraphics[height=0.90cm]{assets/postgres-icon.png}\\[0.03cm]PostgreSQL};
+\node[support] (redis) at (2.00,5.34) {\includegraphics[height=0.90cm]{assets/redis-icon.png}\\[0.03cm]Redis};
+
+\node[pdpcontainer] (pdpbox) at (7.00,6.22) {};
+\node[align=center] at (7.00,7.68) {%
+    \includegraphics[height=0.90cm]{assets/go-icon.png}\hspace{0.36cm}%
+    \includegraphics[height=0.90cm]{assets/react-icon.png}};
+\node[pdpinner] (pe) at (7.00,6.62) {Policy Engine};
+\node[pdpinner] (pa) at (7.00,5.34) {Policy Administrator};
+\node[font=\normalsize,text=tcGraphite] at (7.00,4.58) {Policy Decision Point};
+
+\node[support] (vault) at (12.00,7.18) {\includegraphics[height=0.90cm]{assets/hashicorp-icon.png}\\[0.03cm]Vault};
+\node[support] (idp) at (12.00,5.44) {Furnizori\\OIDC};
+
+% Data plane
+\node[align=center, inner sep=1pt] (user) at (1.45,1.55) {\includegraphics[height=0.90cm]{assets/user-icon.png}};
+\node[pep] (localapp) at (4.05,1.55) {\includegraphics[height=0.90cm]{assets/wails-icon.png}\hspace{0.24cm}\includegraphics[height=0.90cm]{assets/go-icon.png}\\Agent};
+\node[pep] (gateway) at (8.65,1.55) {\includegraphics[height=0.90cm]{assets/go-icon.png}\\Gateway};
+\node[data] (resource) at (12.10,1.55) {Resurse};
+
+% Control communication
+\draw[arrow] (pdpbox.west |- db.east) -- (db.east);
+\draw[arrow] (pdpbox.west |- redis.east) -- (redis.east);
+\draw[arrow] (pdpbox.east |- vault.west) -- (vault.west);
+\draw[arrow] (pdpbox.east |- idp.west) -- (idp.west);
+\draw[internalbi, shorten <=0pt, shorten >=0pt] (pe.south) -- (pa.north);
+\draw[controlbi, shorten <=0pt, shorten >=0pt] (localapp.north) -- (6.50,4.28);
+\draw[controlbi, shorten <=0pt, shorten >=0pt] (gateway.north) -- (7.12,4.28);
+
+% Data path
+\draw[dataarrow] (user) -- (localapp);
+\draw[dataarrow] (localapp) -- (gateway);
+\draw[dataarrow] (gateway) -- (resource);
+
+\end{tikzpicture}
+\endgroup

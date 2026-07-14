@@ -1,4 +1,4 @@
-import { Ban, Building2, Edit2, RotateCcw, Trash2 } from 'lucide-react';
+import { Ban, Building2, Edit2, RotateCcw } from 'lucide-react';
 import DataTable, { TableActions, TableIconButton } from '../ui/DataTable';
 import StatusBadge from './StatusBadge';
 
@@ -11,7 +11,6 @@ export default function OrganizationTable({
   onEdit,
   onRevoke,
   onReactivate,
-  onDelete,
   pageSize,
   emptyTitle = 'No organizations yet',
   emptyMessage = 'Create the first organization to start managing gateways and resources.',
@@ -95,15 +94,6 @@ export default function OrganizationTable({
               }}
             />
           )}
-          <TableIconButton
-            icon={Trash2}
-            label="Delete organization"
-            danger
-            onClick={(event) => {
-              event.stopPropagation();
-              onDelete?.(organization);
-            }}
-          />
         </TableActions>
       ),
     },

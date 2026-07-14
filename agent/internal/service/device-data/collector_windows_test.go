@@ -113,3 +113,35 @@ func TestStabilizeCheckDoesNotHidePersistentUnavailable(t *testing.T) {
 		t.Fatalf("Status = %q, want %q", check.Status, StatusUnavailable)
 	}
 }
+
+func TestStabilizeCheckPreservesActionableResultForPersistentUnavailable(t *testing.T) {
+	now := time.Date(2026, 6, 29, 10, 0, 0, 0, time.UTC)
+	collector := &defaultCollector{
+		cache: map[string]cachedDeviceCheck{
+			"Windows Updates": {
+				check:       Check{Name: "Windows Updates", Status: StatusWarning, Description: "2 visible Windows updates are not installed"},
+				collectedAt: now.Add(-(stableDeviceCheckTTL + time.Second)),
+			},
+		},
+	}
+
+	check, fallback := collector.stabilizeCheck("Windows Updates", Check{
+		Name:        "Windows Updates",
+		Status:      StatusUnavailable,
+		Description: "Windows Update status is unavailable",
+		Details:     map[string]string{"Reason": "Windows Update Agent search failed"},
+	}, now)
+
+	if !fallback {
+		t.Fatal("fallback = false, want true for previous actionable status")
+	}
+	if check.Status != StatusWarning {
+		t.Fatalf("Status = %q, want %q", check.Status, StatusWarning)
+	}
+	if !strings.Contains(check.Description, "visible Windows updates") {
+		t.Fatalf("Description = %q, want previous actionable description", check.Description)
+	}
+	if check.Details[deviceCheckWarningField] == "" {
+		t.Fatalf("details = %+v, want unavailable collection warning", check.Details)
+	}
+}

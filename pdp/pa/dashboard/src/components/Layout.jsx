@@ -43,8 +43,11 @@ export default function Layout() {
       <aside
         className="sidebar-shell group fixed left-1.5 top-1.5 z-40 flex h-[calc(100vh-12px)] w-[88px] flex-col gap-2 rounded-md p-2 transition-[width] duration-300 ease-out hover:w-[292px]"
       >
-        <div className="sidebar-panel flex h-24 shrink-0 items-center justify-center gap-0 rounded-md px-2 transition-colors group-hover:justify-start group-hover:gap-2">
-          <NavLink to="/" title="TRUSTCloud" className="flex w-full items-center justify-center gap-0 no-underline group-hover:justify-start group-hover:gap-2">
+        <div
+          title="TRUSTCloud"
+          className="sidebar-panel flex h-24 shrink-0 items-center justify-center gap-0 rounded-md px-2 transition-colors group-hover:justify-start group-hover:gap-2"
+        >
+          <div className="flex w-full items-center justify-center gap-0 no-underline group-hover:justify-start group-hover:gap-2">
             <BrandLogo
               className="flex w-full items-center justify-center gap-0 group-hover:justify-start group-hover:gap-2"
               iconBoxClassName="grid h-16 w-16 shrink-0 place-items-center text-accent"
@@ -52,7 +55,7 @@ export default function Layout() {
               textWrapperClassName="w-0 min-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 group-hover:w-auto group-hover:opacity-100"
               titleClassName="text-[22px] font-bold leading-none text-text-primary"
             />
-          </NavLink>
+          </div>
         </div>
 
         <div className="sidebar-panel flex min-h-0 flex-1 flex-col overflow-hidden rounded-md">

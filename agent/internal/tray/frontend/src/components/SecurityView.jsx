@@ -418,6 +418,10 @@ function rowFromCheck(config, check) {
 function healthTitle(id, status, check) {
   const description = String(check?.description || '').trim();
 
+  if (status === 'unavailable') {
+    return unavailableTitle(id, check);
+  }
+
   if (id === 'os') {
     return description || 'Operating system is detected';
   }
@@ -439,6 +443,17 @@ function healthTitle(id, status, check) {
     return status === 'good' ? 'Antivirus is enabled' : 'Antivirus needs attention';
   }
   return description || check?.name || 'Device data check';
+}
+
+function unavailableTitle(id, check) {
+  if (id === 'os') return 'Operating system status is unavailable';
+  if (id === 'updates') return 'Windows Update status is unavailable';
+  if (id === 'password_lock') return 'Screen lock status is unavailable';
+  if (id === 'disk_encryption') return 'BitLocker status is unavailable';
+  if (id === 'firewall') return 'Firewall status is unavailable';
+  if (id === 'antivirus') return 'Antivirus status is unavailable';
+  const name = String(check?.name || '').trim();
+  return `${name || 'Device data'} status is unavailable`;
 }
 
 function healthSubtitle(id, status, check) {

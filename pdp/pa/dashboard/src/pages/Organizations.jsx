@@ -34,7 +34,6 @@ export default function Organizations() {
   }, [loadRelatedInfrastructure, organizationDirectory.load]);
   const gatewayCreate = useGatewayCreate(refreshOrganizationData);
   const [query, setQuery] = useState('');
-  const [deleteOrganizationTarget, setDeleteOrganizationTarget] = useState(null);
   const [revokeOrganizationTarget, setRevokeOrganizationTarget] = useState(null);
   const [reactivateOrganizationTarget, setReactivateOrganizationTarget] = useState(null);
 
@@ -99,11 +98,6 @@ export default function Organizations() {
     organizationPagination.resetPage();
   };
 
-  const confirmDeleteOrganization = async () => {
-    await organizationDirectory.handleDelete(deleteOrganizationTarget);
-    setDeleteOrganizationTarget(null);
-  };
-
   const confirmRevokeOrganization = async () => {
     await organizationDirectory.handleRevoke(revokeOrganizationTarget);
     setRevokeOrganizationTarget(null);
@@ -141,7 +135,6 @@ export default function Organizations() {
           onEdit={organizationDirectory.openEdit}
           onRevoke={setRevokeOrganizationTarget}
           onReactivate={setReactivateOrganizationTarget}
-          onDelete={setDeleteOrganizationTarget}
           emptyTitle={hasFilters ? 'No organizations match filters' : 'No organizations yet'}
           emptyMessage={hasFilters ? 'Adjust search or filters to find organizations.' : 'Create the first organization to start managing gateways and resources.'}
         />
@@ -193,20 +186,6 @@ export default function Organizations() {
         confirmVariant="primary"
         loadingLabel="Reactivating..."
         loading={organizationDirectory.reactivating}
-      />
-
-      <ConfirmDialog
-        open={!!deleteOrganizationTarget}
-        onClose={() => setDeleteOrganizationTarget(null)}
-        onConfirm={confirmDeleteOrganization}
-        title="Delete organization"
-        message={
-          deleteOrganizationTarget
-            ? `Delete "${deleteOrganizationTarget.name}"? All associated gateways and resources will be orphaned.`
-            : ''
-        }
-        confirmLabel="Delete organization"
-        loading={organizationDirectory.deleting}
       />
 
       {gatewayCreate.open ? (

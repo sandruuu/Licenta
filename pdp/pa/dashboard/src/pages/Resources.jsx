@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Ban, Edit2, RotateCcw, Server, Trash2 } from 'lucide-react';
+import { AlertCircle, Ban, Edit2, RotateCcw, Server } from 'lucide-react';
 import {
   createResource,
-  deleteResource,
   getGateways,
   getOrganizations,
   getResources,
@@ -130,10 +129,8 @@ export default function Resources() {
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [reactivating, setReactivating] = useState(false);
-  const [deleteResourceTarget, setDeleteResourceTarget] = useState(null);
   const [revokeResourceTarget, setRevokeResourceTarget] = useState(null);
   const [reactivateResourceTarget, setReactivateResourceTarget] = useState(null);
   const [modalError, setModalError] = useState('');
@@ -331,20 +328,6 @@ export default function Resources() {
     }
   };
 
-  const confirmDeleteResource = async () => {
-    if (!deleteResourceTarget) return;
-    setDeleting(true);
-    try {
-      await deleteResource(deleteResourceTarget.id);
-      setDeleteResourceTarget(null);
-      await load();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setDeleting(false);
-    }
-  };
-
   const confirmRevokeResource = async () => {
     if (!revokeResourceTarget) return;
     setRevoking(true);
@@ -413,7 +396,6 @@ export default function Resources() {
           ) : (
             <TableIconButton icon={Ban} label="Revoke resource" danger onClick={() => setRevokeResourceTarget(row)} />
           )}
-          <TableIconButton icon={Trash2} label="Delete resource" danger onClick={() => setDeleteResourceTarget(row)} />
         </TableActions>
       ),
     },
@@ -610,20 +592,6 @@ export default function Resources() {
           </div>
         </div>
       </Modal>
-
-      <ConfirmDialog
-        open={!!deleteResourceTarget}
-        onClose={() => setDeleteResourceTarget(null)}
-        onConfirm={confirmDeleteResource}
-        title="Delete resource"
-        message={
-          deleteResourceTarget
-            ? `Delete "${displayResourceName(deleteResourceTarget)}"? This resource will no longer be available for protected access.`
-            : ''
-        }
-        confirmLabel="Delete resource"
-        loading={deleting}
-      />
 
       <ConfirmDialog
         open={!!revokeResourceTarget}

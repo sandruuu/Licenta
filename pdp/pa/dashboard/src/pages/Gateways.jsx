@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Ban, Edit2, RotateCcw, Router, Trash2 } from 'lucide-react';
+import { Ban, Edit2, RotateCcw, Router } from 'lucide-react';
 import {
-  deleteGateway,
   getGateways,
   getOrganizations,
   regenerateGatewayToken,
@@ -59,12 +58,10 @@ export default function Gateways() {
   const [organizations, setOrganizations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [revoking, setRevoking] = useState(false);
   const [error, setError] = useState('');
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
-  const [deleteGatewayTarget, setDeleteGatewayTarget] = useState(null);
   const [revokeGatewayTarget, setRevokeGatewayTarget] = useState(null);
   const [gatewayTokenModal, setGatewayTokenModal] = useState(null);
   const [refreshAfterTokenModal, setRefreshAfterTokenModal] = useState(false);
@@ -124,21 +121,6 @@ export default function Gateways() {
       setError(e.message || 'Failed to update gateway');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const confirmDeleteGateway = async () => {
-    if (!deleteGatewayTarget) return;
-    setError('');
-    setDeleting(true);
-    try {
-      await deleteGateway(deleteGatewayTarget.id);
-      setDeleteGatewayTarget(null);
-      await load();
-    } catch (e) {
-      setError(e.message || 'Failed to delete gateway');
-    } finally {
-      setDeleting(false);
     }
   };
 
@@ -242,12 +224,6 @@ export default function Gateways() {
             {!revoked ? (
               <TableIconButton icon={Ban} label="Revoke gateway" danger onClick={() => setRevokeGatewayTarget(row)} />
             ) : null}
-            <TableIconButton
-              icon={Trash2}
-              label="Delete gateway"
-              danger
-              onClick={() => setDeleteGatewayTarget(row)}
-            />
           </TableActions>
         );
       },
@@ -395,20 +371,6 @@ export default function Gateways() {
           </FormField>
         </div>
       </Modal>
-
-      <ConfirmDialog
-        open={!!deleteGatewayTarget}
-        onClose={() => setDeleteGatewayTarget(null)}
-        onConfirm={confirmDeleteGateway}
-        title="Delete gateway"
-        message={
-          deleteGatewayTarget
-            ? `Delete "${displayGatewayName(deleteGatewayTarget)}"? This gateway will no longer be available for protected resources.`
-            : ''
-        }
-        confirmLabel="Delete gateway"
-        loading={deleting}
-      />
 
       <ConfirmDialog
         open={!!revokeGatewayTarget}

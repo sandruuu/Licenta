@@ -11,7 +11,6 @@ import {
 import Layout from './components/Layout';
 import LoadingSpinner from './components/ui/LoadingSpinner';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
 import Organizations from './pages/Organizations';
 import OrganizationDetail from './pages/OrganizationDetail';
 import IdPDetail from './pages/IdPDetail';
@@ -123,7 +122,7 @@ function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
-          <Route index element={<Dashboard />} />
+          <Route index element={<Navigate to="/organizations" replace />} />
           <Route path="organizations" element={<Organizations />} />
           <Route path="organizations/:organizationId" element={<OrganizationDetail />} />
           <Route path="organizations/:organizationId/idps/:idpId" element={<IdPDetail />} />

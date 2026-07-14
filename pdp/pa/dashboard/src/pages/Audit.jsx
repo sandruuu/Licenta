@@ -5,7 +5,6 @@ import PageHeader from '../components/ui/PageHeader';
 import DataTable from '../components/ui/DataTable';
 import ListToolbar, { ListToolbarSelect } from '../components/ui/ListToolbar';
 import { displayResourceReference } from '../utils/displayNames';
-import { formatDateTime } from '../utils/format';
 
 function normalize(value) {
   return String(value || '').toLowerCase();
@@ -41,6 +40,20 @@ function auditSourceIPText(value) {
   const ip = String(value || '').trim();
   if (!ip || isInternalIP(ip)) return '-';
   return ip;
+}
+
+function formatAuditDateTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('ro-RO', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 const AUDIT_EVENT_META = {
@@ -367,7 +380,7 @@ export default function Audit() {
   const hasFilters = query.trim() || activeEventFilter !== 'all' || outcomeFilter !== 'all';
 
   const columns = [
-    { key: 'timestamp', label: 'Time', render: (v) => <span className="text-mono text-xs whitespace-nowrap">{formatDateTime(v)}</span> },
+    { key: 'timestamp', label: 'Time', render: (v) => <span className="text-mono text-xs whitespace-nowrap">{formatAuditDateTime(v)}</span> },
     { key: 'event_type', label: 'Event', render: (v) => <AuditText variant={eventTextVariant(v)}>{auditEventLabel(v)}</AuditText> },
     { key: 'username', label: 'User', render: (v) => <span>{v || '-'}</span> },
     { key: 'source_ip', label: 'Source IP', render: (v) => <span className="text-mono text-xs">{auditSourceIPText(v)}</span> },

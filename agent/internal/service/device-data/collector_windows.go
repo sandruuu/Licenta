@@ -118,7 +118,11 @@ func (collector *defaultCollector) stabilizeCheck(name string, check Check, now 
 	collector.mu.Lock()
 	cached, ok := collector.cache[name]
 	collector.mu.Unlock()
-	if !ok || normalizeCheckStatus(cached.check.Status) == StatusUnavailable || now.Sub(cached.collectedAt) > unavailableCheckGrace {
+	cachedStatus := normalizeCheckStatus(cached.check.Status)
+	if !ok || cachedStatus == StatusUnavailable {
+		return check, false
+	}
+	if now.Sub(cached.collectedAt) > unavailableCheckGrace && !isActionableCheckStatus(cachedStatus) {
 		return check, false
 	}
 	stable := cloneCheck(cached.check)
@@ -148,6 +152,11 @@ func cloneCheck(check Check) Check {
 
 func normalizeCheckStatus(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func isActionableCheckStatus(status string) bool {
+	status = normalizeCheckStatus(status)
+	return status == StatusWarning || status == StatusCritical
 }
 
 func collectWindowsOSInfo(ctx context.Context) (map[string]any, error) {
